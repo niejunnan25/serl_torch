@@ -1,37 +1,46 @@
-from typing import Sequence, Callable
-import flax.linen as nn
-import jax.numpy as jnp
+import torch
+import torch.nn as nn
+
+
+def _to_nhwc(x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 4:
+        return x
+    if x.shape[-1] <= 8 and x.shape[1] > x.shape[-1]:
+        return x.permute(0, 2, 3, 1)
+    return x
 
 
 class SpatialLearnedEmbeddings(nn.Module):
-    height: int
-    width: int
-    channel: int
-    num_features: int = 5
-    param_dtype: jnp.dtype = jnp.float32
+    def __init__(
+        self,
+        height: int,
+        width: int,
+        channel: int,
+        num_features: int = 5,
+    ):
+        super().__init__()
+        self.height = height
+        self.width = width
+        self.channel = channel
+        self.num_features = num_features
+        self.kernel = nn.Parameter(
+            torch.empty(height, width, channel, num_features)
+        )
+        nn.init.kaiming_normal_(self.kernel)
 
-    @nn.compact
-    def __call__(self, features):
-        """
-        features is B x H x W X C
-        """
+    def forward(self, features: torch.Tensor):
         squeeze = False
-        if len(features.shape) == 3:
-            features = jnp.expand_dims(features, 0)
+        if features.ndim == 3:
+            features = features.unsqueeze(0)
             squeeze = True
 
-        kernel = self.param(
-            "kernel",
-            nn.initializers.lecun_normal(),
-            (self.height, self.width, self.channel, self.num_features),
-            self.param_dtype,
-        )
-
+        features = _to_nhwc(features)
         batch_size = features.shape[0]
-        features = jnp.sum(
-            jnp.expand_dims(features, -1) * jnp.expand_dims(kernel, 0), axis=(1, 2)
+        projected = torch.sum(
+            features.unsqueeze(-1) * self.kernel.unsqueeze(0),
+            dim=(1, 2),
         )
-        features = jnp.reshape(features, [batch_size, -1])
+        projected = projected.reshape(batch_size, -1)
         if squeeze:
-            features = jnp.squeeze(features, 0)
-        return features
+            projected = projected.squeeze(0)
+        return projected

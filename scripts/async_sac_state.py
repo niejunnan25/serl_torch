@@ -4,12 +4,9 @@ import time
 from functools import partial
 
 import gym
-import jax
-import jax.numpy as jnp
 import numpy as np
 import tqdm
 from absl import app, flags
-from flax.training import checkpoints
 
 from agentlace.data.data_store import QueuedDataStore
 from agentlace.trainer import TrainerClient, TrainerServer
@@ -23,6 +20,7 @@ from serl_launcher.utils.launcher import (
 from gym.wrappers.record_episode_statistics import RecordEpisodeStatistics
 from serl_launcher.agents.continuous.sac import SACAgent
 from serl_launcher.common.evaluation import evaluate
+from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.timer_utils import Timer
 
 import franka_sim
@@ -72,7 +70,7 @@ def print_green(x):
 ##############################################################################
 
 
-def actor(agent: SACAgent, data_store, env, sampling_rng):
+def actor(agent: SACAgent, data_store, env):
     """
     This is the actor loop, which runs when "--actor" is set to True.
     """
@@ -109,13 +107,11 @@ def actor(agent: SACAgent, data_store, env, sampling_rng):
             if step < FLAGS.random_steps:
                 actions = env.action_space.sample()
             else:
-                sampling_rng, key = jax.random.split(sampling_rng)
                 actions = agent.sample_actions(
-                    observations=jax.device_put(obs),
-                    seed=key,
+                    observations=obs,
                     deterministic=False,
                 )
-                actions = np.asarray(jax.device_get(actions))
+                actions = np.asarray(actions)
 
         # Step environment
         with timer.context("step_env"):
@@ -168,7 +164,7 @@ def actor(agent: SACAgent, data_store, env, sampling_rng):
 ##############################################################################
 
 
-def learner(rng, agent: SACAgent, replay_buffer, replay_iterator):
+def learner(agent: SACAgent, replay_buffer, replay_iterator):
     """
     The learner loop, which runs when "--learner" is set to True.
     """
@@ -228,8 +224,9 @@ def learner(rng, agent: SACAgent, replay_buffer, replay_iterator):
             batch = next(replay_iterator)
 
         with timer.context("train"):
-            agent, update_info = agent.update_high_utd(batch, utd_ratio=FLAGS.utd_ratio)
-            agent = jax.block_until_ready(agent)
+            agent, update_info = agent.update_high_utd(
+                batch, utd_ratio=FLAGS.critic_actor_ratio
+            )
 
             # publish the updated network
             server.publish_network(agent.state.params)
@@ -240,8 +237,8 @@ def learner(rng, agent: SACAgent, replay_buffer, replay_iterator):
 
         if FLAGS.checkpoint_period and update_steps % FLAGS.checkpoint_period == 0:
             assert FLAGS.checkpoint_path is not None
-            checkpoints.save_checkpoint(
-                FLAGS.checkpoint_path, agent.state, step=update_steps, keep=20
+            save_agent_checkpoint(
+                FLAGS.checkpoint_path, agent, step=update_steps, keep=20
             )
 
         pbar.update(len(replay_buffer) - pbar.n)  # update replay buffer bar
@@ -252,13 +249,7 @@ def learner(rng, agent: SACAgent, replay_buffer, replay_iterator):
 
 
 def main(_):
-    devices = jax.local_devices()
-    num_devices = len(devices)
-    sharding = jax.sharding.PositionalSharding(devices)
-    assert FLAGS.batch_size % num_devices == 0
-
-    # seed
-    rng = jax.random.PRNGKey(FLAGS.seed)
+    np.random.seed(FLAGS.seed)
 
     # create env and load dataset
     if FLAGS.render:
@@ -269,21 +260,13 @@ def main(_):
     if FLAGS.env == "PandaPickCube-v0":
         env = gym.wrappers.FlattenObservation(env)
 
-    rng, sampling_rng = jax.random.split(rng)
     agent: SACAgent = make_sac_agent(
         seed=FLAGS.seed,
         sample_obs=env.observation_space.sample(),
         sample_action=env.action_space.sample(),
     )
 
-    # replicate agent across devices
-    # need the jnp.array to avoid a bug where device_put doesn't recognize primitives
-    agent: SACAgent = jax.device_put(
-        jax.tree_map(jnp.array, agent), sharding.replicate()
-    )
-
     if FLAGS.learner:
-        sampling_rng = jax.device_put(sampling_rng, device=sharding.replicate())
         replay_buffer = make_replay_buffer(
             env,
             capacity=FLAGS.replay_buffer_capacity,
@@ -295,24 +278,18 @@ def main(_):
             sample_args={
                 "batch_size": FLAGS.batch_size * FLAGS.critic_actor_ratio,
             },
-            device=sharding.replicate(),
+            device=None,
         )
         # learner loop
         print_green("starting learner loop")
-        learner(
-            sampling_rng,
-            agent,
-            replay_buffer,
-            replay_iterator=replay_iterator,
-        )
+        learner(agent, replay_buffer, replay_iterator=replay_iterator)
 
     elif FLAGS.actor:
-        sampling_rng = jax.device_put(sampling_rng, sharding.replicate())
         data_store = QueuedDataStore(2000)  # the queue size on the actor
 
         # actor loop
         print_green("starting actor loop")
-        actor(agent, data_store, env, sampling_rng)
+        actor(agent, data_store, env)
 
     else:
         raise NotImplementedError("Must be either a learner or an actor")

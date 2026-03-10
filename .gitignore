@@ -172,3 +172,9 @@ MUJOCO_LOG.TXT
 _METADATA
 checkpoint
 wandb/
+
+# Training outputs (Hydra logs, checkpoints, etc.)
+outputs/
+
+# Pretrained model weights (download via tools/download_resnet.py)
+pretrained_models/

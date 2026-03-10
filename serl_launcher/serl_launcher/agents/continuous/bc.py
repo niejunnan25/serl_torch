@@ -1,138 +1,118 @@
-from functools import partial
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
 
-import flax
-import flax.linen as nn
-import jax
-import jax.numpy as jnp
-import numpy as np
-import optax
-from flax.core import FrozenDict
+import torch
 
-from serl_launcher.common.common import JaxRLTrainState, ModuleDict, nonpytree_field
+from serl_launcher.common.common import TorchRLTrainState, nonpytree_field
 from serl_launcher.common.encoding import EncodingWrapper
-from serl_launcher.common.typing import Batch, PRNGKey
+from serl_launcher.common.optimizers import make_optimizer
 from serl_launcher.networks.actor_critic_nets import Policy
 from serl_launcher.networks.mlp import MLP
 from serl_launcher.utils.train_utils import _unpack
-from serl_launcher.vision.data_augmentations import batched_random_crop
 
 
-class BCAgent(flax.struct.PyTreeNode):
-    state: JaxRLTrainState
-    config: dict = nonpytree_field()
+def _to_torch(data, device: torch.device):
+    if isinstance(data, dict):
+        return {k: _to_torch(v, device) for k, v in data.items()}
+    if isinstance(data, torch.Tensor):
+        tensor = data.to(device)
+    else:
+        tensor = torch.as_tensor(data, device=device)
+    if tensor.dtype == torch.float64:
+        tensor = tensor.float()
+    return tensor
 
-    def data_augmentation_fn(self, rng, observations):
-        for pixel_key in self.config["image_keys"]:
-            observations = observations.copy(
-                add_or_replace={
-                    pixel_key: batched_random_crop(
-                        observations[pixel_key], rng, padding=4, num_batch_dims=2
-                    )
-                }
-            )
+
+class BCAgent:
+    state: TorchRLTrainState
+    config: dict = nonpytree_field(default_factory=dict)
+
+    def __init__(self, state: TorchRLTrainState, config: dict):
+        self.state = state
+        self.config = config
+
+    @property
+    def device(self):
+        return self.state.device
+
+    def replace(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        return self
+
+    def data_augmentation_fn(self, observations):
         return observations
 
-    @partial(jax.jit, static_argnames="pmap_axis")
-    def update(self, batch: Batch, pmap_axis: str = None):
-        if self.config["image_keys"][0] not in batch["next_observations"]:
+    def update(self, batch, pmap_axis: str = None):
+        del pmap_axis
+        if self.config["image_keys"] and self.config["image_keys"][0] not in batch["next_observations"]:
             batch = _unpack(batch)
 
-        # rng = self.state.rng
-        # rng, obs_rng, next_obs_rng = jax.random.split(rng, 3)
-        # obs = self.data_augmentation_fn(obs_rng, batch["observations"])
-        # batch = batch.copy(add_or_replace={"observations": obs})
+        batch = _to_torch(batch, self.device)
+        actor = self.state.modules["actor"]
 
-        def loss_fn(params, rng):
-            rng, key = jax.random.split(rng)
-            dist = self.state.apply_fn(
-                {"params": params},
-                batch["observations"],
-                temperature=1.0,
-                train=True,
-                rngs={"dropout": key},
-                name="actor",
-            )
-            pi_actions = dist.mode()
-            log_probs = dist.log_prob(batch["actions"])
-            mse = ((pi_actions - batch["actions"]) ** 2).sum(-1)
-            actor_loss = -(log_probs).mean()
-            actor_std = dist.stddev().mean(axis=1)
-
-            return actor_loss, {
-                "actor_loss": actor_loss,
-                "mse": mse.mean(),
-                # "log_probs": log_probs,
-                # "pi_actions": pi_actions,
-                # "mean_std": actor_std.mean(),
-                # "max_std": actor_std.max(),
-            }
-
-        # compute gradients and update params
-        new_state, info = self.state.apply_loss_fns(
-            loss_fn, pmap_axis=pmap_axis, has_aux=True
-        )
-
-        return self.replace(state=new_state), info
-
-    @partial(jax.jit, static_argnames="argmax")
-    def sample_actions(
-        self,
-        observations: np.ndarray,
-        *,
-        seed: Optional[PRNGKey] = None,
-        temperature: float = 1.0,
-        argmax=False,
-    ) -> jnp.ndarray:
-        dist = self.state.apply_fn(
-            {"params": self.state.params},
-            observations,
-            temperature=temperature,
-            name="actor",
-        )
-        if argmax:
-            actions = dist.mode()
-        else:
-            actions = dist.sample(seed=seed)
-        return actions
-
-    @jax.jit
-    def get_debug_metrics(self, batch, **kwargs):
-        dist = self.state.apply_fn(
-            {"params": self.state.params},
-            batch["observations"],
-            temperature=1.0,
-            name="actor",
-        )
+        self.state.zero_grad(["actor"])
+        dist = actor(batch["observations"], temperature=1.0, train=True)
         pi_actions = dist.mode()
         log_probs = dist.log_prob(batch["actions"])
-        mse = ((pi_actions - batch["actions"]) ** 2).sum(-1)
+        mse = ((pi_actions - batch["actions"]) ** 2).sum(dim=-1)
+        actor_loss = -(log_probs).mean()
+        actor_loss.backward()
+        self.state.optimizer_step("actor")
+        self.state.step += 1
 
+        info = {
+            "actor_loss": float(actor_loss.detach().cpu()),
+            "mse": float(mse.mean().detach().cpu()),
+        }
+        info.update(self.state.lr_info())
+        return self, info
+
+    @torch.no_grad()
+    def sample_actions(
+        self,
+        observations,
+        *,
+        seed: Optional[int] = None,
+        temperature: float = 1.0,
+        argmax: bool = False,
+    ):
+        del seed
+        obs_t = _to_torch(observations, self.device)
+        dist = self.state.modules["actor"](obs_t, temperature=temperature, train=False)
+        actions = dist.mode() if argmax else dist.sample()
+        return actions.detach().cpu().numpy()
+
+    @torch.no_grad()
+    def get_debug_metrics(self, batch, **kwargs):
+        del kwargs
+        batch = _to_torch(batch, self.device)
+        dist = self.state.modules["actor"](batch["observations"], temperature=1.0, train=False)
+        pi_actions = dist.mode()
+        log_probs = dist.log_prob(batch["actions"])
+        mse = ((pi_actions - batch["actions"]) ** 2).sum(dim=-1)
         return {
-            "mse": mse,
-            "log_probs": log_probs,
-            "pi_actions": pi_actions,
+            "mse": mse.detach().cpu().numpy(),
+            "log_probs": log_probs.detach().cpu().numpy(),
+            "pi_actions": pi_actions.detach().cpu().numpy(),
         }
 
     @classmethod
     def create(
         cls,
-        rng: PRNGKey,
-        observations: FrozenDict,
-        actions: jnp.ndarray,
-        # Model architecture
+        rng,
+        observations,
+        actions,
         encoder_type: str = "small",
         image_keys: Iterable[str] = ("image",),
         use_proprio: bool = False,
-        network_kwargs: dict = {
-            "hidden_dims": [256, 256],
-        },
-        policy_kwargs: dict = {
-            "tanh_squash_distribution": False,
-        },
-        # Optimizer
+        network_kwargs: dict = {"hidden_dims": [256, 256]},
+        policy_kwargs: dict = {"tanh_squash_distribution": False},
         learning_rate: float = 3e-4,
+        resnet_kwargs: Optional[dict] = None,
     ):
+        del rng
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         if encoder_type == "small":
             from serl_launcher.vision.small_encoders import SmallEncoder
 
@@ -145,41 +125,27 @@ class BCAgent(flax.struct.PyTreeNode):
                     pool_method="avg",
                     bottleneck_dim=256,
                     spatial_block_size=8,
-                    name=f"encoder_{image_key}",
                 )
                 for image_key in image_keys
             }
-        elif encoder_type == "resnet":
-            from serl_launcher.vision.resnet_v1 import resnetv1_configs
+        elif encoder_type in {"resnet", "resnet-pretrained"}:
+            from serl_launcher.vision.resnet_v1 import ResNetEncoder
 
-            encoders = {
-                image_key: resnetv1_configs["resnetv1-10"](
-                    pooling_method="spatial_learned_embeddings",
-                    num_spatial_blocks=8,
-                    bottleneck_dim=256,
-                    name=f"encoder_{image_key}",
-                )
-                for image_key in image_keys
-            }
-        elif encoder_type == "resnet-pretrained":
-            from serl_launcher.vision.resnet_v1 import (
-                PreTrainedResNetEncoder,
-                resnetv1_configs,
-            )
-
-            pretrained_encoder = resnetv1_configs["resnetv1-10-frozen"](
-                pre_pooling=True,
-                name="pretrained_encoder",
+            kw = dict(resnet_kwargs or {})
+            backbone = ResNetEncoder.create_backbone(
+                model_name=kw.get("model_name", "microsoft/resnet-18"),
+                pretrained=kw.get("pretrained", True),
+                freeze=kw.get("freeze_backbone", False),
             )
             encoders = {
-                image_key: PreTrainedResNetEncoder(
-                    pooling_method="spatial_learned_embeddings",
-                    num_spatial_blocks=8,
-                    bottleneck_dim=256,
-                    pretrained_encoder=pretrained_encoder,
-                    name=f"encoder_{image_key}",
+                key: ResNetEncoder(
+                    backbone=backbone,
+                    freeze_backbone=kw.get("freeze_backbone", False),
+                    pooling_method=kw.get("pooling_method", "spatial_learned_embeddings"),
+                    num_spatial_blocks=kw.get("num_spatial_blocks", 8),
+                    bottleneck_dim=kw.get("bottleneck_dim", 256),
                 )
-                for image_key in image_keys
+                for key in image_keys
             }
         else:
             raise NotImplementedError(f"Unknown encoder type: {encoder_type}")
@@ -191,40 +157,32 @@ class BCAgent(flax.struct.PyTreeNode):
             image_keys=image_keys,
         )
 
+        network_kwargs = dict(network_kwargs)
         network_kwargs["activate_final"] = True
-        networks = {
-            "actor": Policy(
-                encoder_def,
-                MLP(**network_kwargs),
-                action_dim=actions.shape[-1],
-                **policy_kwargs,
-            )
-        }
 
-        model_def = ModuleDict(networks)
+        actor = Policy(
+            encoder=encoder_def,
+            network=MLP(**network_kwargs),
+            action_dim=actions.shape[-1],
+            **policy_kwargs,
+        ).to(device)
 
-        tx = optax.adam(learning_rate)
+        obs_t = _to_torch(observations, device)
+        with torch.no_grad():
+            actor(obs_t, temperature=1.0, train=False)
 
-        rng, init_rng = jax.random.split(rng)
-        params = model_def.init(init_rng, actor=[observations])["params"]
+        actor_bundle = make_optimizer(actor.parameters(), learning_rate=learning_rate)
 
-        rng, create_rng = jax.random.split(rng)
-        state = JaxRLTrainState.create(
-            apply_fn=model_def.apply,
-            params=params,
-            txs=tx,
-            target_params=params,
-            rng=create_rng,
+        state = TorchRLTrainState(
+            modules={"actor": actor},
+            target_modules={},
+            optimizers={"actor": actor_bundle.optimizer},
+            schedulers={"actor": actor_bundle.scheduler},
+            grad_clip_norms={"actor": actor_bundle.clip_grad_norm},
+            device=device,
         )
-        config = dict(
-            image_keys=image_keys,
-        )
+        config = dict(image_keys=tuple(image_keys))
 
         agent = cls(state, config)
-
-        if encoder_type == "resnet-pretrained":  # load pretrained weights for ResNet-10
-            from serl_launcher.utils.train_utils import load_resnet10_params
-
-            agent = load_resnet10_params(agent, image_keys)
 
         return agent

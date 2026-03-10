@@ -3,15 +3,22 @@ from typing import Optional
 
 import gym
 import gym.spaces
-import jax
 import numpy as np
 
 
+def _tree_stack(list_of_dicts):
+    out = {}
+    for key in list_of_dicts[0].keys():
+        values = [item[key] for item in list_of_dicts]
+        if isinstance(values[0], dict):
+            out[key] = _tree_stack(values)
+        else:
+            out[key] = np.stack(values)
+    return out
+
+
 def stack_obs(obs):
-    dict_list = {k: [dic[k] for dic in obs] for k in obs[0]}
-    return jax.tree_map(
-        lambda x: np.stack(x), dict_list, is_leaf=lambda x: isinstance(x, list)
-    )
+    return _tree_stack(list(obs))
 
 
 def space_stack(space: gym.Space, repeat: int):
@@ -21,24 +28,15 @@ def space_stack(space: gym.Space, repeat: int):
             high=np.repeat(space.high[None], repeat, axis=0),
             dtype=space.dtype,
         )
-    elif isinstance(space, gym.spaces.Discrete):
+    if isinstance(space, gym.spaces.Discrete):
         return gym.spaces.MultiDiscrete([space.n] * repeat)
-    elif isinstance(space, gym.spaces.Dict):
-        return gym.spaces.Dict(
-            {k: space_stack(v, repeat) for k, v in space.spaces.items()}
-        )
-    else:
-        raise TypeError()
+    if isinstance(space, gym.spaces.Dict):
+        return gym.spaces.Dict({k: space_stack(v, repeat) for k, v in space.spaces.items()})
+    raise TypeError(f"Unsupported space type: {type(space)}")
 
 
 class ChunkingWrapper(gym.Wrapper):
-    """
-    Enables observation histories and receding horizon control.
-
-    Accumulates observations into obs_horizon size chunks. Starts by repeating the first obs.
-
-    Executes act_exec_horizon actions in the environment.
-    """
+    """Enables observation histories and receding horizon control."""
 
     def __init__(self, env: gym.Env, obs_horizon: int, act_exec_horizon: Optional[int]):
         super().__init__(env)
@@ -48,15 +46,11 @@ class ChunkingWrapper(gym.Wrapper):
 
         self.current_obs = deque(maxlen=self.obs_horizon)
 
-        self.observation_space = space_stack(
-            self.env.observation_space, self.obs_horizon
-        )
+        self.observation_space = space_stack(self.env.observation_space, self.obs_horizon)
         if self.act_exec_horizon is None:
             self.action_space = self.env.action_space
         else:
-            self.action_space = space_stack(
-                self.env.action_space, self.act_exec_horizon
-            )
+            self.action_space = space_stack(self.env.action_space, self.act_exec_horizon)
 
     def step(self, action, *args):
         act_exec_horizon = self.act_exec_horizon
@@ -69,7 +63,7 @@ class ChunkingWrapper(gym.Wrapper):
         for i in range(act_exec_horizon):
             obs, reward, done, trunc, info = self.env.step(action[i], *args)
             self.current_obs.append(obs)
-        return (stack_obs(self.current_obs), reward, done, trunc, info)
+        return stack_obs(self.current_obs), reward, done, trunc, info
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)

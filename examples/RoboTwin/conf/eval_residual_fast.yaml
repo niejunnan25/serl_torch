@@ -1,0 +1,106 @@
+seed: 0
+robo_root: null
+
+task:
+  name: adjust_bottle
+  task_config: demo_clean
+  prompt: adjust bottle
+  seed_base: 200000
+  setup_retries: 5
+  # instruction 生成模式：seen / unseen / fixed（fixed 则只使用 prompt，不动态生成）
+  instruction_type: seen
+
+openpi:
+  host: localhost
+  port: 9000  # 与 batch_serve_policy.sh 首个任务端口一致
+
+env:
+  # local: 评估进程内直接实例化 RoboTwin（需 robotwin2 conda，含 sapien）
+  # remote: 通过 HTTP RPC 连接 robotwin2 中的环境服务（serve_env.sh）
+  backend: remote
+  remote:
+    host: 127.0.0.1
+    port: 9100
+    timeout_sec: 120.0
+    robo_root: null
+
+residual:
+  image_keys: [cam_high, cam_left_wrist, cam_right_wrist]
+  action_dim: 14
+  action_indices: null
+  xi: 0.5
+  control_gripper: true
+  arm_delta_limit: 0.03
+  gripper_delta_limit: 0.08
+  clip_gripper: true
+  chunk_horizon: 10
+
+sac:
+  policy_hidden_dims: [256, 256, 256]
+  critic_hidden_dims: [256, 256, 256]
+  policy_activation: tanh
+  critic_activation: tanh
+  policy_layer_norm: true
+  critic_layer_norm: true
+  encoder_type: resnet
+  resnet:
+    # HuggingFace model ID (如 microsoft/resnet-18) 或本地目录绝对路径
+    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    pretrained: true
+    freeze_backbone: true
+    pooling_method: spatial_learned_embeddings
+    num_spatial_blocks: 8
+    bottleneck_dim: 256
+  shared_encoder: true
+  use_proprio: true
+  image_keys: [cam_high, cam_left_wrist, cam_right_wrist]
+  obs_stack_horizon: 1
+  learning_rate: 3.0e-4
+  std_min: 1.0e-5
+  std_max: 5.0
+  discount: 0.99
+  soft_target_update_rate: 0.005
+  temperature_init: 1.0
+  backup_entropy: false
+  critic_ensemble_size: 2
+  critic_subsample_size: 2
+  utd_ratio: 2
+  otf_num_samples: 1
+  cql_n_actions: 10
+  cql_temperature: 1.0
+  optimizer:
+    type: adamw
+    weight_decay: 1.0e-4
+    temperature_weight_decay: 0.0
+    warmup_steps: 0
+    cosine_decay_steps: null
+    grad_clip_norm: 1.0
+
+logging:
+  step_log_file: step_logs.jsonl
+  episode_log_file: episode_logs.jsonl
+  summary_file: summary.json
+
+eval:
+  episodes: 10
+  expert_check: true
+  max_seed_attempts: 2000
+  max_env_steps_per_episode: 200
+  deterministic: true
+  residual_scale: 1.0
+  checkpoint_path: null
+  enable_base_probing: true
+  probing_alpha: 0.6
+  probing_min_steps: 0
+  probing_max_steps: 20
+  collect_dataset_path: null
+  collect_only_success: true
+  collect_include_probing: false
+
+normalization:
+  enabled: false
+  stats_dir: null
+
+hydra:
+  run:
+    dir: outputs/eval_residual_fast/${now:%Y-%m-%d}/${now:%H-%M-%S}

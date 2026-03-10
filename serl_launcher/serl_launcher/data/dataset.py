@@ -1,10 +1,6 @@
-from functools import partial
 from typing import Dict, Iterable, Optional, Tuple, Union
 
-import jax
-import jax.numpy as jnp
 import numpy as np
-from flax.core import frozen_dict
 from gym.utils import seeding
 
 DataType = Union[np.ndarray, Dict[str, "DataType"]]
@@ -18,53 +14,45 @@ def _check_lengths(dataset_dict: DatasetDict, dataset_len: Optional[int] = None)
         elif isinstance(v, np.ndarray):
             item_len = len(v)
             dataset_len = dataset_len or item_len
-            assert dataset_len == item_len, "Inconsistent item lengths in the dataset."
+            if dataset_len != item_len:
+                raise ValueError("Inconsistent item lengths in the dataset")
         else:
-            raise TypeError("Unsupported type.")
-    return dataset_len
+            raise TypeError("Unsupported type")
+    return int(dataset_len or 0)
 
 
 def _subselect(dataset_dict: DatasetDict, index: np.ndarray) -> DatasetDict:
-    new_dataset_dict = {}
+    out = {}
     for k, v in dataset_dict.items():
         if isinstance(v, dict):
-            new_v = _subselect(v, index)
+            out[k] = _subselect(v, index)
         elif isinstance(v, np.ndarray):
-            new_v = v[index]
+            out[k] = v[index]
         else:
-            raise TypeError("Unsupported type.")
-        new_dataset_dict[k] = new_v
-    return new_dataset_dict
+            raise TypeError("Unsupported type")
+    return out
 
 
-def _sample(
-    dataset_dict: Union[np.ndarray, DatasetDict], indx: np.ndarray
-) -> DatasetDict:
+def _sample(dataset_dict: Union[np.ndarray, DatasetDict], indx: np.ndarray):
     if isinstance(dataset_dict, np.ndarray):
         return dataset_dict[indx]
-    elif isinstance(dataset_dict, dict):
-        batch = {}
-        for k, v in dataset_dict.items():
-            batch[k] = _sample(v, indx)
-    else:
-        raise TypeError("Unsupported type.")
-    return batch
+    if isinstance(dataset_dict, dict):
+        return {k: _sample(v, indx) for k, v in dataset_dict.items()}
+    raise TypeError("Unsupported type")
 
 
-class Dataset(object):
+class Dataset:
     def __init__(self, dataset_dict: DatasetDict, seed: Optional[int] = None):
         self.dataset_dict = dataset_dict
         self.dataset_len = _check_lengths(dataset_dict)
 
-        # Seeding similar to OpenAI Gym:
-        # https://github.com/openai/gym/blob/master/gym/spaces/space.py#L46
         self._np_random = None
         self._seed = None
         if seed is not None:
             self.seed(seed)
 
     @property
-    def np_random(self) -> np.random.RandomState:
+    def np_random(self):
         if self._np_random is None:
             self.seed()
         return self._np_random
@@ -81,57 +69,23 @@ class Dataset(object):
         batch_size: int,
         keys: Optional[Iterable[str]] = None,
         indx: Optional[np.ndarray] = None,
-    ) -> frozen_dict.FrozenDict:
+    ) -> DatasetDict:
         if indx is None:
             if hasattr(self.np_random, "integers"):
                 indx = self.np_random.integers(len(self), size=batch_size)
             else:
                 indx = self.np_random.randint(len(self), size=batch_size)
 
-        batch = dict()
-
-        if keys is None:
-            keys = self.dataset_dict.keys()
-
+        keys = list(keys or self.dataset_dict.keys())
+        batch = {}
         for k in keys:
-            if isinstance(self.dataset_dict[k], dict):
-                batch[k] = _sample(self.dataset_dict[k], indx)
-            else:
-                batch[k] = self.dataset_dict[k][indx]
-
-        return frozen_dict.freeze(batch)
-
-    def sample_jax(self, batch_size: int, keys: Optional[Iterable[str]] = None):
-        if not hasattr(self, "rng"):
-            self.rng = jax.random.PRNGKey(self._seed or 42)
-
-            if keys is None:
-                keys = self.dataset_dict.keys()
-
-            # jax_dataset_dict = {k: self.dataset_dict[k] for k in keys}
-            # jax_dataset_dict = jax.device_put(jax_dataset_dict)
-
-            @jax.jit
-            def _sample_jax(rng, src, max_indx: int):
-                key, rng = jax.random.split(rng)
-                indx = jax.random.randint(key, (batch_size,), minval=0, maxval=max_indx)
-                return (
-                    rng,
-                    indx.max(),
-                    jax.tree_map(lambda d: jnp.take(d, indx, axis=0), src),
-                )
-
-            self._sample_jax = _sample_jax
-
-        self.rng, indx_max, sample = self._sample_jax(
-            self.rng, self.dataset_dict, len(self)
-        )
-        return indx_max, sample
+            v = self.dataset_dict[k]
+            batch[k] = _sample(v, indx) if isinstance(v, dict) else v[indx]
+        return batch
 
     def split(self, ratio: float) -> Tuple["Dataset", "Dataset"]:
-        assert 0 < ratio and ratio < 1
-        train_index = np.index_exp[: int(self.dataset_len * ratio)]
-        test_index = np.index_exp[int(self.dataset_len * ratio) :]
+        if not (0 < ratio < 1):
+            raise ValueError("ratio must be in (0,1)")
 
         index = np.arange(len(self), dtype=np.int32)
         self.np_random.shuffle(index)
@@ -142,7 +96,7 @@ class Dataset(object):
         test_dataset_dict = _subselect(self.dataset_dict, test_index)
         return Dataset(train_dataset_dict), Dataset(test_dataset_dict)
 
-    def _trajectory_boundaries_and_returns(self) -> Tuple[list, list, list]:
+    def _trajectory_boundaries_and_returns(self):
         episode_starts = [0]
         episode_ends = []
 
@@ -161,18 +115,11 @@ class Dataset(object):
 
         return episode_starts, episode_ends, episode_returns
 
-    def filter(
-        self, take_top: Optional[float] = None, threshold: Optional[float] = None
-    ):
-        assert (take_top is None and threshold is not None) or (
-            take_top is not None and threshold is None
-        )
+    def filter(self, take_top: Optional[float] = None, threshold: Optional[float] = None):
+        if not ((take_top is None) ^ (threshold is None)):
+            raise ValueError("Specify exactly one of take_top or threshold")
 
-        (
-            episode_starts,
-            episode_ends,
-            episode_returns,
-        ) = self._trajectory_boundaries_and_returns()
+        episode_starts, episode_ends, episode_returns = self._trajectory_boundaries_and_returns()
 
         if take_top is not None:
             threshold = np.percentile(episode_returns, 100 - take_top)
@@ -184,12 +131,9 @@ class Dataset(object):
                 bool_indx[episode_starts[i] : episode_ends[i]] = True
 
         self.dataset_dict = _subselect(self.dataset_dict, bool_indx)
-
         self.dataset_len = _check_lengths(self.dataset_dict)
 
     def normalize_returns(self, scaling: float = 1000):
         (_, _, episode_returns) = self._trajectory_boundaries_and_returns()
-        self.dataset_dict["rewards"] /= np.max(episode_returns) - np.min(
-            episode_returns
-        )
+        self.dataset_dict["rewards"] /= np.max(episode_returns) - np.min(episode_returns)
         self.dataset_dict["rewards"] *= scaling

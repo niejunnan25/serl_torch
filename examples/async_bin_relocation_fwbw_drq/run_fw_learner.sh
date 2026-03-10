@@ -10,7 +10,7 @@ python async_drq_randomized.py "$@" \
     --critic_actor_ratio 4 \
     --batch_size 256 \
     --eval_period 2000 \
-    --encoder_type resnet-pretrained \
+    --encoder_type resnet \
     --fwbw fw \
     --demo_path ./demos/fw_bin_2000_demo_2024-01-23_18-49-56.pkl \
     --checkpoint_period 1000 \

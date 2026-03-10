@@ -1,49 +1,25 @@
-# adapted from https://github.com/google-research/robotics_transformer/blob/master/film_efficientnet/film_conditioning_layer.py
-import flax.linen as nn
-import jax.numpy as jnp
+import torch
+import torch.nn as nn
 
 
 class FilmConditioning(nn.Module):
-    @nn.compact
-    def __call__(self, conv_filters: jnp.ndarray, conditioning: jnp.ndarray):
-        """Applies FiLM conditioning to a convolutional feature map.
+    def __init__(self):
+        super().__init__()
+        self.add_proj = None
+        self.mul_proj = None
 
-        Args:
-            conv_filters: A tensor of shape [batch_size, height, width, channels].
-            conditioning: A tensor of shape [batch_size, conditioning_size].
+    def _ensure_proj(self, conv_filters: torch.Tensor, conditioning: torch.Tensor):
+        channels = conv_filters.shape[-1]
+        if self.add_proj is None:
+            self.add_proj = nn.Linear(conditioning.shape[-1], channels, device=conditioning.device)
+            self.mul_proj = nn.Linear(conditioning.shape[-1], channels, device=conditioning.device)
+            nn.init.zeros_(self.add_proj.weight)
+            nn.init.zeros_(self.add_proj.bias)
+            nn.init.zeros_(self.mul_proj.weight)
+            nn.init.zeros_(self.mul_proj.bias)
 
-        Returns:
-            A tensor of shape [batch_size, height, width, channels].
-        """
-        projected_cond_add = nn.Dense(
-            features=conv_filters.shape[-1],
-            kernel_init=nn.initializers.zeros,
-            bias_init=nn.initializers.zeros,
-        )(conditioning)
-        projected_cond_mult = nn.Dense(
-            features=conv_filters.shape[-1],
-            kernel_init=nn.initializers.zeros,
-            bias_init=nn.initializers.zeros,
-        )(conditioning)
-
-        projected_cond_add = projected_cond_add[..., None, None, :]
-        projected_cond_mult = projected_cond_mult[..., None, None, :]
-
-        return conv_filters * (1 + projected_cond_add) + projected_cond_mult
-
-
-if __name__ == "__main__":
-    import jax
-    import jax.numpy as jnp
-
-    key = jax.random.PRNGKey(0)
-    key, subkey = jax.random.split(key)
-    x = jax.random.normal(subkey, (1, 32, 32, 3))
-    x = jnp.array(x)
-
-    z = jnp.ones((1, 64))
-    film = FilmConditioning()
-    params = film.init(key, x, z)
-    y = film.apply(params, x, z)
-
-    print(y.shape)
+    def forward(self, conv_filters: torch.Tensor, conditioning: torch.Tensor):
+        self._ensure_proj(conv_filters, conditioning)
+        projected_cond_add = self.add_proj(conditioning)[..., None, None, :]
+        projected_cond_mult = self.mul_proj(conditioning)[..., None, None, :]
+        return conv_filters * (1.0 + projected_cond_add) + projected_cond_mult

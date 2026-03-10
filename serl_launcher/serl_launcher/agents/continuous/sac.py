@@ -1,347 +1,362 @@
 import copy
-from functools import partial
-from typing import Optional, Tuple, FrozenSet
+from typing import FrozenSet, Optional, Tuple
 
-import chex
-import distrax
-import flax
-import flax.linen as nn
-import jax
-import jax.numpy as jnp
+import numpy as np
+import torch
+import torch.nn as nn
 
-from serl_launcher.common.common import JaxRLTrainState, ModuleDict, nonpytree_field
+from serl_launcher.common.common import TorchRLTrainState, nonpytree_field
 from serl_launcher.common.encoding import EncodingWrapper
 from serl_launcher.common.optimizers import make_optimizer
-from serl_launcher.common.typing import Batch, Data, Params, PRNGKey
-from serl_launcher.networks.actor_critic_nets import Critic, Policy, ensemblize
+from serl_launcher.common.typing import Batch, Data
+from serl_launcher.networks.actor_critic_nets import Critic, CriticEnsemble, Policy
 from serl_launcher.networks.lagrange import GeqLagrangeMultiplier
 from serl_launcher.networks.mlp import MLP
 
 
-class SACAgent(flax.struct.PyTreeNode):
-    """
-    Online actor-critic supporting several different algorithms depending on configuration:
-     - SAC (default)
-     - TD3 (policy_kwargs={"std_parameterization": "fixed", "fixed_std": 0.1})
-     - REDQ (critic_ensemble_size=10, critic_subsample_size=2)
-     - SAC-ensemble (critic_ensemble_size>>1)
-    """
+def _to_torch(data, device: torch.device):
+    if isinstance(data, dict):
+        return {k: _to_torch(v, device) for k, v in data.items()}
+    if isinstance(data, torch.Tensor):
+        tensor = data.to(device)
+    else:
+        tensor = torch.as_tensor(data, device=device)
+    if tensor.dtype == torch.float64:
+        tensor = tensor.float()
+    return tensor
 
-    state: JaxRLTrainState
-    config: dict = nonpytree_field()
 
-    def forward_critic(
-        self,
-        observations: Data,
-        actions: jax.Array,
-        rng: PRNGKey,
-        *,
-        grad_params: Optional[Params] = None,
-        train: bool = True,
-    ) -> jax.Array:
-        """
-        Forward pass for critic network.
-        Pass grad_params to use non-default parameters (e.g. for gradients).
-        """
-        if train:
-            assert rng is not None, "Must specify rng when training"
-        return self.state.apply_fn(
-            {"params": grad_params or self.state.params},
-            observations,
-            actions,
-            name="critic",
-            rngs={"dropout": rng} if train else {},
-            train=train,
-        )
+def _tree_mean(values):
+    out = {}
+    for key in values[0].keys():
+        valid = [v[key] for v in values if key in v]
+        if not valid:
+            continue
+        out[key] = float(np.mean(valid))
+    return out
 
-    def forward_target_critic(
-        self,
-        observations: Data,
-        actions: jax.Array,
-        rng: PRNGKey,
-    ) -> jax.Array:
-        """
-        Forward pass for target critic network.
-        Pass grad_params to use non-default parameters (e.g. for gradients).
-        """
-        return self.forward_critic(
-            observations, actions, rng=rng, grad_params=self.state.target_params
-        )
 
-    def forward_policy(
-        self,
-        observations: Data,
-        rng: Optional[PRNGKey] = None,
-        *,
-        grad_params: Optional[Params] = None,
-        train: bool = True,
-    ) -> distrax.Distribution:
-        """
-        Forward pass for policy network.
-        Pass grad_params to use non-default parameters (e.g. for gradients).
-        """
-        if train:
-            assert rng is not None, "Must specify rng when training"
-        return self.state.apply_fn(
-            {"params": grad_params or self.state.params},
-            observations,
-            name="actor",
-            rngs={"dropout": rng} if train else {},
-            train=train,
-        )
+def _split_batch(batch: Batch, utd_ratio: int):
+    def _split(x):
+        b = x.shape[0]
+        if b % utd_ratio != 0:
+            raise ValueError(f"Batch size {b} must be divisible by utd_ratio {utd_ratio}")
+        mini_b = b // utd_ratio
+        return x.reshape(utd_ratio, mini_b, *x.shape[1:])
 
-    def forward_temperature(
-        self, *, grad_params: Optional[Params] = None
-    ) -> distrax.Distribution:
-        """
-        Forward pass for temperature Lagrange multiplier.
-        Pass grad_params to use non-default parameters (e.g. for gradients).
-        """
-        return self.state.apply_fn(
-            {"params": grad_params or self.state.params}, name="temperature"
-        )
+    if isinstance(batch, dict):
+        return {k: _split_batch(v, utd_ratio) for k, v in batch.items()}
+    return _split(batch)
 
-    def temperature_lagrange_penalty(
-        self, entropy: jnp.ndarray, *, grad_params: Optional[Params] = None
-    ) -> distrax.Distribution:
-        """
-        Forward pass for Lagrange penalty for temperature.
-        Pass grad_params to use non-default parameters (e.g. for gradients).
-        """
-        return self.state.apply_fn(
-            {"params": grad_params or self.state.params},
+
+def _index_batch(batch, idx: int):
+    if isinstance(batch, dict):
+        return {k: _index_batch(v, idx) for k, v in batch.items()}
+    return batch[idx]
+
+
+class SACAgent:
+    state: TorchRLTrainState
+    config: dict = nonpytree_field(default_factory=dict)
+
+    def __init__(self, state: TorchRLTrainState, config: dict):
+        self.state = state
+        self.config = config
+
+    @property
+    def device(self):
+        return self.state.device
+
+    def replace(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        return self
+
+    def forward_critic(self, observations: Data, actions: torch.Tensor, train: bool = True):
+        critic = self.state.modules["critic"]
+        return critic(observations, actions, train=train)
+
+    def forward_target_critic(self, observations: Data, actions: torch.Tensor):
+        critic = self.state.target_modules["critic"]
+        return critic(observations, actions, train=False)
+
+    def forward_policy(self, observations: Data, train: bool = True):
+        actor = self.state.modules["actor"]
+        return actor(observations, train=train)
+
+    def forward_temperature(self):
+        temperature_module = self.state.modules["temperature"]
+        return temperature_module()
+
+    def temperature_lagrange_penalty(self, entropy: torch.Tensor):
+        return self.state.modules["temperature"](
             lhs=entropy,
-            rhs=self.config["target_entropy"],
-            name="temperature",
+            rhs=torch.as_tensor(self.config["target_entropy"], device=self.device, dtype=torch.float32),
         )
 
-    def _compute_next_actions(self, batch, rng):
-        """shared computation between loss functions"""
+    def _compute_next_actions(self, batch, *, num_samples: int = 1):
+        """
+        采样 next residual actions 以构建 TD target。
+
+        - num_samples=1: 返回形状 (B, A), (B,)
+        - num_samples>1: 返回形状 (K, B, A), (K, B)
+        """
+        next_action_distributions = self.forward_policy(batch["next_observations"], train=True)
+        k = max(1, int(num_samples))
+        if k == 1:
+            next_actions, next_actions_log_probs = next_action_distributions.sample_and_log_prob()
+            return next_actions, next_actions_log_probs
+
+        next_actions_list = []
+        next_log_probs_list = []
+        for _ in range(k):
+            sampled_actions, sampled_log_probs = next_action_distributions.sample_and_log_prob()
+            next_actions_list.append(sampled_actions)
+            next_log_probs_list.append(sampled_log_probs)
+        return torch.stack(next_actions_list, dim=0), torch.stack(next_log_probs_list, dim=0)
+
+    def critic_loss_fn(
+        self,
+        batch,
+        *,
+        calql_alpha: float = 0.0,
+        calql_n_actions: Optional[int] = None,
+        calql_temperature: Optional[float] = None,
+    ):
         batch_size = batch["rewards"].shape[0]
 
-        next_action_distributions = self.forward_policy(
-            batch["next_observations"], rng=rng
-        )
-        (
-            next_actions,
-            next_actions_log_probs,
-        ) = next_action_distributions.sample_and_log_prob(seed=rng)
-        chex.assert_equal_shape([batch["actions"], next_actions])
-        chex.assert_shape(next_actions_log_probs, (batch_size,))
+        with torch.no_grad():
+            otf_num_samples = max(1, int(self.config.get("otf_num_samples", 1)))
+            if otf_num_samples == 1:
+                next_actions, next_actions_log_probs = self._compute_next_actions(batch, num_samples=1)
+                target_next_qs = self.forward_target_critic(batch["next_observations"], next_actions)
+                if target_next_qs.ndim == 1:
+                    target_next_qs = target_next_qs.unsqueeze(0)
 
-        return next_actions, next_actions_log_probs
+                if self.config["critic_subsample_size"] is not None:
+                    num_q = target_next_qs.shape[0]
+                    subsample = torch.randint(
+                        low=0,
+                        high=num_q,
+                        size=(self.config["critic_subsample_size"],),
+                        device=target_next_qs.device,
+                    )
+                    target_next_qs = target_next_qs[subsample]
 
-    def critic_loss_fn(self, batch, params: Params, rng: PRNGKey):
-        """classes that inherit this class can change this function"""
-        batch_size = batch["rewards"].shape[0]
-        rng, next_action_sample_key = jax.random.split(rng)
-        next_actions, next_actions_log_probs = self._compute_next_actions(
-            batch, next_action_sample_key
-        )
+                target_next_min_q = target_next_qs.min(dim=0).values
+            else:
+                # OTF: 对 next action 多次采样，使用最优 bootstrap Q 提升前期样本效率。
+                next_actions_k, next_actions_log_probs_k = self._compute_next_actions(
+                    batch,
+                    num_samples=otf_num_samples,
+                )  # (K,B,A), (K,B)
+                target_next_qs = self.forward_target_critic(
+                    batch["next_observations"],
+                    next_actions_k.permute(1, 0, 2),
+                )  # (Q,B,K)
+                if target_next_qs.ndim == 2:
+                    target_next_qs = target_next_qs.unsqueeze(0)
 
-        # Evaluate next Qs for all ensemble members (cheap because we're only doing the forward pass)
-        target_next_qs = self.forward_target_critic(
-            batch["next_observations"],
-            next_actions,
-            rng=rng,
-        )  # (critic_ensemble_size, batch_size)
+                if self.config["critic_subsample_size"] is not None:
+                    num_q = target_next_qs.shape[0]
+                    subsample = torch.randint(
+                        low=0,
+                        high=num_q,
+                        size=(self.config["critic_subsample_size"],),
+                        device=target_next_qs.device,
+                    )
+                    target_next_qs = target_next_qs[subsample]
 
-        # Subsample if requested
-        if self.config["critic_subsample_size"] is not None:
-            rng, subsample_key = jax.random.split(rng)
-            subsample_idcs = jax.random.randint(
-                subsample_key,
-                (self.config["critic_subsample_size"],),
-                0,
-                self.config["critic_ensemble_size"],
+                q_min_bk = target_next_qs.min(dim=0).values  # (B,K)
+                best_idx = torch.argmax(q_min_bk, dim=-1)  # (B,)
+                target_next_min_q = q_min_bk.gather(-1, best_idx.unsqueeze(-1)).squeeze(-1)
+                next_actions_log_probs = next_actions_log_probs_k.permute(1, 0).gather(
+                    -1,
+                    best_idx.unsqueeze(-1),
+                ).squeeze(-1)
+
+            target_q = batch["rewards"] + self.config["discount"] * batch["masks"] * target_next_min_q
+
+            if self.config["backup_entropy"]:
+                temperature = self.forward_temperature().detach()
+                target_q = target_q - temperature * next_actions_log_probs
+
+        predicted_qs = self.forward_critic(batch["observations"], batch["actions"], train=True)
+        if predicted_qs.ndim == 1:
+            predicted_qs = predicted_qs.unsqueeze(0)
+
+        target_qs = target_q.unsqueeze(0).expand_as(predicted_qs)
+        td_critic_loss = torch.mean((predicted_qs - target_qs) ** 2)
+        critic_loss = td_critic_loss
+
+        calql_alpha = float(calql_alpha)
+        cql_penalty = torch.as_tensor(0.0, device=predicted_qs.device)
+        if calql_alpha > 0.0:
+            # Cal-QL/CQL-style conservative regularization:
+            # 约束 Q(s, a_data) 不应明显低于采样动作集合上的 log-sum-exp 估计。
+            n_actions = int(calql_n_actions) if calql_n_actions is not None else int(self.config.get("cql_n_actions", 10))
+            n_actions = max(1, n_actions)
+            cql_temp = float(calql_temperature) if calql_temperature is not None else float(
+                self.config.get("cql_temperature", 1.0)
             )
-            target_next_qs = target_next_qs[subsample_idcs]
+            cql_temp = max(cql_temp, 1e-6)
 
-        # Minimum Q across (subsampled) ensemble members
-        target_next_min_q = target_next_qs.min(axis=0)
-        chex.assert_shape(target_next_min_q, (batch_size,))
+            action_dim = int(batch["actions"].shape[-1])
+            random_actions = torch.empty(
+                (batch_size, n_actions, action_dim),
+                device=predicted_qs.device,
+                dtype=predicted_qs.dtype,
+            ).uniform_(-1.0, 1.0)
 
-        target_q = (
-            batch["rewards"]
-            + self.config["discount"] * batch["masks"] * target_next_min_q
-        )
-        chex.assert_shape(target_q, (batch_size,))
+            action_distribution = self.forward_policy(batch["observations"], train=True)
+            policy_actions = torch.stack([action_distribution.sample() for _ in range(n_actions)], dim=1)
 
-        if self.config["backup_entropy"]:
-            temperature = self.forward_temperature()
-            target_q = target_q - temperature * next_actions_log_probs
+            q_rand = self.forward_critic(batch["observations"], random_actions, train=True)  # (Q,B,N)
+            q_pi = self.forward_critic(batch["observations"], policy_actions, train=True)  # (Q,B,N)
+            q_cat = torch.cat([q_rand, q_pi], dim=-1)  # (Q,B,2N)
 
-        predicted_qs = self.forward_critic(
-            batch["observations"], batch["actions"], rng=rng, grad_params=params
-        )
-
-        chex.assert_shape(
-            predicted_qs, (self.config["critic_ensemble_size"], batch_size)
-        )
-        target_qs = target_q[None].repeat(self.config["critic_ensemble_size"], axis=0)
-        chex.assert_equal_shape([predicted_qs, target_qs])
-        critic_loss = jnp.mean((predicted_qs - target_qs) ** 2)
+            lse_q = torch.logsumexp(q_cat / cql_temp, dim=-1) * cql_temp  # (Q,B)
+            cql_penalty = torch.mean(lse_q - predicted_qs)
+            critic_loss = td_critic_loss + calql_alpha * cql_penalty
 
         info = {
-            "critic_loss": critic_loss,
-            "predicted_qs": jnp.mean(predicted_qs),
-            "target_qs": jnp.mean(target_qs),
+            "critic_loss": float(critic_loss.detach().cpu()),
+            "critic_td_loss": float(td_critic_loss.detach().cpu()),
+            "critic_cql_penalty": float(cql_penalty.detach().cpu()),
+            "predicted_qs": float(predicted_qs.mean().detach().cpu()),
+            "target_qs": float(target_qs.mean().detach().cpu()),
+            "batch_size": int(batch_size),
+            "otf_num_samples": int(self.config.get("otf_num_samples", 1)),
+            "calql_alpha": float(calql_alpha),
         }
 
         return critic_loss, info
 
-    def policy_loss_fn(self, batch, params: Params, rng: PRNGKey):
-        batch_size = batch["rewards"].shape[0]
-        temperature = self.forward_temperature()
+    def policy_loss_fn(self, batch):
+        temperature = self.forward_temperature().detach()
+        action_distributions = self.forward_policy(batch["observations"], train=True)
+        actions, log_probs = action_distributions.sample_and_log_prob()
 
-        rng, policy_rng, sample_rng, critic_rng = jax.random.split(rng, 4)
-        action_distributions = self.forward_policy(
-            batch["observations"], rng=policy_rng, grad_params=params
-        )
-        actions, log_probs = action_distributions.sample_and_log_prob(seed=sample_rng)
-
-        predicted_qs = self.forward_critic(
-            batch["observations"],
-            actions,
-            rng=critic_rng,
-        )
-        predicted_q = predicted_qs.mean(axis=0)
-        chex.assert_shape(predicted_q, (batch_size,))
-        chex.assert_shape(log_probs, (batch_size,))
+        predicted_qs = self.forward_critic(batch["observations"], actions, train=True)
+        if predicted_qs.ndim == 1:
+            predicted_q = predicted_qs
+        else:
+            predicted_q = predicted_qs.mean(dim=0)
 
         actor_objective = predicted_q - temperature * log_probs
-        actor_loss = -jnp.mean(actor_objective)
+        actor_loss = -torch.mean(actor_objective)
 
         info = {
-            "actor_loss": actor_loss,
-            "temperature": temperature,
-            "entropy": -log_probs.mean(),
+            "actor_loss": float(actor_loss.detach().cpu()),
+            "temperature": float(temperature.detach().cpu()),
+            "entropy": float((-log_probs.mean()).detach().cpu()),
         }
 
         return actor_loss, info
 
-    def temperature_loss_fn(self, batch, params: Params, rng: PRNGKey):
-        rng, next_action_sample_key = jax.random.split(rng)
-        next_actions, next_actions_log_probs = self._compute_next_actions(
-            batch, next_action_sample_key
-        )
-
+    def temperature_loss_fn(self, batch):
+        with torch.no_grad():
+            _, next_actions_log_probs = self._compute_next_actions(batch, num_samples=1)
         entropy = -next_actions_log_probs.mean()
-        temperature_loss = self.temperature_lagrange_penalty(
-            entropy,
-            grad_params=params,
-        )
-        return temperature_loss, {"temperature_loss": temperature_loss}
+        penalty = self.temperature_lagrange_penalty(entropy)
+        temperature_loss = penalty.mean() if penalty.ndim > 0 else penalty
+        return temperature_loss, {"temperature_loss": float(temperature_loss.detach().cpu())}
 
-    def loss_fns(self, batch):
-        return {
-            "critic": partial(self.critic_loss_fn, batch),
-            "actor": partial(self.policy_loss_fn, batch),
-            "temperature": partial(self.temperature_loss_fn, batch),
-        }
-
-    @partial(jax.jit, static_argnames=("pmap_axis", "networks_to_update"))
     def update(
         self,
         batch: Batch,
         *,
         pmap_axis: str = None,
-        networks_to_update: FrozenSet[str] = frozenset(
-            {"actor", "critic", "temperature"}
-        ),
+        networks_to_update: FrozenSet[str] = frozenset({"actor", "critic", "temperature"}),
     ) -> Tuple["SACAgent", dict]:
-        """
-        Take one gradient step on all (or a subset) of the networks in the agent.
+        del pmap_axis
+        batch = _to_torch(batch, self.device)
+        info = {}
 
-        Parameters:
-            batch: Batch of data to use for the update. Should have keys:
-                "observations", "actions", "next_observations", "rewards", "masks".
-            pmap_axis: Axis to use for pmap (if None, no pmap is used).
-            networks_to_update: Names of networks to update (default: all networks).
-                For example, in high-UTD settings it's common to update the critic
-                many times and only update the actor (and other networks) once.
-        Returns:
-            Tuple of (new agent, info dict).
-        """
-        batch_size = batch["rewards"].shape[0]
-        chex.assert_tree_shape_prefix(batch, (batch_size,))
-
-        # Compute gradients and update params
-        loss_fns = self.loss_fns(batch)
-
-        # Only compute gradients for specified steps
-        assert networks_to_update.issubset(
-            loss_fns.keys()
-        ), f"Invalid gradient steps: {networks_to_update}"
-        for key in loss_fns.keys() - networks_to_update:
-            loss_fns[key] = lambda params, rng: (0.0, {})
-
-        new_state, info = self.state.apply_loss_fns(
-            loss_fns, pmap_axis=pmap_axis, has_aux=True
-        )
-
-        # Update target network (if requested)
         if "critic" in networks_to_update:
-            new_state = new_state.target_update(self.config["soft_target_update_rate"])
+            self.state.zero_grad(["critic"])
+            critic_loss, critic_info = self.critic_loss_fn(batch)
+            critic_loss.backward()
+            self.state.optimizer_step("critic")
+            self.state.target_update(self.config["soft_target_update_rate"])
+            info.update(critic_info)
 
-        # Update RNG
-        rng, _ = jax.random.split(self.state.rng)
-        new_state = new_state.replace(rng=rng)
+        if "actor" in networks_to_update:
+            self.state.zero_grad(["actor"])
+            actor_loss, actor_info = self.policy_loss_fn(batch)
+            actor_loss.backward()
+            self.state.optimizer_step("actor")
+            info.update(actor_info)
 
-        # Log learning rates
-        for name, opt_state in new_state.opt_states.items():
-            if (
-                hasattr(opt_state, "hyperparams")
-                and "learning_rate" in opt_state.hyperparams.keys()
-            ):
-                info[f"{name}_lr"] = opt_state.hyperparams["learning_rate"]
+        if "temperature" in networks_to_update:
+            self.state.zero_grad(["temperature"])
+            temperature_loss, temperature_info = self.temperature_loss_fn(batch)
+            temperature_loss.backward()
+            self.state.optimizer_step("temperature")
+            info.update(temperature_info)
 
-        return self.replace(state=new_state), info
+        self.state.step += 1
+        info.update(self.state.lr_info())
 
-    @partial(jax.jit, static_argnames=("argmax",))
+        return self, info
+
+    def update_critics_calql(
+        self,
+        batch: Batch,
+        *,
+        calql_alpha: float,
+        calql_n_actions: int,
+        calql_temperature: float,
+        pmap_axis: Optional[str] = None,
+    ) -> Tuple["SACAgent", dict]:
+        """仅更新 critic，并启用 Cal-QL/CQL-style 保守项。"""
+        del pmap_axis
+        batch = _to_torch(batch, self.device)
+        self.state.zero_grad(["critic"])
+        critic_loss, critic_info = self.critic_loss_fn(
+            batch,
+            calql_alpha=float(calql_alpha),
+            calql_n_actions=int(calql_n_actions),
+            calql_temperature=float(calql_temperature),
+        )
+        critic_loss.backward()
+        self.state.optimizer_step("critic")
+        self.state.target_update(self.config["soft_target_update_rate"])
+        self.state.step += 1
+        critic_info.update(self.state.lr_info())
+        return self, critic_info
+
+    @torch.no_grad()
     def sample_actions(
         self,
         observations: Data,
         *,
-        seed: Optional[PRNGKey] = None,
+        seed: Optional[int] = None,
         argmax: bool = False,
+        deterministic: Optional[bool] = None,
         **kwargs,
-    ) -> jnp.ndarray:
-        """
-        Sample actions from the policy network, **using an external RNG** (or approximating the argmax by the mode).
-        The internal RNG will not be updated.
-        """
+    ):
+        del kwargs, seed
+        if deterministic is not None:
+            argmax = deterministic
 
-        dist = self.forward_policy(observations, rng=seed, train=False)
-        if argmax:
-            assert seed is None, "Cannot specify seed when sampling deterministically"
-            return dist.mode()
-        else:
-            return dist.sample(seed=seed)
+        obs_t = _to_torch(observations, self.device)
+        dist = self.forward_policy(obs_t, train=False)
+        actions = dist.mode() if argmax else dist.sample()
+        return actions.detach().cpu().numpy()
 
     @classmethod
     def create(
         cls,
-        rng: PRNGKey,
+        rng: Optional[int],
         observations: Data,
-        actions: jnp.ndarray,
-        # Models
+        actions,
         actor_def: nn.Module,
         critic_def: nn.Module,
         temperature_def: nn.Module,
-        # Optimizer
-        actor_optimizer_kwargs={
-            "learning_rate": 3e-4,
-            "warmup_steps": 2000,
-        },
-        critic_optimizer_kwargs={
-            "learning_rate": 3e-4,
-            "warmup_steps": 2000,
-        },
-        temperature_optimizer_kwargs={
-            "learning_rate": 3e-4,
-        },
-        # Algorithm config
+        actor_optimizer_kwargs={"learning_rate": 3e-4, "warmup_steps": 2000},
+        critic_optimizer_kwargs={"learning_rate": 3e-4, "warmup_steps": 2000},
+        temperature_optimizer_kwargs={"learning_rate": 3e-4},
         discount: float = 0.95,
         soft_target_update_rate: float = 0.005,
         target_entropy: Optional[float] = None,
@@ -349,43 +364,63 @@ class SACAgent(flax.struct.PyTreeNode):
         backup_entropy: bool = False,
         critic_ensemble_size: int = 2,
         critic_subsample_size: Optional[int] = None,
+        otf_num_samples: int = 1,
+        cql_n_actions: int = 10,
+        cql_temperature: float = 1.0,
     ):
-        networks = {
-            "actor": actor_def,
-            "critic": critic_def,
-            "temperature": temperature_def,
-        }
+        del rng
+        if entropy_per_dim:
+            raise NotImplementedError("entropy_per_dim is not supported in torch migration")
 
-        model_def = ModuleDict(networks)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Define optimizers
-        txs = {
-            "actor": make_optimizer(**actor_optimizer_kwargs),
-            "critic": make_optimizer(**critic_optimizer_kwargs),
-            "temperature": make_optimizer(**temperature_optimizer_kwargs),
-        }
+        actor_def = actor_def.to(device)
+        critic_def = critic_def.to(device)
+        temperature_def = temperature_def.to(device)
 
-        rng, init_rng = jax.random.split(rng)
-        params = model_def.init(
-            init_rng,
-            actor=[observations],
-            critic=[observations, actions],
-            temperature=[],
-        )["params"]
+        obs_t = _to_torch(observations, device)
+        act_t = _to_torch(actions, device)
 
-        rng, create_rng = jax.random.split(rng)
-        state = JaxRLTrainState.create(
-            apply_fn=model_def.apply,
-            params=params,
-            txs=txs,
-            target_params=params,
-            rng=create_rng,
+        with torch.no_grad():
+            actor_def(obs_t, train=False)
+            critic_def(obs_t, act_t, train=False)
+            temperature_def()
+
+        critic_param_ids = {id(p) for p in critic_def.parameters()}
+        actor_only_params = [p for p in actor_def.parameters() if id(p) not in critic_param_ids]
+        actor_bundle = make_optimizer(actor_only_params, **actor_optimizer_kwargs)
+        critic_bundle = make_optimizer(critic_def.parameters(), **critic_optimizer_kwargs)
+        temp_bundle = make_optimizer(temperature_def.parameters(), **temperature_optimizer_kwargs)
+
+        state = TorchRLTrainState(
+            modules={
+                "actor": actor_def,
+                "critic": critic_def,
+                "temperature": temperature_def,
+            },
+            target_modules={
+                "critic": copy.deepcopy(critic_def).to(device),
+            },
+            optimizers={
+                "actor": actor_bundle.optimizer,
+                "critic": critic_bundle.optimizer,
+                "temperature": temp_bundle.optimizer,
+            },
+            schedulers={
+                "actor": actor_bundle.scheduler,
+                "critic": critic_bundle.scheduler,
+                "temperature": temp_bundle.scheduler,
+            },
+            grad_clip_norms={
+                "actor": actor_bundle.clip_grad_norm,
+                "critic": critic_bundle.clip_grad_norm,
+                "temperature": temp_bundle.clip_grad_norm,
+            },
+            device=device,
         )
 
-        # Config
-        assert not entropy_per_dim, "Not implemented"
         if target_entropy is None:
-            target_entropy = -actions.shape[-1] / 2
+            target_entropy = -float(act_t.shape[-1]) / 2.0
 
         return cls(
             state=state,
@@ -396,25 +431,23 @@ class SACAgent(flax.struct.PyTreeNode):
                 soft_target_update_rate=soft_target_update_rate,
                 target_entropy=target_entropy,
                 backup_entropy=backup_entropy,
+                otf_num_samples=int(max(1, otf_num_samples)),
+                cql_n_actions=int(max(1, cql_n_actions)),
+                cql_temperature=float(max(1e-6, cql_temperature)),
             ),
         )
 
     @classmethod
     def create_pixels(
         cls,
-        rng: PRNGKey,
-        observations: Data,
-        actions: jnp.ndarray,
-        # Model architecture
+        rng,
+        observations,
+        actions,
         encoder_def: nn.Module,
         shared_encoder: bool = True,
         use_proprio: bool = False,
-        critic_network_kwargs: dict = {
-            "hidden_dims": [256, 256],
-        },
-        policy_network_kwargs: dict = {
-            "hidden_dims": [256, 256],
-        },
+        critic_network_kwargs: dict = {"hidden_dims": [256, 256]},
+        policy_network_kwargs: dict = {"hidden_dims": [256, 256]},
         policy_kwargs: dict = {
             "tanh_squash_distribution": True,
             "std_parameterization": "uniform",
@@ -424,51 +457,37 @@ class SACAgent(flax.struct.PyTreeNode):
         temperature_init: float = 1.0,
         **kwargs,
     ):
-        """
-        Create a new pixel-based agent, with no encoders.
-        """
-
+        policy_network_kwargs = dict(policy_network_kwargs)
+        critic_network_kwargs = dict(critic_network_kwargs)
         policy_network_kwargs["activate_final"] = True
         critic_network_kwargs["activate_final"] = True
 
-        encoder_def = EncodingWrapper(
+        encoder_wrapped = EncodingWrapper(
             encoder=encoder_def,
             use_proprio=use_proprio,
-            stop_gradient=False,
             enable_stacking=True,
         )
 
         if shared_encoder:
-            encoders = {
-                "actor": encoder_def,
-                "critic": encoder_def,
-            }
+            actor_encoder = encoder_wrapped
+            critic_encoder = encoder_wrapped
         else:
-            encoders = {
-                "actor": encoder_def,
-                "critic": copy.deepcopy(encoder_def),
-            }
+            actor_encoder = encoder_wrapped
+            critic_encoder = copy.deepcopy(encoder_wrapped)
 
-        # Define networks
         policy_def = Policy(
-            encoder=encoders["actor"],
+            encoder=actor_encoder,
             network=MLP(**policy_network_kwargs),
-            action_dim=actions.shape[-1],
+            action_dim=np.asarray(actions).shape[-1],
             **policy_kwargs,
-            name="actor",
         )
-        critic_backbone = partial(MLP, **critic_network_kwargs)
-        critic_backbone = ensemblize(critic_backbone, critic_ensemble_size)(
-            name="critic_ensemble"
-        )
-        critic_def = partial(
-            Critic, encoder=encoders["critic"], network=critic_backbone
-        )(name="critic")
+
+        critic_ctor = lambda: Critic(encoder=critic_encoder, network=MLP(**critic_network_kwargs))
+        critic_def = CriticEnsemble(critic_ctor=critic_ctor, num_qs=critic_ensemble_size)
+
         temperature_def = GeqLagrangeMultiplier(
             init_value=temperature_init,
             constraint_shape=(),
-            constraint_type="geq",
-            name="temperature",
         )
 
         return cls.create(
@@ -486,18 +505,13 @@ class SACAgent(flax.struct.PyTreeNode):
     @classmethod
     def create_states(
         cls,
-        rng: PRNGKey,
-        observations: Data,
-        actions: jnp.ndarray,
-        # Model architecture
-        critic_network_kwargs: dict = {
-            "hidden_dims": [256, 256],
-        },
+        rng,
+        observations,
+        actions,
+        critic_network_kwargs: dict = {"hidden_dims": [256, 256]},
         critic_ensemble_size: int = 2,
         critic_subsample_size: Optional[int] = None,
-        policy_network_kwargs: dict = {
-            "hidden_dims": [256, 256],
-        },
+        policy_network_kwargs: dict = {"hidden_dims": [256, 256]},
         policy_kwargs: dict = {
             "tanh_squash_distribution": True,
             "std_parameterization": "uniform",
@@ -505,28 +519,26 @@ class SACAgent(flax.struct.PyTreeNode):
         temperature_init: float = 1.0,
         **kwargs,
     ):
-        """
-        Create a new stage-based agent, with no encoders.
-        """
-
+        policy_network_kwargs = dict(policy_network_kwargs)
+        critic_network_kwargs = dict(critic_network_kwargs)
         policy_network_kwargs["activate_final"] = True
         critic_network_kwargs["activate_final"] = True
 
-        # Define networks
+        action_dim = np.asarray(actions).shape[-1]
+
         policy_def = Policy(
             encoder=None,
             network=MLP(**policy_network_kwargs),
-            action_dim=actions.shape[-1],
+            action_dim=action_dim,
             **policy_kwargs,
-            name="actor",
         )
-        critic_cls = partial(Critic, encoder=None, network=MLP(**critic_network_kwargs))
-        critic_def = ensemblize(critic_cls, critic_ensemble_size)(name="critic")
+
+        critic_ctor = lambda: Critic(encoder=None, network=MLP(**critic_network_kwargs))
+        critic_def = CriticEnsemble(critic_ctor=critic_ctor, num_qs=critic_ensemble_size)
+
         temperature_def = GeqLagrangeMultiplier(
             init_value=temperature_init,
             constraint_shape=(),
-            constraint_type="geq",
-            name="temperature",
         )
 
         return cls.create(
@@ -541,7 +553,6 @@ class SACAgent(flax.struct.PyTreeNode):
             **kwargs,
         )
 
-    @partial(jax.jit, static_argnames=("utd_ratio", "pmap_axis"))
     def update_high_utd(
         self,
         batch: Batch,
@@ -549,48 +560,21 @@ class SACAgent(flax.struct.PyTreeNode):
         utd_ratio: int,
         pmap_axis: Optional[str] = None,
     ) -> Tuple["SACAgent", dict]:
-        """
-        Fast JITted high-UTD version of `.update`.
+        del pmap_axis
+        batch_t = _to_torch(batch, self.device)
+        minibatches = _split_batch(batch_t, utd_ratio)
 
-        Splits the batch into minibatches, performs `utd_ratio` critic
-        (and target) updates, and then one actor/temperature update.
+        critic_infos = []
+        for i in range(utd_ratio):
+            minibatch = _index_batch(minibatches, i)
+            self, info = self.update(minibatch, networks_to_update=frozenset({"critic"}))
+            critic_infos.append(info)
 
-        Batch dimension must be divisible by `utd_ratio`.
-        """
-        batch_size = batch["rewards"].shape[0]
-        assert (
-            batch_size % utd_ratio == 0
-        ), f"Batch size {batch_size} must be divisible by UTD ratio {utd_ratio}"
-        minibatch_size = batch_size // utd_ratio
-        chex.assert_tree_shape_prefix(batch, (batch_size,))
-
-        def scan_body(carry: Tuple[SACAgent], data: Tuple[Batch]):
-            (agent,) = carry
-            (minibatch,) = data
-            agent, info = agent.update(
-                minibatch, pmap_axis=pmap_axis, networks_to_update=frozenset({"critic"})
-            )
-            return (agent,), info
-
-        def make_minibatch(data: jnp.ndarray):
-            return jnp.reshape(data, (utd_ratio, minibatch_size) + data.shape[1:])
-
-        minibatches = jax.tree_map(make_minibatch, batch)
-
-        (agent,), critic_infos = jax.lax.scan(scan_body, (self,), (minibatches,))
-
-        critic_infos = jax.tree_map(lambda x: jnp.mean(x, axis=0), critic_infos)
-        del critic_infos["actor"]
-        del critic_infos["temperature"]
-
-        # Take one gradient descent step on the actor and temperature
-        agent, actor_temp_infos = agent.update(
-            batch,
-            pmap_axis=pmap_axis,
+        _, actor_temp_info = self.update(
+            batch_t,
             networks_to_update=frozenset({"actor", "temperature"}),
         )
-        del actor_temp_infos["critic"]
 
-        infos = {**critic_infos, **actor_temp_infos}
-
-        return agent, infos
+        info = _tree_mean(critic_infos) if critic_infos else {}
+        info.update(actor_temp_info)
+        return self, info

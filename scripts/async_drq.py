@@ -2,12 +2,9 @@
 
 import time
 from functools import partial
-import jax
-import jax.numpy as jnp
 import numpy as np
 import tqdm
 from absl import app, flags
-from flax.training import checkpoints
 import cv2
 import os
 
@@ -18,6 +15,7 @@ from gym.wrappers.record_episode_statistics import RecordEpisodeStatistics
 
 from serl_launcher.agents.continuous.drq import DrQAgent
 from serl_launcher.common.evaluation import evaluate
+from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.timer_utils import Timer
 from serl_launcher.wrappers.chunking import ChunkingWrapper
 from serl_launcher.utils.train_utils import concat_batches
@@ -63,8 +61,8 @@ flags.DEFINE_boolean("learner", False, "Is this a learner or a trainer.")
 flags.DEFINE_boolean("actor", False, "Is this a learner or a trainer.")
 flags.DEFINE_boolean("render", False, "Render the environment.")
 flags.DEFINE_string("ip", "localhost", "IP address of the learner.")
-# "small" is a 4 layer convnet, "resnet" and "mobilenet" are frozen with pretrained weights
-flags.DEFINE_string("encoder_type", "resnet-pretrained", "Encoder type.")
+# "small" is a 4 layer convnet, "resnet" uses HuggingFace ResNet (configure via resnet_kwargs)
+flags.DEFINE_string("encoder_type", "resnet", "Encoder type.")
 flags.DEFINE_string("demo_path", None, "Path to the demo data.")
 flags.DEFINE_integer("checkpoint_period", 0, "Period to save checkpoints.")
 flags.DEFINE_string("checkpoint_path", None, "Path to save checkpoints.")
@@ -76,10 +74,6 @@ flags.DEFINE_boolean(
 flags.DEFINE_string("log_rlds_path", None, "Path to save RLDS logs.")
 flags.DEFINE_string("preload_rlds_path", None, "Path to preload RLDS data.")
 
-devices = jax.local_devices()
-num_devices = len(devices)
-sharding = jax.sharding.PositionalSharding(devices)
-
 
 def print_green(x):
     return print("\033[92m {}\033[00m".format(x))
@@ -88,7 +82,7 @@ def print_green(x):
 ##############################################################################
 
 
-def actor(agent: DrQAgent, data_store, env, sampling_rng):
+def actor(agent: DrQAgent, data_store, env):
     """
     This is the actor loop, which runs when "--actor" is set to True.
     """
@@ -127,13 +121,11 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
             if step < FLAGS.random_steps:
                 actions = env.action_space.sample()
             else:
-                sampling_rng, key = jax.random.split(sampling_rng)
                 actions = agent.sample_actions(
-                    observations=jax.device_put(obs),
-                    seed=key,
+                    observations=obs,
                     deterministic=False,
                 )
-                actions = np.asarray(jax.device_get(actions))
+                actions = np.asarray(actions)
 
         # Step environment
         with timer.context("step_env"):
@@ -181,7 +173,6 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
 
 
 def learner(
-    rng,
     agent: DrQAgent,
     replay_buffer: MemoryEfficientReplayBufferDataStore,
     demo_buffer: Optional[MemoryEfficientReplayBufferDataStore] = None,
@@ -241,7 +232,7 @@ def learner(
                 "batch_size": single_buffer_batch_size,
                 "pack_obs_and_next_obs": True,
             },
-            device=sharding.replicate(),
+            device=None,
         )
 
     # create replay buffer iterator
@@ -250,7 +241,7 @@ def learner(
             "batch_size": single_buffer_batch_size,
             "pack_obs_and_next_obs": True,
         },
-        device=sharding.replicate(),
+        device=None,
     )
 
     # wait till the replay buffer is filled with enough data
@@ -293,7 +284,6 @@ def learner(
 
         # publish the updated network
         if step > 0 and step % (FLAGS.steps_per_update) == 0:
-            agent = jax.block_until_ready(agent)
             server.publish_network(agent.state.params)
 
         if update_steps % FLAGS.log_period == 0 and wandb_logger:
@@ -302,8 +292,8 @@ def learner(
 
         if FLAGS.checkpoint_period and update_steps % FLAGS.checkpoint_period == 0:
             assert FLAGS.checkpoint_path is not None
-            checkpoints.save_checkpoint(
-                FLAGS.checkpoint_path, agent.state, step=update_steps, keep=20
+            save_agent_checkpoint(
+                FLAGS.checkpoint_path, agent, step=update_steps, keep=20
             )
 
         pbar.update(len(replay_buffer) - pbar.n)  # update replay buffer bar
@@ -314,10 +304,7 @@ def learner(
 
 
 def main(_):
-    assert FLAGS.batch_size % num_devices == 0
-
-    # seed
-    rng = jax.random.PRNGKey(FLAGS.seed)
+    np.random.seed(FLAGS.seed)
 
     # create env and load dataset
     if FLAGS.render:
@@ -333,7 +320,6 @@ def main(_):
 
     image_keys = [key for key in env.observation_space.keys() if key != "state"]
 
-    rng, sampling_rng = jax.random.split(rng)
     agent: DrQAgent = make_drq_agent(
         seed=FLAGS.seed,
         sample_obs=env.observation_space.sample(),
@@ -342,14 +328,7 @@ def main(_):
         encoder_type=FLAGS.encoder_type,
     )
 
-    # replicate agent across devices
-    # need the jnp.array to avoid a bug where device_put doesn't recognize primitives
-    agent: DrQAgent = jax.device_put(
-        jax.tree_map(jnp.array, agent), sharding.replicate()
-    )
-
     if FLAGS.learner:
-        sampling_rng = jax.device_put(sampling_rng, device=sharding.replicate())
         replay_buffer = make_replay_buffer(
             env,
             capacity=FLAGS.replay_buffer_capacity,
@@ -398,19 +377,17 @@ def main(_):
         # learner loop
         print_green("starting learner loop")
         learner(
-            sampling_rng,
             agent,
             replay_buffer,
             demo_buffer=demo_buffer,  # None if no demo data is provided
         )
 
     elif FLAGS.actor:
-        sampling_rng = jax.device_put(sampling_rng, sharding.replicate())
         data_store = QueuedDataStore(2000)  # the queue size on the actor
 
         # actor loop
         print_green("starting actor loop")
-        actor(agent, data_store, env, sampling_rng)
+        actor(agent, data_store, env)
 
     else:
         raise NotImplementedError("Must be either a learner or an actor")

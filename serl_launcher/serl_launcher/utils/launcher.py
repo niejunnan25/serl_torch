@@ -1,37 +1,33 @@
 # !/usr/bin/env python3
 
-import jax
-from jax import nn
-
 from typing import Optional
+
 import tensorflow_datasets as tfds
 
-from agentlace.trainer import TrainerConfig
 from agentlace.data.tfds import populate_datastore
+from agentlace.trainer import TrainerConfig
 
-from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.agents.continuous.bc import BCAgent
-from serl_launcher.agents.continuous.sac import SACAgent
 from serl_launcher.agents.continuous.drq import DrQAgent
+from serl_launcher.agents.continuous.sac import SACAgent
 from serl_launcher.agents.continuous.vice import VICEAgent
-
+from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import (
     MemoryEfficientReplayBufferDataStore,
     ReplayBufferDataStore,
 )
 
+
 ##############################################################################
 
 
-def make_bc_agent(
-    seed, sample_obs, sample_action, image_keys=("image",), encoder_type="small"
-):
+def make_bc_agent(seed, sample_obs, sample_action, image_keys=("image",), encoder_type="small", resnet_kwargs=None):
     return BCAgent.create(
-        jax.random.PRNGKey(seed),
+        seed,
         sample_obs,
         sample_action,
         network_kwargs={
-            "activations": nn.tanh,
+            "activations": "tanh",
             "use_layer_norm": False,
             "hidden_dims": [256, 256],
         },
@@ -44,12 +40,13 @@ def make_bc_agent(
         use_proprio=True,
         encoder_type=encoder_type,
         image_keys=image_keys,
+        resnet_kwargs=resnet_kwargs,
     )
 
 
 def make_sac_agent(seed, sample_obs, sample_action, discount=0.99):
     return SACAgent.create_states(
-        jax.random.PRNGKey(seed),
+        seed,
         sample_obs,
         sample_action,
         policy_kwargs={
@@ -59,12 +56,12 @@ def make_sac_agent(seed, sample_obs, sample_action, discount=0.99):
             "std_max": 5,
         },
         critic_network_kwargs={
-            "activations": nn.tanh,
+            "activations": "tanh",
             "use_layer_norm": True,
             "hidden_dims": [256, 256],
         },
         policy_network_kwargs={
-            "activations": nn.tanh,
+            "activations": "tanh",
             "use_layer_norm": True,
             "hidden_dims": [256, 256],
         },
@@ -83,14 +80,16 @@ def make_drq_agent(
     image_keys=("image",),
     encoder_type="small",
     discount=0.96,
+    resnet_kwargs=None,
 ):
-    agent = DrQAgent.create_drq(
-        jax.random.PRNGKey(seed),
+    return DrQAgent.create_drq(
+        seed,
         sample_obs,
         sample_action,
         encoder_type=encoder_type,
         use_proprio=True,
         image_keys=image_keys,
+        resnet_kwargs=resnet_kwargs,
         policy_kwargs={
             "tanh_squash_distribution": True,
             "std_parameterization": "exp",
@@ -98,12 +97,12 @@ def make_drq_agent(
             "std_max": 5,
         },
         critic_network_kwargs={
-            "activations": nn.tanh,
+            "activations": "tanh",
             "use_layer_norm": True,
             "hidden_dims": [256, 256],
         },
         policy_network_kwargs={
-            "activations": nn.tanh,
+            "activations": "tanh",
             "use_layer_norm": True,
             "hidden_dims": [256, 256],
         },
@@ -113,7 +112,6 @@ def make_drq_agent(
         critic_ensemble_size=10,
         critic_subsample_size=2,
     )
-    return agent
 
 
 def make_vice_agent(
@@ -125,9 +123,10 @@ def make_vice_agent(
     vice_image_keys=("image",),
     encoder_type="small",
     discount=0.96,
+    resnet_kwargs=None,
 ):
-    agent = VICEAgent.create_vice(
-        jax.random.PRNGKey(seed),
+    return VICEAgent.create_vice(
+        seed,
         sample_obs,
         sample_action,
         sample_vice_obs,
@@ -135,6 +134,7 @@ def make_vice_agent(
         use_proprio=True,
         image_keys=image_keys,
         vice_image_keys=vice_image_keys,
+        resnet_kwargs=resnet_kwargs,
         policy_kwargs={
             "tanh_squash_distribution": True,
             "std_parameterization": "exp",
@@ -142,20 +142,18 @@ def make_vice_agent(
             "std_max": 5,
         },
         critic_network_kwargs={
-            "activations": nn.tanh,
+            "activations": "tanh",
             "use_layer_norm": True,
             "hidden_dims": [256, 256],
         },
         vice_network_kwargs={
-            "activations": nn.leaky_relu,
+            "activations": "leaky_relu",
             "use_layer_norm": True,
-            "hidden_dims": [
-                256,
-            ],
+            "hidden_dims": [256],
             "dropout_rate": 0.1,
         },
         policy_network_kwargs={
-            "activations": nn.tanh,
+            "activations": "tanh",
             "use_layer_norm": True,
             "hidden_dims": [256, 256],
         },
@@ -165,7 +163,6 @@ def make_vice_agent(
         critic_ensemble_size=10,
         critic_subsample_size=2,
     )
-    return agent
 
 
 def make_trainer_config(port_number: int = 5488, broadcast_port: int = 5489):
@@ -173,7 +170,6 @@ def make_trainer_config(port_number: int = 5488, broadcast_port: int = 5489):
         port_number=port_number,
         broadcast_port=broadcast_port,
         request_types=["send-stats"],
-        # experimental_pipeline_port=5547, # experimental ds update
     )
 
 
@@ -203,30 +199,17 @@ def make_replay_buffer(
     capacity: int = 1000000,
     rlds_logger_path: Optional[str] = None,
     type: str = "replay_buffer",
-    image_keys: list = [],  # used only type=="memory_efficient_replay_buffer"
+    image_keys: list = None,
     preload_rlds_path: Optional[str] = None,
     preload_data_transform: Optional[callable] = None,
 ):
-    """
-    This is the high-level helper function to
-    create a replay buffer for the given environment.
+    image_keys = image_keys or []
 
-    Args:
-    - env: gym or gymasium environment
-    - capacity: capacity of the replay buffer
-    - rlds_logger_path: path to save RLDS logs
-    - type: support only for "replay_buffer" and "memory_efficient_replay_buffer"
-    - image_keys: list of image keys, used only "memory_efficient_replay_buffer"
-    - preload_rlds_path: path to preloaded RLDS trajectories
-    - preload_data_transform: data transformation function for preloaded RLDS data
-    """
     print("shape of observation space and action space")
     print(env.observation_space)
     print(env.action_space)
 
-    # init logger for RLDS
     if rlds_logger_path:
-        # from: https://github.com/rail-berkeley/oxe_envlogger
         from oxe_envlogger.rlds_logger import RLDSLogger
 
         rlds_logger = RLDSLogger(
@@ -234,7 +217,7 @@ def make_replay_buffer(
             action_space=env.action_space,
             dataset_name="serl_rlds_dataset",
             directory=rlds_logger_path,
-            max_episodes_per_file=5,  # TODO: arbitrary number
+            max_episodes_per_file=5,
         )
     else:
         rlds_logger = None

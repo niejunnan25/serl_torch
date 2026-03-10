@@ -8,5 +8,5 @@ python async_drq_randomized.py "$@" \
     --seed 0 \
     --random_steps 0 \
     --training_starts 200 \
-    --encoder_type resnet-pretrained \
+    --encoder_type resnet \
     --demo_path peg_insert_20_demos_2023-12-25_16-13-25.pkl \

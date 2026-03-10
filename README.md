@@ -45,22 +45,17 @@ We fixed a major issue in the intervention action frame. See release [v0.1.1](ht
     conda create -n serl python=3.10
     ```
 
-2. **Install Jax as follows:**
-    - For CPU (not recommended):
+2. **Install PyTorch as follows:**
+    - For CPU:
         ```bash
-        pip install --upgrade "jax[cpu]"
+        pip install --upgrade torch torchvision
         ```
 
-    - For GPU:
+    - For NVIDIA GPU (CUDA 12.1 example):
         ```bash
-        pip install --upgrade "jax[cuda12_pip]==0.4.35" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+        pip install --upgrade torch torchvision --index-url https://download.pytorch.org/whl/cu121
         ```
-
-    - For TPU
-        ```bash
-        pip install --upgrade "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-        ```
-    - See the [Jax Github page](https://github.com/google/jax) for more details on installing Jax.
+    - Check the [official PyTorch installation page](https://pytorch.org/get-started/locally/) for your exact CUDA/OS setup.
 
 3. **Install the serl_launcher**
     ```bash

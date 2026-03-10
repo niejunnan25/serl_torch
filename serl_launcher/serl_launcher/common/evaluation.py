@@ -3,15 +3,14 @@ from collections import defaultdict
 from typing import Dict
 
 import gym
-import jax
 import numpy as np
 
 
-def supply_rng(f, rng=jax.random.PRNGKey(0)):
+def supply_rng(f, seed: int = 0):
+    rng = np.random.default_rng(seed)
+
     def wrapped(*args, **kwargs):
-        nonlocal rng
-        rng, key = jax.random.split(rng)
-        return f(*args, seed=key, **kwargs)
+        return f(*args, seed=int(rng.integers(0, 2**31 - 1)), **kwargs)
 
     return wrapped
 
@@ -64,9 +63,7 @@ def evaluate(policy_fn, env: gym.Env, num_episodes: int) -> Dict[str, float]:
     return stats
 
 
-def evaluate_with_trajectories(
-    policy_fn, env: gym.Env, num_episodes: int
-) -> Dict[str, float]:
+def evaluate_with_trajectories(policy_fn, env: gym.Env, num_episodes: int):
     trajectories = []
     stats = defaultdict(list)
 
@@ -98,12 +95,7 @@ def evaluate_with_trajectories(
     return stats, trajectories
 
 
-def evaluate_gc(
-    policy_fn,
-    env: gym.Env,
-    num_episodes: int,
-    return_trajectories: bool = False,
-) -> Dict[str, float]:
+def evaluate_gc(policy_fn, env: gym.Env, num_episodes: int, return_trajectories: bool = False):
     stats = defaultdict(list)
 
     if return_trajectories:
@@ -142,17 +134,14 @@ def evaluate_gc(
 
         add_to(stats, flatten(filter_info(info), parent_key="final"))
         if return_trajectories:
-            trajectory["steps_remaining"] = list(
-                np.arange(len(trajectory["action"]))[::-1]
-            )
+            trajectory["steps_remaining"] = list(np.arange(len(trajectory["action"]))[::-1])
             trajectories.append(trajectory)
 
     stats = {k: np.mean(v) for k, v in stats.items() if not isinstance(v[0], str)}
 
     if return_trajectories:
         return stats, trajectories
-    else:
-        return stats
+    return stats
 
 
 def bootstrap_std(arr, f=np.mean, n=30):
@@ -173,8 +162,6 @@ def parallel_evaluate(policy_fn, eval_envs, num_eval, verbose=True):
     n_to_eval = n_per * n_envs
     while len(eval_episode_rewards) < n_to_eval:
         action = policy_fn(obs)
-
-        # Observe reward and next obs
         obs, _, done, infos = eval_envs.step(action)
 
         for n, info in enumerate(infos):
@@ -184,6 +171,6 @@ def parallel_evaluate(policy_fn, eval_envs, num_eval, verbose=True):
                 counter[n] += 1
     if verbose:
         print(
-            f"Evaluation using {len(eval_episode_rewards)} episodes: mean reward {np.mean(eval_episode_rewards):.5f} +- {bootstrap_std(eval_episode_rewards):.5f} \n"
+            f"Evaluation using {len(eval_episode_rewards)} episodes: mean reward {np.mean(eval_episode_rewards):.5f} +- {bootstrap_std(eval_episode_rewards):.5f}"
         )
     return eval_episode_rewards, eval_episode_time_rewards

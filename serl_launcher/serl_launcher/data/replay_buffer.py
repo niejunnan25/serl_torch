@@ -1,40 +1,42 @@
 import collections
-from typing import Any, Iterator, Optional, Sequence, Tuple, Union
+from typing import Optional, Union
 
 import gym
-import jax
 import numpy as np
+import torch
+
 from serl_launcher.data.dataset import Dataset, DatasetDict
 
 
-def _init_replay_dict(
-    obs_space: gym.Space, capacity: int
-) -> Union[np.ndarray, DatasetDict]:
+def _init_replay_dict(obs_space: gym.Space, capacity: int) -> Union[np.ndarray, DatasetDict]:
     if isinstance(obs_space, gym.spaces.Box):
         return np.empty((capacity, *obs_space.shape), dtype=obs_space.dtype)
-    elif isinstance(obs_space, gym.spaces.Dict):
-        data_dict = {}
-        for k, v in obs_space.spaces.items():
-            data_dict[k] = _init_replay_dict(v, capacity)
-        return data_dict
-    else:
-        raise TypeError()
+    if isinstance(obs_space, gym.spaces.Dict):
+        return {k: _init_replay_dict(v, capacity) for k, v in obs_space.spaces.items()}
+    raise TypeError(f"Unsupported space type: {type(obs_space)}")
 
 
-def _insert_recursively(
-    dataset_dict: DatasetDict, data_dict: DatasetDict, insert_index: int
-):
+def _insert_recursively(dataset_dict: DatasetDict, data_dict: DatasetDict, insert_index: int):
     if isinstance(dataset_dict, np.ndarray):
         dataset_dict[insert_index] = data_dict
     elif isinstance(dataset_dict, dict):
-        assert dataset_dict.keys() == data_dict.keys(), (
-            dataset_dict.keys(),
-            data_dict.keys(),
-        )
-        for k in dataset_dict.keys():
+        if dataset_dict.keys() != data_dict.keys():
+            raise ValueError((dataset_dict.keys(), data_dict.keys()))
+        for k in dataset_dict:
             _insert_recursively(dataset_dict[k], data_dict[k], insert_index)
     else:
-        raise TypeError()
+        raise TypeError("Unsupported dataset type")
+
+
+def _to_torch(batch, device=None):
+    if isinstance(batch, dict):
+        return {k: _to_torch(v, device=device) for k, v in batch.items()}
+    tensor = torch.from_numpy(batch) if isinstance(batch, np.ndarray) else torch.as_tensor(batch)
+    if tensor.dtype == torch.float64:
+        tensor = tensor.float()
+    if device is not None:
+        tensor = tensor.to(device)
+    return tensor
 
 
 class ReplayBuffer(Dataset):
@@ -65,7 +67,7 @@ class ReplayBuffer(Dataset):
         self._capacity = capacity
         self._insert_index = 0
 
-    def __len__(self) -> int:
+    def __len__(self):
         return self._size
 
     def insert(self, data_dict: DatasetDict):
@@ -74,15 +76,14 @@ class ReplayBuffer(Dataset):
         self._insert_index = (self._insert_index + 1) % self._capacity
         self._size = min(self._size + 1, self._capacity)
 
-    def get_iterator(self, queue_size: int = 2, sample_args: dict = {}, device=None):
-        # See https://flax.readthedocs.io/en/latest/_modules/flax/jax_utils.html#prefetch_to_device
-        # queue_size = 2 should be ok for one GPU.
+    def get_iterator(self, queue_size: int = 2, sample_args: dict = None, device=None):
+        sample_args = sample_args or {}
         queue = collections.deque()
 
         def enqueue(n):
             for _ in range(n):
                 data = self.sample(**sample_args)
-                queue.append(jax.device_put(data, device=device))
+                queue.append(_to_torch(data, device=device))
 
         enqueue(queue_size)
         while queue:

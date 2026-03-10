@@ -1,56 +1,68 @@
+import math
+from dataclasses import dataclass
 from typing import Optional
 
-import optax
+import torch
+
+
+@dataclass
+class OptimizerBundle:
+    optimizer: torch.optim.Optimizer
+    scheduler: Optional[torch.optim.lr_scheduler.LRScheduler]
+    clip_grad_norm: Optional[float]
+
+
+def _make_lr_lambda(
+    warmup_steps: int,
+    cosine_decay_steps: Optional[int],
+):
+    warmup_steps = max(0, int(warmup_steps))
+
+    def _lr_lambda(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return float(step + 1) / float(warmup_steps)
+
+        if cosine_decay_steps is None:
+            return 1.0
+
+        post_warmup_step = max(0, step - warmup_steps)
+        decay_steps = max(1, int(cosine_decay_steps))
+        progress = min(1.0, post_warmup_step / decay_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return _lr_lambda
 
 
 def make_optimizer(
+    parameters,
     learning_rate: float = 3e-4,
     warmup_steps: int = 0,
     cosine_decay_steps: Optional[int] = None,
     weight_decay: Optional[float] = None,
     clip_grad_norm: Optional[float] = None,
     return_lr_schedule: bool = False,
-) -> optax.GradientTransformation:
-    if cosine_decay_steps is not None:
-        learning_rate_schedule = optax.warmup_cosine_decay_schedule(
-            init_value=0.0,
-            peak_value=learning_rate,
-            warmup_steps=warmup_steps,
-            decay_steps=cosine_decay_steps,
-            end_value=0.0,
-        )
-    else:
-        learning_rate_schedule = optax.join_schedules(
-            [
-                optax.linear_schedule(0.0, learning_rate, warmup_steps),
-                optax.constant_schedule(learning_rate),
-            ],
-            [warmup_steps],
-        )
+):
+    optimizer_cls = torch.optim.AdamW if weight_decay is not None else torch.optim.Adam
+    optimizer = optimizer_cls(
+        parameters,
+        lr=learning_rate,
+        weight_decay=0.0 if weight_decay is None else weight_decay,
+    )
 
-    # Define optimizers
-    @optax.inject_hyperparams
-    def optimizer(learning_rate: float, weight_decay: Optional[float]):
-        optimizer_stages = []
-
-        if clip_grad_norm is not None:
-            optimizer_stages.append(optax.clip_by_global_norm(clip_grad_norm))
-
-        if weight_decay is not None:
-            optimizer_stages.append(
-                optax.adamw(learning_rate=learning_rate, weight_decay=weight_decay)
-            )
-        else:
-            optimizer_stages.append(optax.adam(learning_rate=learning_rate))
-
-        return optax.chain(*optimizer_stages)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=_make_lr_lambda(warmup_steps=warmup_steps, cosine_decay_steps=cosine_decay_steps),
+    )
 
     if return_lr_schedule:
-        return (
-            optimizer(learning_rate=learning_rate_schedule, weight_decay=weight_decay),
-            learning_rate_schedule,
-        )
-    else:
-        return optimizer(
-            learning_rate=learning_rate_schedule, weight_decay=weight_decay
-        )
+        return OptimizerBundle(
+            optimizer=optimizer,
+            scheduler=scheduler,
+            clip_grad_norm=clip_grad_norm,
+        ), scheduler
+
+    return OptimizerBundle(
+        optimizer=optimizer,
+        scheduler=scheduler,
+        clip_grad_norm=clip_grad_norm,
+    )

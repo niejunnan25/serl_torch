@@ -1,53 +1,89 @@
-import pickle as pkl
-import jax
-from jax import numpy as jnp
-import flax.linen as nn
-from flax.training.train_state import TrainState
-from flax.training import checkpoints
-import optax
+import glob
+import os
 from typing import Callable, Dict, List, Optional
 
+import numpy as np
+import torch
+import torch.nn as nn
 
-from serl_launcher.vision.resnet_v1 import resnetv1_configs, PreTrainedResNetEncoder
 from serl_launcher.common.encoding import EncodingWrapper
-from flax.core.frozen_dict import freeze, unfreeze
+from serl_launcher.networks.mlp import MLP
+from serl_launcher.vision.resnet_v1 import ResNetEncoder
+
+
+def _to_torch(data, device):
+    if isinstance(data, dict):
+        return {k: _to_torch(v, device) for k, v in data.items()}
+    if isinstance(data, torch.Tensor):
+        return data.to(device)
+    return torch.as_tensor(data, device=device)
 
 
 class BinaryClassifier(nn.Module):
-    encoder_def: nn.Module
-    hidden_dim: int = 256
+    def __init__(self, encoder_def: nn.Module, hidden_dim: int = 256):
+        super().__init__()
+        self.encoder_def = encoder_def
+        self.hidden = nn.LazyLinear(hidden_dim)
+        self.dropout = nn.Dropout(0.1)
+        self.out = nn.Linear(hidden_dim, 1)
 
-    @nn.compact
-    def __call__(self, x, train=False):
+    def forward(self, x, train: bool = False):
         x = self.encoder_def(x, train=train)
-        x = nn.Dense(self.hidden_dim)(x)
-        x = nn.Dropout(0.1)(x, deterministic=not train)
-        x = nn.LayerNorm()(x)
-        x = nn.relu(x)
-        x = nn.Dense(1)(x)
-        return x
+        x = self.hidden(x)
+        x = self.dropout(x)
+        x = torch.relu(torch.layer_norm(x, x.shape[-1:]))
+        return self.out(x).squeeze(-1)
+
+
+def _resolve_checkpoint_path(checkpoint_path: str, step: Optional[int] = None) -> str:
+    if os.path.isfile(checkpoint_path):
+        return checkpoint_path
+
+    if step is not None:
+        candidate = os.path.join(checkpoint_path, f"classifier_{step}.pt")
+        if os.path.exists(candidate):
+            return candidate
+
+    candidates = sorted(glob.glob(os.path.join(checkpoint_path, "*.pt")))
+    if not candidates:
+        raise FileNotFoundError(f"No .pt checkpoints found in {checkpoint_path}")
+    return candidates[-1]
 
 
 def create_classifier(
-    key: jnp.ndarray,
+    key: Optional[int],
     sample: Dict,
     image_keys: List[str],
-    pretrained_encoder_path: str = "./resnet10_params.pkl",
+    resnet_kwargs: Optional[Dict] = None,
+    device: Optional[torch.device] = None,
 ):
-    pretrained_encoder = resnetv1_configs["resnetv1-10-frozen"](
-        pre_pooling=True,
-        name="pretrained_encoder",
+    del key
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    kw = dict(resnet_kwargs or {
+        "model_name": "microsoft/resnet-18",
+        "pretrained": True,
+        "freeze_backbone": True,
+        "pooling_method": "spatial_learned_embeddings",
+        "num_spatial_blocks": 8,
+        "bottleneck_dim": 256,
+    })
+    backbone = ResNetEncoder.create_backbone(
+        model_name=kw.get("model_name", "microsoft/resnet-18"),
+        pretrained=kw.get("pretrained", True),
+        freeze=kw.get("freeze_backbone", True),
     )
     encoders = {
-        image_key: PreTrainedResNetEncoder(
-            pooling_method="spatial_learned_embeddings",
-            num_spatial_blocks=8,
-            bottleneck_dim=256,
-            pretrained_encoder=pretrained_encoder,
-            name=f"encoder_{image_key}",
+        key_name: ResNetEncoder(
+            backbone=backbone,
+            freeze_backbone=kw.get("freeze_backbone", True),
+            pooling_method=kw.get("pooling_method", "spatial_learned_embeddings"),
+            num_spatial_blocks=kw.get("num_spatial_blocks", 8),
+            bottleneck_dim=kw.get("bottleneck_dim", 256),
         )
-        for image_key in image_keys
+        for key_name in image_keys
     }
+
     encoder_def = EncodingWrapper(
         encoder=encoders,
         use_proprio=False,
@@ -55,59 +91,40 @@ def create_classifier(
         image_keys=image_keys,
     )
 
-    classifier_def = BinaryClassifier(encoder_def=encoder_def)
-    params = classifier_def.init(key, sample)["params"]
-    classifier_def = BinaryClassifier(encoder_def=encoder_def)
-    params = freeze(params)
-    classifier = TrainState.create(
-        apply_fn=classifier_def.apply,
-        params=params,
-        tx=optax.adam(learning_rate=1e-4),
-    )
+    classifier = BinaryClassifier(encoder_def=encoder_def).to(device)
 
-    with open(pretrained_encoder_path, "rb") as f:
-        encoder_params = pkl.load(f)
-    param_count = sum(x.size for x in jax.tree_leaves(encoder_params))
-    print(
-        f"Loaded {param_count/1e6}M parameters from ResNet-10 pretrained on ImageNet-1K"
-    )
+    sample_t = _to_torch(sample, device)
+    with torch.no_grad():
+        classifier(sample_t, train=False)
 
-    new_params = classifier.params.unfreeze()
-    for image_key in image_keys:
-        if "pretrained_encoder" in new_params["encoder_def"][f"encoder_{image_key}"]:
-            for k in new_params["encoder_def"][f"encoder_{image_key}"][
-                "pretrained_encoder"
-            ]:
-                if k in encoder_params:
-                    new_params["encoder_def"][f"encoder_{image_key}"][
-                        "pretrained_encoder"
-                    ][k] = encoder_params[k]
-                    print(f"replaced {k} in encoder_{image_key}")
-
-    new_params = freeze(new_params)
-    classifier = classifier.replace(params=new_params)
     return classifier
 
 
 def load_classifier_func(
-    key: jnp.ndarray,
+    key: Optional[int],
     sample: Dict,
     image_keys: List[str],
     checkpoint_path: str,
     step: Optional[int] = None,
-) -> Callable[[Dict], jnp.ndarray]:
-    """
-    Return: a function that takes in an observation
-            and returns the logits of the classifier.
-    """
-    classifier = create_classifier(key, sample, image_keys)
-    classifier = checkpoints.restore_checkpoint(
-        checkpoint_path,
-        target=classifier,
-        step=step,
-    )
-    func = lambda obs: classifier.apply_fn(
-        {"params": classifier.params}, obs, train=False
-    )
-    func = jax.jit(func)
+    resnet_kwargs: Optional[Dict] = None,
+    device: Optional[torch.device] = None,
+) -> Callable[[Dict], np.ndarray]:
+    classifier = create_classifier(key, sample, image_keys, resnet_kwargs=resnet_kwargs, device=device)
+    ckpt_path = _resolve_checkpoint_path(checkpoint_path, step=step)
+    payload = torch.load(ckpt_path, map_location="cpu")
+
+    if isinstance(payload, dict) and "model" in payload:
+        classifier.load_state_dict(payload["model"], strict=True)
+    elif isinstance(payload, dict):
+        classifier.load_state_dict(payload, strict=True)
+
+    classifier.eval()
+    device = next(classifier.parameters()).device
+
+    def func(obs: Dict):
+        obs_t = _to_torch(obs, device)
+        with torch.no_grad():
+            logits = classifier(obs_t, train=False)
+        return logits.detach().cpu().numpy()
+
     return func

@@ -1,13 +1,13 @@
 export XLA_PYTHON_CLIENT_PREALLOCATE=false && \
 export XLA_PYTHON_CLIENT_MEM_FRACTION=.2 && \
-python ../bc_policy.py "$@" \
+python ../../scripts/bc_policy.py "$@" \
     --env FrankaCableRoute-Vision-v0 \
     --exp_name=serl_dev_bc_cable_random_resnet \
     --seed 0 \
     --batch_size 256 \
     --max_steps 20000 \
     --remove_xy True \
-    --encoder_type resnet-pretrained \
+    --encoder_type resnet \
     --demo_paths /home/undergrad/code/serl_dev/examples/async_cable_route_drq/bc_demos/cable_route_10_demos_2024-01-20_14-39-46.pkl \
     --demo_paths /home/undergrad/code/serl_dev/examples/async_cable_route_drq/bc_demos/cable_route_20_demos_2024-01-20_14-44-26.pkl \
     --demo_paths /home/undergrad/code/serl_dev/examples/async_cable_route_drq/bc_demos/cable_route_70_demos_2024-01-20_14-58-22.pkl \

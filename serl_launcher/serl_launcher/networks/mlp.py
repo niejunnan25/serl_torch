@@ -1,89 +1,151 @@
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence, Union
 
-import flax.linen as nn
-import jax
-import jax.numpy as jnp
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-from serl_launcher.common.common import default_init
+
+def _resolve_activation(act: Union[Callable, str]):
+    if callable(act):
+        return act
+    mapping = {
+        "relu": F.relu,
+        "tanh": torch.tanh,
+        "swish": F.silu,
+        "silu": F.silu,
+        "leaky_relu": F.leaky_relu,
+        "gelu": F.gelu,
+    }
+    if act not in mapping:
+        raise ValueError(f"Unsupported activation: {act}")
+    return mapping[act]
 
 
 class MLP(nn.Module):
-    hidden_dims: Sequence[int]
-    activations: Callable[[jnp.ndarray], jnp.ndarray] | str = nn.swish
-    activate_final: bool = False
-    use_layer_norm: bool = False
-    dropout_rate: Optional[float] = None
+    def __init__(
+        self,
+        hidden_dims: Sequence[int],
+        activations: Union[Callable[[torch.Tensor], torch.Tensor], str] = "swish",
+        activate_final: bool = False,
+        use_layer_norm: bool = False,
+        dropout_rate: Optional[float] = None,
+    ):
+        super().__init__()
+        self.hidden_dims = tuple(hidden_dims)
+        self.activate_final = activate_final
+        self.use_layer_norm = use_layer_norm
+        self.dropout_rate = dropout_rate
+        self.activation = _resolve_activation(activations)
 
-    @nn.compact
-    def __call__(self, x: jnp.ndarray, train: bool = False) -> jnp.ndarray:
-        activations = self.activations
-        if isinstance(activations, str):
-            activations = getattr(nn, activations)
+        layers = []
+        norms = []
+        dropouts = []
 
-        for i, size in enumerate(self.hidden_dims):
-            x = nn.Dense(size, kernel_init=default_init())(x)
+        for i, dim in enumerate(self.hidden_dims):
+            if i == 0:
+                layers.append(nn.LazyLinear(dim))
+            else:
+                layers.append(nn.Linear(self.hidden_dims[i - 1], dim))
 
-            if i + 1 < len(self.hidden_dims) or self.activate_final:
-                if self.dropout_rate is not None and self.dropout_rate > 0:
-                    x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not train)
-                if self.use_layer_norm:
-                    x = nn.LayerNorm()(x)
-                x = activations(x)
+            if self.use_layer_norm:
+                norms.append(nn.LayerNorm(dim))
+            else:
+                norms.append(nn.Identity())
+
+            if self.dropout_rate is not None and self.dropout_rate > 0:
+                dropouts.append(nn.Dropout(p=self.dropout_rate))
+            else:
+                dropouts.append(nn.Identity())
+
+        self.layers = nn.ModuleList(layers)
+        self.norms = nn.ModuleList(norms)
+        self.dropouts = nn.ModuleList(dropouts)
+
+    def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            should_activate = (i + 1 < len(self.layers)) or self.activate_final
+            if should_activate:
+                x = self.dropouts[i](x)
+                x = self.norms[i](x)
+                x = self.activation(x)
         return x
 
 
 class MLPResNetBlock(nn.Module):
-    features: int
-    act: Callable
-    dropout_rate: float = None
-    use_layer_norm: bool = False
+    def __init__(
+        self,
+        features: int,
+        act: Callable,
+        dropout_rate: Optional[float] = None,
+        use_layer_norm: bool = False,
+    ):
+        super().__init__()
+        self.features = features
+        self.act = _resolve_activation(act)
+        self.dropout = nn.Dropout(dropout_rate) if dropout_rate else nn.Identity()
+        self.norm = nn.LayerNorm(features) if use_layer_norm else nn.Identity()
+        self.fc1 = nn.LazyLinear(features * 4)
+        self.fc2 = nn.Linear(features * 4, features)
+        self.proj = nn.LazyLinear(features)
 
-    @nn.compact
-    def __call__(self, x, train: bool = False):
+    def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
         residual = x
-        if self.dropout_rate is not None and self.dropout_rate > 0:
-            x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not train)
-        if self.use_layer_norm:
-            x = nn.LayerNorm()(x)
-        x = nn.Dense(self.features * 4)(x)
+        x = self.dropout(x)
+        x = self.norm(x)
+        x = self.fc1(x)
         x = self.act(x)
-        x = nn.Dense(self.features)(x)
+        x = self.fc2(x)
 
-        if residual.shape != x.shape:
-            residual = nn.Dense(self.features)(residual)
+        if residual.shape[-1] != x.shape[-1]:
+            residual = self.proj(residual)
 
         return residual + x
 
 
 class MLPResNet(nn.Module):
-    num_blocks: int
-    out_dim: int
-    dropout_rate: float = None
-    use_layer_norm: bool = False
-    hidden_dim: int = 256
-    activations: Callable = nn.swish
+    def __init__(
+        self,
+        num_blocks: int,
+        out_dim: int,
+        dropout_rate: Optional[float] = None,
+        use_layer_norm: bool = False,
+        hidden_dim: int = 256,
+        activations: Union[Callable, str] = "swish",
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_blocks = num_blocks
+        self.out_dim = out_dim
+        self.activation = _resolve_activation(activations)
 
-    @nn.compact
-    def __call__(self, x: jnp.ndarray, train: bool = False) -> jnp.ndarray:
-        x = nn.Dense(self.hidden_dim, kernel_init=default_init())(x)
-        for _ in range(self.num_blocks):
-            x = MLPResNetBlock(
-                self.hidden_dim,
-                act=self.activations,
-                use_layer_norm=self.use_layer_norm,
-                dropout_rate=self.dropout_rate,
-            )(x, train=train)
+        self.in_proj = nn.LazyLinear(hidden_dim)
+        self.blocks = nn.ModuleList(
+            [
+                MLPResNetBlock(
+                    hidden_dim,
+                    act=self.activation,
+                    use_layer_norm=use_layer_norm,
+                    dropout_rate=dropout_rate,
+                )
+                for _ in range(num_blocks)
+            ]
+        )
+        self.out_proj = nn.Linear(hidden_dim, out_dim)
 
-        x = self.activations(x)
-        x = nn.Dense(self.out_dim, kernel_init=default_init())(x)
+    def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
+        x = self.in_proj(x)
+        for block in self.blocks:
+            x = block(x, train=train)
+        x = self.activation(x)
+        x = self.out_proj(x)
         return x
 
 
 class Scalar(nn.Module):
-    init_value: float
+    def __init__(self, init_value: float):
+        super().__init__()
+        self.value = nn.Parameter(torch.tensor(float(init_value), dtype=torch.float32))
 
-    def setup(self):
-        self.value = self.param("value", lambda x: self.init_value)
-
-    def __call__(self):
+    def forward(self):
         return self.value
