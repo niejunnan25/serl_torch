@@ -1152,7 +1152,13 @@ def _pretrain_critic_with_calql(
         }
 
     info_last: Dict[str, Any] = {}
-    for step in range(warm_steps):
+    pbar = tqdm(
+        range(warm_steps),
+        desc="Cal-QL critic pretrain",
+        unit="step",
+        dynamic_ncols=True,
+    )
+    for step in pbar:
         batch = offline_buffer.sample(batch_size=warm_batch_size)
         agent, info_last = agent.update_critics_calql(
             batch,
@@ -1160,6 +1166,11 @@ def _pretrain_critic_with_calql(
             calql_n_actions=calql_n_actions,
             calql_temperature=calql_temperature,
         )
+        if step % 50 == 0 or step == warm_steps - 1:
+            loss_str = f"loss={info_last.get('critic_loss', 0):.3f}"
+            if "predicted_qs" in info_last:
+                loss_str += f" Q={info_last['predicted_qs']:.2f}"
+            pbar.set_postfix_str(loss_str)
         if tb_writer is not None:
             for tb_key, info_key in (
                 ("calql_pretrain/critic_loss", "critic_loss"),
