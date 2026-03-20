@@ -178,3 +178,6 @@ outputs/
 
 # Pretrained model weights (download via tools/download_resnet.py)
 pretrained_models/
+
+# Local LIBERO offline data cache
+examples/libero/data/offline/
