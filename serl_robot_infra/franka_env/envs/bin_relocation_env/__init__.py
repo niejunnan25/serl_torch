@@ -1,1 +1,0 @@
-from franka_env.envs.bin_relocation_env.franka_bin_relocation import FrankaBinRelocation
