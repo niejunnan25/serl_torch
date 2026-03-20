@@ -1,0 +1,44 @@
+defaults:
+  - train_residual_sac
+  - _self_
+
+task:
+  task_id: 6
+
+residual:
+  xi: 0.20
+  action_dim: 7
+  control_gripper: true
+  gripper_delta_limit: 2.0
+
+openpi:
+  port: 32206
+
+env:
+  remote:
+    port: 31206
+
+offline:
+  dataset_paths:
+    - data/offline/libero_10_task_6
+  symmetric_replay: true
+  ratio: 0.5
+
+sac:
+  utd_ratio: 2
+
+training:
+  warmup_base_episodes: 0
+  training_starts: 200
+  max_online_env_steps: 50000
+  calql_pretrain:
+    enabled: true
+    steps: 2000
+    batch_size: 128
+    alpha: 1.0
+    n_actions: 10
+    temperature: 1.0
+
+hydra:
+  run:
+    dir: outputs/libero/train_residual_sac_task6_xi020_opt_gripx2/${now:%Y-%m-%d}/${now:%H-%M-%S}

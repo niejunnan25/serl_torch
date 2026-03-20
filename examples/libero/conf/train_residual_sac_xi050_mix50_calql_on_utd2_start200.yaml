@@ -1,0 +1,35 @@
+defaults:
+  - train_residual_sac
+  - _self_
+
+residual:
+  xi: 0.50
+
+openpi:
+  port: 32002
+
+env:
+  remote:
+    port: 31002
+
+offline:
+  symmetric_replay: true
+  ratio: 0.5
+
+sac:
+  utd_ratio: 2
+
+training:
+  training_starts: 200
+  max_online_env_steps: 50000
+  calql_pretrain:
+    enabled: true
+    steps: 2000
+    batch_size: 128
+    alpha: 1.0
+    n_actions: 10
+    temperature: 1.0
+
+hydra:
+  run:
+    dir: outputs/libero/train_residual_sac_xi050_mix50_calql_on_utd2_start200/${now:%Y-%m-%d}/${now:%H-%M-%S}

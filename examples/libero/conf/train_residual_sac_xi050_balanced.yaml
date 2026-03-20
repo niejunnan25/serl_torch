@@ -1,0 +1,5 @@
+# Deprecated alias. Prefer:
+# train_residual_sac_xi050_mix50_calql_on_utd2_start200
+defaults:
+  - train_residual_sac_xi050_mix50_calql_on_utd2_start200
+  - _self_

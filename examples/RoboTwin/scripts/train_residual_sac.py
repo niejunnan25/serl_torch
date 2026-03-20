@@ -38,7 +38,13 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import gym
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
+
+    # Keep legacy `gym.*` imports working when only Gymnasium is installed.
+    sys.modules["gym"] = gym
 import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig

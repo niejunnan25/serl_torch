@@ -189,6 +189,14 @@ class SACAgent:
         td_critic_loss = torch.mean((predicted_qs - target_qs) ** 2)
         critic_loss = td_critic_loss
 
+        predicted_q_min = predicted_qs.min(dim=0).values
+        predicted_q_max = predicted_qs.max(dim=0).values
+        if predicted_qs.shape[0] > 1:
+            predicted_q_std = predicted_qs.std(dim=0, unbiased=False)
+        else:
+            predicted_q_std = torch.zeros_like(predicted_q_min)
+        predicted_q_gap = predicted_q_max - predicted_q_min
+
         calql_alpha = float(calql_alpha)
         cql_penalty = torch.as_tensor(0.0, device=predicted_qs.device)
         if calql_alpha > 0.0:
@@ -225,6 +233,10 @@ class SACAgent:
             "critic_cql_penalty": float(cql_penalty.detach().cpu()),
             "predicted_qs": float(predicted_qs.mean().detach().cpu()),
             "target_qs": float(target_qs.mean().detach().cpu()),
+            "predicted_q_min": float(predicted_q_min.mean().detach().cpu()),
+            "predicted_q_max": float(predicted_q_max.mean().detach().cpu()),
+            "predicted_q_std": float(predicted_q_std.mean().detach().cpu()),
+            "predicted_q_gap": float(predicted_q_gap.mean().detach().cpu()),
             "batch_size": int(batch_size),
             "otf_num_samples": int(self.config.get("otf_num_samples", 1)),
             "calql_alpha": float(calql_alpha),
@@ -240,8 +252,12 @@ class SACAgent:
         predicted_qs = self.forward_critic(batch["observations"], actions, train=True)
         if predicted_qs.ndim == 1:
             predicted_q = predicted_qs
+            predicted_q_min = predicted_qs
+            predicted_q_std = torch.zeros_like(predicted_qs)
         else:
             predicted_q = predicted_qs.mean(dim=0)
+            predicted_q_min = predicted_qs.min(dim=0).values
+            predicted_q_std = predicted_qs.std(dim=0, unbiased=False)
 
         actor_objective = predicted_q - temperature * log_probs
         actor_loss = -torch.mean(actor_objective)
@@ -250,6 +266,10 @@ class SACAgent:
             "actor_loss": float(actor_loss.detach().cpu()),
             "temperature": float(temperature.detach().cpu()),
             "entropy": float((-log_probs.mean()).detach().cpu()),
+            "log_prob": float(log_probs.mean().detach().cpu()),
+            "actor_predicted_q": float(predicted_q.mean().detach().cpu()),
+            "actor_predicted_q_min": float(predicted_q_min.mean().detach().cpu()),
+            "actor_predicted_q_std": float(predicted_q_std.mean().detach().cpu()),
         }
 
         return actor_loss, info
@@ -258,9 +278,22 @@ class SACAgent:
         with torch.no_grad():
             _, next_actions_log_probs = self._compute_next_actions(batch, num_samples=1)
         entropy = -next_actions_log_probs.mean()
+        target_entropy = torch.as_tensor(
+            self.config["target_entropy"],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        target_entropy_abs = torch.abs(target_entropy)
         penalty = self.temperature_lagrange_penalty(entropy)
         temperature_loss = penalty.mean() if penalty.ndim > 0 else penalty
-        return temperature_loss, {"temperature_loss": float(temperature_loss.detach().cpu())}
+        return temperature_loss, {
+            "temperature_loss": float(temperature_loss.detach().cpu()),
+            "temperature_entropy": float(entropy.detach().cpu()),
+            "target_entropy": float(target_entropy.detach().cpu()),
+            "target_entropy_abs": float(target_entropy_abs.detach().cpu()),
+            "target_entropy_gap": float((entropy - target_entropy_abs).detach().cpu()),
+            "temperature_constraint_gap": float((entropy - target_entropy).detach().cpu()),
+        }
 
     def update(
         self,
