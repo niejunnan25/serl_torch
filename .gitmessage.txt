@@ -1,0 +1,14 @@
+# <type>(<scope>): <subject>
+#
+# type: feat | fix | refactor | perf | docs | test | build | ci | chore
+# scope: launcher | core | common | libero | robotwin | real | infra
+#
+# Body (optional):
+# - Why this change?
+# - What changed?
+# - Risks/trade-offs?
+#
+# Footer (optional):
+# BREAKING CHANGE: <description>
+# Refs: #<issue-id>
+
