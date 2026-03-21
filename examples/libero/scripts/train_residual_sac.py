@@ -398,7 +398,12 @@ def main(cfg: DictConfig) -> None:
             logger=logger,
             tb_writer=tb_writer,
         )
-    if async_enabled:
+
+    warmup_separate = bool(cfg.training.get("warmup_separate", False))
+    warmup_base_episodes_cfg = int(cfg.training.get("warmup_base_episodes", 0))
+    need_warmup_first = warmup_separate and warmup_base_episodes_cfg > 0
+
+    if not need_warmup_first and async_enabled:
         agent = build_drq_agent(
             cfg,
             sample_obs=sample_obs,
@@ -426,7 +431,7 @@ def main(cfg: DictConfig) -> None:
             profiler=profiler,
         )
         async_learner.start()
-    elif replay_prefetch_enabled:
+    elif not need_warmup_first and replay_prefetch_enabled:
         sync_replay_lock = threading.Lock()
 
         def _sample_sync_prefetch_batch() -> Optional[Tuple[Dict[str, Any], int, int]]:
@@ -468,14 +473,239 @@ def main(cfg: DictConfig) -> None:
     max_online_env_steps = int(cfg.training.get("max_online_env_steps", 0))
     warmup_base_episodes = int(cfg.training.get("warmup_base_episodes", 0))
     warmup_base_steps = int(cfg.training.get("warmup_base_steps", 0))
+    warmup_separate = bool(cfg.training.get("warmup_separate", False))
 
     assert agent is not None
     assert learner_agent is not None
     assert replay_buffer is not None
 
+    residual_env_step = 0  # Only incremented during residual training (after warmup when warmup_separate)
+
     try:
+        # === Separate warmup phase: base-only data collection, NO policy updates ===
+        if need_warmup_first:
+            logger.info(
+                "Warmup phase (separate): collecting %s base-only episodes, no actor/critic updates",
+                warmup_base_episodes_cfg,
+            )
+            for warmup_ep_idx in range(warmup_base_episodes_cfg):
+                seed = int(seed_cursor)
+                seed_cursor += 1
+                obs_cache.clear()
+                obs_raw = _profile_call(
+                    profiler, "env_reset", env.reset, seed=seed, episode_id=episode_id
+                )
+                max_episode_steps = int(env.step_limit)
+                if cfg.training.max_env_steps_per_episode is not None:
+                    max_episode_steps = min(
+                        max_episode_steps,
+                        int(cfg.training.max_env_steps_per_episode),
+                    )
+                episode_success = False
+                episode_return = 0.0
+                episode_steps = 0
+                episode_done = False
+                cached_base_chunk = None
+                cached_infer_info = None
+                while (episode_steps < max_episode_steps) and (not episode_done):
+                    if cached_base_chunk is None:
+                        openpi_chunk, infer_info = openpi_client.infer_chunk(
+                            obs_raw,
+                            env.current_instruction,
+                            obs_cache=obs_cache,
+                        )
+                        base_chunk = select_action_chunk_window(
+                            openpi_chunk, horizon=chunk_horizon
+                        )
+                    else:
+                        base_chunk = cached_base_chunk
+                        infer_info = cached_infer_info or {
+                            "e2e_ms": None,
+                            "policy_ms": None,
+                            "server_ms": None,
+                        }
+                        cached_base_chunk = None
+                        cached_infer_info = None
+                    next_obs_raw = obs_raw
+                    for chunk_step in range(chunk_horizon):
+                        if episode_steps >= max_episode_steps:
+                            episode_done = True
+                            break
+                        obs_input = _build_residual_step_obs_profiled(
+                            profiler,
+                            next_obs_raw,
+                            base_chunk[chunk_step],
+                            image_keys=image_keys,
+                            stack_horizon=stack_horizon,
+                            normalizer=normalizer,
+                            obs_cache=obs_cache,
+                        )
+                        residual_step_action = np.zeros(
+                            (action_dim,), dtype=np.float32
+                        )
+                        final_action = base_chunk[chunk_step].copy()
+                        next_obs_raw, reward, env_done, _, info = _profile_call(
+                            profiler, "env_step", env.step, final_action
+                        )
+                        episode_steps += 1
+                        global_env_step += 1
+                        episode_return += float(reward)
+                        episode_success = bool(info["success"])
+                        timeout = bool(episode_steps >= max_episode_steps)
+                        done = bool(env_done or timeout)
+                        next_chunk_future = None
+                        if (
+                            (not done)
+                            and chunk_step == (chunk_horizon - 1)
+                            and openpi_prefetcher is not None
+                        ):
+                            next_chunk_future = openpi_prefetcher.submit(
+                                next_obs_raw,
+                                env.current_instruction,
+                                obs_cache=obs_cache,
+                            )
+                        if done:
+                            next_obs_input = _zero_obs_like(obs_input)
+                            mask = 0.0
+                        elif chunk_step < (chunk_horizon - 1):
+                            next_obs_input = _build_residual_step_obs_profiled(
+                                profiler,
+                                next_obs_raw,
+                                base_chunk[chunk_step + 1],
+                                image_keys=image_keys,
+                                stack_horizon=stack_horizon,
+                                normalizer=normalizer,
+                                obs_cache=obs_cache,
+                            )
+                            mask = 1.0
+                        else:
+                            if next_chunk_future is not None:
+                                (
+                                    next_openpi_chunk,
+                                    next_infer_info,
+                                ) = next_chunk_future.result()
+                            else:
+                                next_openpi_chunk, next_infer_info = (
+                                    openpi_client.infer_chunk(
+                                        next_obs_raw,
+                                        env.current_instruction,
+                                        obs_cache=obs_cache,
+                                    )
+                                )
+                            next_base_chunk = select_action_chunk_window(
+                                next_openpi_chunk, horizon=chunk_horizon
+                            )
+                            next_obs_input = _build_residual_step_obs_profiled(
+                                profiler,
+                                next_obs_raw,
+                                next_base_chunk[0],
+                                image_keys=image_keys,
+                                stack_horizon=stack_horizon,
+                                normalizer=normalizer,
+                                obs_cache=obs_cache,
+                            )
+                            cached_base_chunk = next_base_chunk
+                            cached_infer_info = next_infer_info
+                            mask = 1.0
+                        transition_payload = {
+                            "observations": _clone_obs_dict(obs_input),
+                            "actions": residual_step_action.astype(np.float32),
+                            "next_observations": _clone_obs_dict(next_obs_input),
+                            "rewards": np.float32(reward),
+                            "masks": np.float32(mask),
+                            "dones": bool(done),
+                        }
+                        replay_buffer.insert(transition_payload)
+                        if done:
+                            episode_done = True
+                            break
+                    obs_raw = next_obs_raw
+                total_success += int(episode_success)
+                recent_successes.append(int(episode_success))
+                episode_id += 1
+                logger.info(
+                    "warmup episode %s/%s success=%s steps=%s return=%.2f",
+                    warmup_ep_idx + 1,
+                    warmup_base_episodes_cfg,
+                    episode_success,
+                    episode_steps,
+                    episode_return,
+                )
+            logger.info(
+                "Warmup complete. Episodes=%s total_success=%s buffer_size=%s. "
+                "Starting residual training phase.",
+                episode_id,
+                total_success,
+                len(replay_buffer),
+            )
+            # Start async learner / prefetcher after warmup
+            if async_enabled:
+                agent = build_drq_agent(
+                    cfg,
+                    sample_obs=sample_obs,
+                    action_dim=action_dim,
+                    image_keys=image_keys,
+                )
+                _sync_agent_modules_inplace(agent, learner_agent)
+                async_learner = _AsyncLearner(
+                    learner_agent=learner_agent,
+                    actor_agent=agent,
+                    online_buffer=replay_buffer,
+                    offline_buffer=offline_buffer if offline_enabled else None,
+                    batch_size=int(cfg.replay.batch_size),
+                    offline_ratio=offline_ratio,
+                    symmetric_replay=symmetric_replay,
+                    training_starts=int(cfg.training.training_starts),
+                    utd_ratio=int(cfg.sac.utd_ratio),
+                    update_frequency=async_update_frequency,
+                    idle_sleep_sec=async_idle_sleep_sec,
+                    replay_prefetch_enabled=replay_prefetch_enabled,
+                    replay_prefetch_queue_size=replay_prefetch_queue_size,
+                    replay_prefetch_pin_memory=replay_prefetch_pin_memory,
+                    replay_prefetch_to_device=replay_prefetch_to_device,
+                    checkpoint_writer=checkpoint_writer,
+                    profiler=profiler,
+                )
+                async_learner.start()
+            elif replay_prefetch_enabled:
+                sync_replay_lock = threading.Lock()
+
+                def _sample_sync_prefetch_batch() -> Optional[
+                    Tuple[Dict[str, Any], int, int]
+                ]:
+                    assert replay_buffer is not None
+                    assert sync_replay_lock is not None
+                    with sync_replay_lock:
+                        if len(replay_buffer) < int(cfg.training.training_starts):
+                            return None
+                        return _sample_mixed_batch(
+                            replay_buffer,
+                            offline_buffer if offline_enabled else None,
+                            batch_size=int(cfg.replay.batch_size),
+                            offline_ratio=offline_ratio,
+                            symmetric_replay=symmetric_replay,
+                        )
+
+                sync_replay_prefetcher = _MixedBatchPrefetcher(
+                    sample_fn=_sample_sync_prefetch_batch,
+                    queue_size=replay_prefetch_queue_size,
+                    idle_sleep_sec=async_idle_sleep_sec,
+                    device=learner_agent.device,
+                    pin_memory=replay_prefetch_pin_memory,
+                    to_device=replay_prefetch_to_device,
+                    profiler=profiler,
+                )
+                sync_replay_prefetcher.start()
+
         for phase in cfg.training.phases:
-            if max_online_env_steps > 0 and global_env_step >= max_online_env_steps:
+            if warmup_separate and max_online_env_steps > 0:
+                budget_exceeded = residual_env_step >= max_online_env_steps
+            else:
+                budget_exceeded = (
+                    max_online_env_steps > 0
+                    and global_env_step >= max_online_env_steps
+                )
+            if budget_exceeded:
                 stopped_by_env_budget = True
                 break
             phase_name = str(phase.name)
@@ -492,7 +722,16 @@ def main(cfg: DictConfig) -> None:
 
             phase_episode_count = 0
             while phase_episode_count < phase_episodes:
-                if max_online_env_steps > 0 and global_env_step >= max_online_env_steps:
+                if warmup_separate and max_online_env_steps > 0:
+                    inner_budget_exceeded = (
+                        residual_env_step >= max_online_env_steps
+                    )
+                else:
+                    inner_budget_exceeded = (
+                        max_online_env_steps > 0
+                        and global_env_step >= max_online_env_steps
+                    )
+                if inner_budget_exceeded:
                     stopped_by_env_budget = True
                     break
 
@@ -546,13 +785,21 @@ def main(cfg: DictConfig) -> None:
                             )
                             episode_steps += 1
                             global_env_step += 1
+                            if warmup_separate:
+                                residual_env_step += 1
                             probing_remaining -= 1
                             episode_return += float(reward)
                             episode_success = bool(info["success"])
                             timeout = bool(episode_steps >= max_episode_steps)
-                            budget_exhausted = bool(
-                                max_online_env_steps > 0 and global_env_step >= max_online_env_steps
-                            )
+                            if warmup_separate and max_online_env_steps > 0:
+                                budget_exhausted = (
+                                    residual_env_step >= max_online_env_steps
+                                )
+                            else:
+                                budget_exhausted = bool(
+                                    max_online_env_steps > 0
+                                    and global_env_step >= max_online_env_steps
+                                )
                             done = bool(env_done or timeout or budget_exhausted)
                             if (
                                 (not done)
@@ -636,20 +883,27 @@ def main(cfg: DictConfig) -> None:
                             obs_cache=obs_cache,
                         )
 
+                        schedule_step = (
+                            residual_env_step if warmup_separate else global_policy_step
+                        )
                         residual_scale_step = _scheduled_residual_scale(
                             cfg,
                             phase_scale=phase_residual_scale,
-                            global_policy_step=global_policy_step,
+                            global_policy_step=schedule_step,
                         )
                         xi_step = _scheduled_xi(
                             cfg,
                             base_xi=residual_xi,
-                            global_policy_step=global_policy_step,
+                            global_policy_step=schedule_step,
                         )
 
-                        in_warmup_episode = bool(episode_id < warmup_base_episodes)
+                        in_warmup_episode = bool(
+                            not warmup_separate and episode_id < warmup_base_episodes
+                        )
                         in_warmup_step = bool(
-                            warmup_base_steps > 0 and global_policy_step < warmup_base_steps
+                            not warmup_separate
+                            and warmup_base_steps > 0
+                            and global_policy_step < warmup_base_steps
                         )
                         if phase_train and (in_warmup_episode or in_warmup_step):
                             residual_step_action = np.zeros((action_dim,), dtype=np.float32)
@@ -690,12 +944,20 @@ def main(cfg: DictConfig) -> None:
                         )
                         episode_steps += 1
                         global_env_step += 1
+                        if warmup_separate:
+                            residual_env_step += 1
                         episode_return += float(reward)
                         episode_success = bool(info["success"])
                         timeout = bool(episode_steps >= max_episode_steps)
-                        budget_exhausted = bool(
-                            max_online_env_steps > 0 and global_env_step >= max_online_env_steps
-                        )
+                        if warmup_separate and max_online_env_steps > 0:
+                            budget_exhausted = (
+                                residual_env_step >= max_online_env_steps
+                            )
+                        else:
+                            budget_exhausted = bool(
+                                max_online_env_steps > 0
+                                and global_env_step >= max_online_env_steps
+                            )
                         done = bool(env_done or timeout or budget_exhausted)
                         next_chunk_future: Optional[Future[Tuple[np.ndarray, Dict[str, Optional[float]]]]] = None
                         if (
@@ -898,6 +1160,12 @@ def main(cfg: DictConfig) -> None:
                                 int(global_policy_step),
                                 global_env_step,
                             )
+                            if warmup_separate:
+                                tb_writer.add_scalar(
+                                    "system/residual_env_step",
+                                    int(residual_env_step),
+                                    global_env_step,
+                                )
                             if async_learner is not None:
                                 tb_writer.add_scalar(
                                     "system/learner_update_steps",
@@ -1114,6 +1382,9 @@ def main(cfg: DictConfig) -> None:
             "seed_next": int(seed_cursor),
             "stopped_by_env_budget": bool(stopped_by_env_budget),
             "max_online_env_steps": int(max_online_env_steps),
+            "warmup_separate": bool(warmup_separate),
+            "warmup_base_episodes": int(warmup_base_episodes_cfg),
+            "residual_env_step": int(residual_env_step) if warmup_separate else None,
             "replay_size": int(len(replay_buffer) if replay_buffer is not None else 0),
             "offline_enabled": bool(offline_enabled),
             "offline_ratio": float(offline_ratio),
