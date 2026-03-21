@@ -616,13 +616,96 @@ def main(cfg: DictConfig) -> None:
                             "dones": bool(done),
                         }
                         replay_buffer.insert(transition_payload)
+                        step_logger.write(
+                            {
+                                "global_env_step": int(global_env_step),
+                                "global_policy_step": int(global_policy_step),
+                                "episode_id": episode_id,
+                                "phase": "warmup_base_only",
+                                "episode_step": episode_steps,
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
+                                "init_state_idx": (
+                                    int(env.current_init_state_idx)
+                                    if env.current_init_state_idx is not None
+                                    else None
+                                ),
+                                "is_warmup": True,
+                                "is_probing": False,
+                                "replan_point": bool(chunk_step == 0),
+                                "chunk_step": int(chunk_step),
+                                "chunk_horizon": int(chunk_horizon),
+                                "infer_e2e_ms": (
+                                    infer_info.get("e2e_ms")
+                                    if chunk_step == 0
+                                    else None
+                                ),
+                                "infer_policy_ms": (
+                                    infer_info.get("policy_ms")
+                                    if chunk_step == 0
+                                    else None
+                                ),
+                                "infer_server_ms": (
+                                    infer_info.get("server_ms")
+                                    if chunk_step == 0
+                                    else None
+                                ),
+                                "a_base": base_chunk[chunk_step].tolist(),
+                                "a_res_policy": residual_step_action.tolist(),
+                                "a_res": np.zeros_like(
+                                    base_chunk[chunk_step], dtype=np.float32
+                                ).tolist(),
+                                "a_final": final_action.tolist(),
+                                "residual_scale": 0.0,
+                                "xi": 0.0,
+                                "reward": float(reward),
+                                "done": bool(done),
+                                "success": bool(episode_success),
+                            }
+                        )
                         if done:
                             episode_done = True
                             break
                     obs_raw = next_obs_raw
                 total_success += int(episode_success)
                 recent_successes.append(int(episode_success))
-                episode_id += 1
+                running_success_rate = float(total_success) / float(episode_id + 1)
+                recent_success_rate = float(sum(recent_successes)) / float(
+                    len(recent_successes)
+                )
+                episode_logger.write(
+                    {
+                        "episode_id": episode_id,
+                        "phase": "warmup_base_only",
+                        "seed": int(env.last_seed if env.last_seed is not None else seed),
+                        "init_state_idx": (
+                            int(env.current_init_state_idx)
+                            if env.current_init_state_idx is not None
+                            else None
+                        ),
+                        "success": bool(episode_success),
+                        "episode_steps": int(episode_steps),
+                        "episode_return": float(episode_return),
+                        "global_env_step": int(global_env_step),
+                        "global_policy_step": int(global_policy_step),
+                        "running_success_rate": running_success_rate,
+                        "recent_success_rate": recent_success_rate,
+                        "is_warmup": True,
+                    }
+                )
+                tb_writer.add_scalar("episode/success", int(episode_success), episode_id)
+                tb_writer.add_scalar("episode/return", float(episode_return), episode_id)
+                tb_writer.add_scalar("episode/length", int(episode_steps), episode_id)
+                tb_writer.add_scalar(
+                    "episode/running_success_rate", running_success_rate, episode_id
+                )
+                tb_writer.add_scalar(
+                    "episode/recent_success_rate_20", recent_success_rate, episode_id
+                )
+                tb_writer.add_scalar(
+                    "system/online_buffer_size", int(len(replay_buffer)), global_env_step
+                )
                 logger.info(
                     "warmup episode %s/%s success=%s steps=%s return=%.2f",
                     warmup_ep_idx + 1,
@@ -631,6 +714,7 @@ def main(cfg: DictConfig) -> None:
                     episode_steps,
                     episode_return,
                 )
+                episode_id += 1
             logger.info(
                 "Warmup complete. Episodes=%s total_success=%s buffer_size=%s. "
                 "Starting residual training phase.",
