@@ -101,7 +101,7 @@ offline:
 
 training:
   max_env_steps_per_episode: null
-  max_online_env_steps: 50000
+  max_online_env_steps: 300000
   expert_check: false
   warmup_base_episodes: 5
   warmup_base_steps: 0

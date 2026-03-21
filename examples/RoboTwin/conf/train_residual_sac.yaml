@@ -104,7 +104,7 @@ offline:
 
 training:
   max_env_steps_per_episode: 200
-  max_online_env_steps: 250000
+  max_online_env_steps: 300000
   expert_check: true
   max_seed_attempts_per_phase: 5000
   warmup_base_episodes: 0

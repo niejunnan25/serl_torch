@@ -51,12 +51,19 @@ sac:
 
 training:
   # PLD Section 4.1: 250k online interaction steps.
-  max_online_env_steps: 250000
+  max_online_env_steps: 300000
 
   # PLD Appendix Table 5
   warmup_base_episodes: 100
   warmup_base_steps: 0
   training_starts: 200
+  # Enable actor-learner decoupling to improve wall-clock throughput.
+  # Update-frequency in [1, 500] is generally robust in PLD ablations; use 20 to
+  # reduce sync overhead while keeping policy staleness modest.
+  async:
+    enabled: true
+    update_frequency: 20
+    idle_sleep_sec: 0.002
 
   # Stage-1 only (specialist RL): disable probing-based state initialization.
   # Probing is mainly used for PLD Stage-2 data collection / distribution shaping.

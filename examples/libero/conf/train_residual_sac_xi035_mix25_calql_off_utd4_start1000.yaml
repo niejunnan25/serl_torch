@@ -21,7 +21,7 @@ sac:
 
 training:
   training_starts: 1000
-  max_online_env_steps: 50000
+  max_online_env_steps: 300000
   calql_pretrain:
     enabled: false
 

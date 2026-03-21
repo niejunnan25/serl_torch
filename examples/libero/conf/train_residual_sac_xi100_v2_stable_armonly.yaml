@@ -24,7 +24,7 @@ sac:
 training:
   warmup_base_episodes: 0
   training_starts: 200
-  max_online_env_steps: 50000
+  max_online_env_steps: 300000
   calql_pretrain:
     enabled: true
     steps: 2000
