@@ -59,8 +59,8 @@ Usage:
   bash tools/run_train.sh <yaml_file_name.yaml|/abs/path/to/config.yaml> [--gpu_id N] [extra hydra overrides...]
 
 Examples:
-  bash tools/run_train.sh train_residual_sac_xi025_mix50_calql_on_utd2_start200.yaml --gpu_id 0
-  bash tools/run_train.sh /abs/path/to/train_residual_sac_xi035_mix25_calql_off_utd4_start1000.yaml --gpu_id 1 seed=1
+  bash tools/run_train.sh train_residual_sac.yaml --gpu_id 0
+  bash tools/run_train.sh /abs/path/to/train_pld_task0_m06_boot50_w100_xi05_sched300k.yaml --gpu_id 1 seed=1
 EOF
 }
 
