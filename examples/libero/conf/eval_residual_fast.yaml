@@ -1,9 +1,15 @@
+# ---------------------------
+# Global / Paths
+# ---------------------------
 seed: 0
 openpi_root: null
 libero_root: null
 libero_config_dir: null
 libero_datasets_root: null
 
+# ---------------------------
+# Task / Environment
+# ---------------------------
 task:
   suite_name: libero_10
   task_id: 8
@@ -20,23 +26,36 @@ openpi:
   port: 30001
 
 env:
+  action_dim: 7
   backend: remote
   remote:
     host: 127.0.0.1
     port: 30000
     timeout_sec: 180.0
 
+# ---------------------------
+# Residual Policy
+# ---------------------------
 residual:
   image_keys: [image, wrist_image]
+  xi: 0.1
   action_dim: 7
   action_indices: null
-  xi: 0.1
+  action_limits: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.5]
   control_gripper: true
-  arm_delta_limit: 0.02
-  gripper_delta_limit: 0.5
   clip_gripper: true
   chunk_horizon: 5
 
+chunk_step:
+  enabled: false
+  sample_stride: 1
+  require_full_horizon: false
+  pad_action_to_horizon: true
+  scheduler_clock: env_step
+
+# ---------------------------
+# SAC Agent
+# ---------------------------
 sac:
   policy_hidden_dims: [256, 256, 256]
   critic_hidden_dims: [256, 256, 256]
@@ -77,12 +96,9 @@ sac:
     cosine_decay_steps: null
     grad_clip_norm: 1.0
 
-logging:
-  step_log_file: step_logs.jsonl
-  episode_log_file: episode_logs.jsonl
-  summary_file: summary.json
-  tensorboard: true
-
+# ---------------------------
+# Eval / Logging
+# ---------------------------
 eval:
   episodes: 10
   expert_check: false
@@ -90,12 +106,17 @@ eval:
   fixed_seed: null
   max_env_steps_per_episode: null
   deterministic: true
-  residual_scale: 1.0
   checkpoint_path: null
   enable_base_probing: false
   probing_alpha: 0.6
   probing_min_steps: 0
   probing_max_steps: 20
+
+logging:
+  step_log_file: step_logs.jsonl
+  episode_log_file: episode_logs.jsonl
+  summary_file: summary.json
+  tensorboard: true
 
 normalization:
   enabled: true

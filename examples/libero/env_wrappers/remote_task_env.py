@@ -29,6 +29,7 @@ class RemoteLiberoTaskEnv:
         port: int,
         suite_name: str,
         task_id: int,
+        action_dim: Optional[int] = None,
         resolution: int = 256,
         num_steps_wait: int = 10,
         max_episode_steps: Optional[int] = None,
@@ -49,6 +50,7 @@ class RemoteLiberoTaskEnv:
 
         self.suite_name = str(suite_name)
         self.task_id = int(task_id)
+        self._action_dim = int(action_dim) if action_dim is not None else 0
         self.resolution = int(resolution)
         self.num_steps_wait = int(num_steps_wait)
         self.max_episode_steps = None if max_episode_steps is None else int(max_episode_steps)
@@ -73,6 +75,7 @@ class RemoteLiberoTaskEnv:
                 "create_env",
                 suite_name=self.suite_name,
                 task_id=self.task_id,
+                action_dim=(None if action_dim is None else int(action_dim)),
                 resolution=self.resolution,
                 num_steps_wait=self.num_steps_wait,
                 max_episode_steps=self.max_episode_steps,
@@ -104,6 +107,10 @@ class RemoteLiberoTaskEnv:
     @property
     def take_action_cnt(self) -> int:
         return int(self._take_action_cnt)
+
+    @property
+    def action_dim(self) -> int:
+        return int(self._action_dim)
 
     def _close_conn(self) -> None:
         conn, self._conn = self._conn, None
@@ -190,6 +197,8 @@ class RemoteLiberoTaskEnv:
         self._task_description = str(meta.get("task_description", self._task_description))
         self._step_limit = int(meta.get("step_limit", self._step_limit))
         self._take_action_cnt = int(meta.get("take_action_cnt", self._take_action_cnt))
+        if meta.get("action_dim", None) is not None:
+            self._action_dim = int(meta.get("action_dim"))
         self.current_init_state_idx = meta.get("current_init_state_idx", self.current_init_state_idx)
         last_seed = meta.get("last_seed", None)
         self.last_seed = int(last_seed) if last_seed is not None else None
@@ -238,6 +247,13 @@ class RemoteLiberoTaskEnv:
             bool(result["truncated"]),
             dict(result["info"]),
         )
+
+    def step_chunk(self, actions: np.ndarray) -> Dict[str, Any]:
+        result = self._rpc("step_chunk", actions=np.asarray(actions, dtype=np.float32))
+        if not isinstance(result, dict):
+            raise RuntimeError("remote step_chunk returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return result
 
     def close(self, clear_cache: bool = False) -> None:
         try:

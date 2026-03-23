@@ -106,8 +106,8 @@ bash tools/eval.sh \
 
 ```bash
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac.yaml --gpu_id 0
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_pld_task6.yaml --gpu_id 1
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_pld_task0_m06_boot50_w100_xi05_sched300k.yaml --gpu_id 2
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_pld_residual_sac.yaml --gpu_id 1
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_chunk_step_sequence.yaml --gpu_id 2
 
 
 ```

@@ -23,7 +23,8 @@ class DiagGaussianDistribution:
         self.low = low
         self.high = high
         self.eps = eps
-        self._base_dist = Independent(Normal(loc, scale_diag), 1)
+        self._normal_dist = Normal(loc, scale_diag)
+        self._base_dist = Independent(self._normal_dist, 1)
 
     def _squash(self, x: torch.Tensor) -> torch.Tensor:
         y = torch.tanh(x)
@@ -45,42 +46,38 @@ class DiagGaussianDistribution:
             return self._squash(z)
         return z
 
-    def sample_and_log_prob(self, seed=None):
-        z = self._base_dist.rsample()
+    def _log_prob_per_dim_from_latent(self, z: torch.Tensor) -> torch.Tensor:
+        log_prob_per_dim = self._normal_dist.log_prob(z)
         if not self.tanh_squash:
-            return z, self._base_dist.log_prob(z)
+            return log_prob_per_dim
 
-        action = self._squash(z)
-        log_prob = self._base_dist.log_prob(z)
-        tanh_correction = torch.sum(
-            torch.log(1.0 - torch.tanh(z).pow(2) + self.eps),
-            dim=-1,
-        )
-        log_prob = log_prob - tanh_correction
-
+        tanh_z = torch.tanh(z)
+        log_prob_per_dim = log_prob_per_dim - torch.log(1.0 - tanh_z.pow(2) + self.eps)
         if self.low is not None and self.high is not None:
             scale = torch.clamp((self.high - self.low) * 0.5, min=self.eps)
-            log_prob = log_prob - torch.sum(torch.log(scale), dim=-1)
+            log_prob_per_dim = log_prob_per_dim - torch.log(scale)
+        return log_prob_per_dim
 
+    def sample_and_log_prob_per_dim(self, seed=None):
+        z = self._base_dist.rsample()
+        action = self._squash(z) if self.tanh_squash else z
+        log_prob_per_dim = self._log_prob_per_dim_from_latent(z)
+        return action, log_prob_per_dim
+
+    def sample_and_log_prob(self, seed=None):
+        action, log_prob_per_dim = self.sample_and_log_prob_per_dim(seed=seed)
+        log_prob = log_prob_per_dim.sum(dim=-1)
         return action, log_prob
 
-    def log_prob(self, action: torch.Tensor) -> torch.Tensor:
+    def log_prob_per_dim(self, action: torch.Tensor) -> torch.Tensor:
         if not self.tanh_squash:
-            return self._base_dist.log_prob(action)
+            return self._normal_dist.log_prob(action)
 
         z = self._unsquash(action)
-        log_prob = self._base_dist.log_prob(z)
-        tanh_correction = torch.sum(
-            torch.log(1.0 - torch.tanh(z).pow(2) + self.eps),
-            dim=-1,
-        )
-        log_prob = log_prob - tanh_correction
+        return self._log_prob_per_dim_from_latent(z)
 
-        if self.low is not None and self.high is not None:
-            scale = torch.clamp((self.high - self.low) * 0.5, min=self.eps)
-            log_prob = log_prob - torch.sum(torch.log(scale), dim=-1)
-
-        return log_prob
+    def log_prob(self, action: torch.Tensor) -> torch.Tensor:
+        return self.log_prob_per_dim(action).sum(dim=-1)
 
     def mode(self) -> torch.Tensor:
         if self.tanh_squash:

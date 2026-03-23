@@ -33,6 +33,7 @@ class _EnvState:
                 "task_description": None,
                 "step_limit": 0,
                 "take_action_cnt": 0,
+                "action_dim": 0,
                 "last_seed": None,
                 "current_init_state_idx": None,
             }
@@ -41,6 +42,7 @@ class _EnvState:
             "task_description": self.env.task_description,
             "step_limit": int(self.env.step_limit),
             "take_action_cnt": int(self.env.take_action_cnt),
+            "action_dim": int(self.env.action_dim),
             "last_seed": self.env.last_seed,
             "current_init_state_idx": self.env.current_init_state_idx,
         }
@@ -87,6 +89,17 @@ class _EnvState:
             "info": dict(info),
             "meta": self._meta(),
         }
+
+    def step_chunk(self, **kwargs: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        actions = np.asarray(kwargs["actions"], dtype=np.float32)
+        result = self.env.step_chunk(actions)
+        if not isinstance(result, dict):
+            raise RuntimeError("env.step_chunk returned invalid payload")
+        payload = dict(result)
+        payload["meta"] = self._meta()
+        return payload
 
     def close(self, **kwargs: Any) -> Dict[str, Any]:
         if self.env is not None:

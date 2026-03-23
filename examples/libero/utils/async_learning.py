@@ -181,6 +181,10 @@ def _sample_mixed_batch(
     return mixed_batch, int(online_bs), int(offline_bs)
 
 
+def _replay_progress_size(buffer: Any) -> int:
+    return int(getattr(buffer, "num_steps", len(buffer)))
+
+
 class _AsyncLearner:
     """In-process async collection-learning coordinator."""
 
@@ -314,7 +318,7 @@ class _AsyncLearner:
 
     def _sample_batch(self) -> Optional[Tuple[Dict[str, Any], int, int]]:
         with self.replay_lock:
-            if len(self.online_buffer) < self.training_starts:
+            if _replay_progress_size(self.online_buffer) < self.training_starts:
                 return None
             batch, online_bs, offline_bs = _sample_mixed_batch(
                 self.online_buffer,

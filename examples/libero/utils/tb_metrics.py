@@ -15,7 +15,6 @@ def _log_info_scalars(tb_writer, info: Dict[str, Any], global_step: int, pairs: 
 def _new_tb_step_window() -> Dict[str, List[Any]]:
     return {
         "reward": [],
-        "residual_scale": [],
         "xi": [],
         "delta_norm": [],
         "policy_norm": [],
@@ -33,7 +32,6 @@ def _append_tb_step_window(
     step_window: Dict[str, List[Any]],
     *,
     reward: float,
-    residual_scale: float,
     xi: float,
     residual_action: np.ndarray,
     delta_action: np.ndarray,
@@ -48,7 +46,6 @@ def _append_tb_step_window(
     final_action = np.asarray(final_action, dtype=np.float32).reshape(-1)
 
     step_window["reward"].append(float(reward))
-    step_window["residual_scale"].append(float(residual_scale))
     step_window["xi"].append(float(xi))
     step_window["delta_norm"].append(float(np.linalg.norm(delta_action)))
     step_window["policy_norm"].append(float(np.linalg.norm(residual_action)))
@@ -82,7 +79,6 @@ def _flush_tb_step_window(
     scalar_lists = (
         ("step/reward", "reward"),
         ("step/reward_nonzero_rate", "reward"),
-        ("step/residual_scale", "residual_scale"),
         ("step/xi", "xi"),
         ("step/residual_action_magnitude", "delta_norm"),
         ("step/residual_policy_action_magnitude", "policy_norm"),

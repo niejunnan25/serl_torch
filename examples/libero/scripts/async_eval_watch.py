@@ -131,6 +131,57 @@ def _load_summary(summary_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _resolve_eval_residual_xi(
+    *,
+    train_cfg: Dict[str, Any],
+    async_eval_cfg: Dict[str, Any],
+    checkpoint_step: int,
+    logger: logging.Logger,
+) -> tuple[float, str, Optional[int]]:
+    residual_cfg = train_cfg.get("residual", {}) if isinstance(train_cfg, dict) else {}
+    base_xi = float(residual_cfg.get("xi", 1.0))
+    xi_mode_raw = str(async_eval_cfg.get("xi_mode", "checkpoint_schedule")).strip().lower()
+    valid_modes = {"checkpoint_schedule", "base", "fixed"}
+    if xi_mode_raw not in valid_modes:
+        logger.warning(
+            "Unknown training.async_eval.xi_mode=%s; fallback to checkpoint_schedule",
+            xi_mode_raw,
+        )
+        xi_mode_raw = "checkpoint_schedule"
+
+    if xi_mode_raw == "base":
+        return float(base_xi), "base", None
+
+    if xi_mode_raw == "fixed":
+        fixed_xi = async_eval_cfg.get("fixed_xi", None)
+        if fixed_xi is None:
+            logger.warning(
+                "training.async_eval.xi_mode=fixed but fixed_xi is null; fallback to base residual.xi=%.6f",
+                base_xi,
+            )
+            return float(base_xi), "base_fallback", None
+        return float(fixed_xi), "fixed", None
+
+    training_cfg = train_cfg.get("training", {}) if isinstance(train_cfg, dict) else {}
+    xi_scheduler_cfg = training_cfg.get("xi_scheduler", {}) if isinstance(training_cfg, dict) else {}
+    if (not isinstance(xi_scheduler_cfg, dict)) or (not _as_bool(xi_scheduler_cfg.get("enabled", False))):
+        return float(base_xi), "checkpoint_schedule_disabled", int(checkpoint_step)
+
+    min_xi = float(xi_scheduler_cfg.get("min_xi", base_xi))
+    warmup_steps = int(xi_scheduler_cfg.get("warmup_steps", 0))
+    anneal_steps = int(xi_scheduler_cfg.get("anneal_steps", 1))
+    schedule_step = int(checkpoint_step)
+
+    if schedule_step < warmup_steps:
+        return float(min_xi), "checkpoint_schedule", schedule_step
+    if anneal_steps <= 0:
+        return float(base_xi), "checkpoint_schedule", schedule_step
+
+    progress = min(1.0, max(0.0, (schedule_step - warmup_steps) / float(anneal_steps)))
+    xi = float(min_xi + (float(base_xi) - min_xi) * progress)
+    return xi, "checkpoint_schedule", schedule_step
+
+
 def _build_eval_command(
     *,
     python_executable: str,
@@ -140,10 +191,11 @@ def _build_eval_command(
     checkpoint_path: Path,
     eval_seed_base: int,
     eval_cfg: Dict[str, Any],
+    eval_residual_xi: float,
 ) -> List[str]:
     overrides: List[str] = []
 
-    for top_key in ("task", "residual", "sac", "normalization", "openpi", "env"):
+    for top_key in ("task", "residual", "chunk_step", "sac", "normalization", "openpi", "env"):
         top_value = train_cfg.get(top_key, None)
         if isinstance(top_value, dict):
             overrides.extend(_flatten_overrides(top_key, top_value))
@@ -159,12 +211,12 @@ def _build_eval_command(
             f"env.remote.timeout_sec={_to_override_value(eval_cfg['env_timeout_sec'])}",
             f"openpi.host={_to_override_value(eval_cfg['openpi_host'])}",
             f"openpi.port={_to_override_value(eval_cfg['openpi_port'])}",
+            f"residual.xi={_to_override_value(eval_residual_xi)}",
             f"task.seed_base={_to_override_value(eval_seed_base)}",
             f"eval.episodes={_to_override_value(eval_cfg['episodes'])}",
             f"eval.expert_check={_to_override_value(eval_cfg['expert_check'])}",
             f"eval.max_seed_attempts={_to_override_value(eval_cfg['max_seed_attempts'])}",
             f"eval.deterministic={_to_override_value(eval_cfg['deterministic'])}",
-            f"eval.residual_scale={_to_override_value(eval_cfg['residual_scale'])}",
             f"eval.fixed_seed={_to_override_value(fixed_seed)}",
             f"eval.enable_base_probing={_to_override_value(eval_cfg['enable_base_probing'])}",
             f"eval.probing_alpha={_to_override_value(eval_cfg['probing_alpha'])}",
@@ -295,11 +347,23 @@ def main() -> None:
     max_seed_attempts = int(async_eval_cfg.get("max_seed_attempts", max(1000, episodes * 100)))
     deterministic = _as_bool(async_eval_cfg.get("deterministic", True))
     expert_check = _as_bool(async_eval_cfg.get("expert_check", False))
-    residual_scale = float(async_eval_cfg.get("residual_scale", 1.0))
     enable_base_probing = _as_bool(async_eval_cfg.get("enable_base_probing", False))
     probing_alpha = async_eval_cfg.get("probing_alpha", None)
     probing_min_steps = int(async_eval_cfg.get("probing_min_steps", 0))
     probing_max_steps = int(async_eval_cfg.get("probing_max_steps", 0))
+    xi_mode = str(async_eval_cfg.get("xi_mode", "checkpoint_schedule")).strip().lower()
+    fixed_xi_cfg = async_eval_cfg.get("fixed_xi", None)
+    fixed_xi = None if fixed_xi_cfg is None else float(fixed_xi_cfg)
+
+    if xi_mode == "checkpoint_schedule":
+        chunk_step_cfg = train_cfg.get("chunk_step", {}) if isinstance(train_cfg, dict) else {}
+        scheduler_clock = str(chunk_step_cfg.get("scheduler_clock", "env_step")).strip().lower()
+        if scheduler_clock != "env_step":
+            logger.warning(
+                "training.chunk_step.scheduler_clock=%s; checkpoint step is env_step, "
+                "so xi reconstruction may not match policy-step scheduling exactly.",
+                scheduler_clock,
+            )
 
     eval_script = async_eval_cfg.get("eval_script", None)
     if eval_script is None:
@@ -317,7 +381,6 @@ def main() -> None:
         "episodes": episodes,
         "deterministic": deterministic,
         "expert_check": expert_check,
-        "residual_scale": residual_scale,
         "fixed_seed": fixed_seed,
         "max_seed_attempts": max_seed_attempts,
         "enable_base_probing": enable_base_probing,
@@ -329,14 +392,19 @@ def main() -> None:
         "env_timeout_sec": env_timeout_sec,
         "openpi_host": openpi_host,
         "openpi_port": openpi_port,
+        "xi_mode": xi_mode,
+        "fixed_xi": fixed_xi,
     }
 
     logger.info(
-        "watch start: checkpoints=%s every_steps=%s episodes=%s fixed_seed=%s queue_policy=%s poll_sec=%.2f stable_sec=%.2f",
+        "watch start: checkpoints=%s every_steps=%s episodes=%s fixed_seed=%s xi_mode=%s fixed_xi=%s "
+        "queue_policy=%s poll_sec=%.2f stable_sec=%.2f",
         checkpoints_dir,
         every_steps,
         episodes,
         fixed_seed,
+        xi_mode,
+        fixed_xi,
         queue_policy,
         poll_sec,
         file_stable_sec,
@@ -363,6 +431,9 @@ def main() -> None:
     running_start_time = 0.0
     running_eval_dir: Optional[Path] = None
     running_log_fp = None
+    running_eval_xi: Optional[float] = None
+    running_eval_xi_mode: Optional[str] = None
+    running_eval_xi_schedule_step: Optional[int] = None
 
     while not stop_requested["value"]:
         if running_proc is not None:
@@ -386,6 +457,13 @@ def main() -> None:
                 "timestamp": _timestamp(),
                 "step": int(running_step) if running_step is not None else None,
                 "seed_base": int(running_seed_base) if running_seed_base is not None else None,
+                "eval_xi": float(running_eval_xi) if running_eval_xi is not None else None,
+                "eval_xi_mode": running_eval_xi_mode,
+                "eval_xi_schedule_step": (
+                    int(running_eval_xi_schedule_step)
+                    if running_eval_xi_schedule_step is not None
+                    else None
+                ),
                 "eval_run_dir": str(running_eval_dir) if running_eval_dir is not None else None,
                 "status": status,
                 "return_code": int(return_code),
@@ -406,6 +484,9 @@ def main() -> None:
             running_step = None
             running_seed_base = None
             running_eval_dir = None
+            running_eval_xi = None
+            running_eval_xi_mode = None
+            running_eval_xi_schedule_step = None
             continue
 
         checkpoint_paths = sorted(
@@ -457,6 +538,12 @@ def main() -> None:
             eval_run_dir = (async_eval_root / f"step_{step:07d}").resolve()
             eval_run_dir.mkdir(parents=True, exist_ok=True)
             eval_log_path = eval_run_dir / "eval_runner.log"
+            eval_xi, eval_xi_mode, eval_xi_schedule_step = _resolve_eval_residual_xi(
+                train_cfg=train_cfg,
+                async_eval_cfg=async_eval_cfg,
+                checkpoint_step=int(step),
+                logger=logger,
+            )
 
             cmd = _build_eval_command(
                 python_executable=python_executable,
@@ -466,6 +553,7 @@ def main() -> None:
                 checkpoint_path=checkpoint_path,
                 eval_seed_base=eval_seed_base,
                 eval_cfg=eval_cfg,
+                eval_residual_xi=float(eval_xi),
             )
 
             running_log_fp = open(eval_log_path, "a", encoding="utf-8")
@@ -478,11 +566,19 @@ def main() -> None:
             running_seed_base = int(eval_seed_base)
             running_eval_dir = eval_run_dir
             running_start_time = time.time()
+            running_eval_xi = float(eval_xi)
+            running_eval_xi_mode = str(eval_xi_mode)
+            running_eval_xi_schedule_step = (
+                int(eval_xi_schedule_step) if eval_xi_schedule_step is not None else None
+            )
 
             logger.info(
-                "async eval started: step=%s seed_base=%s pid=%s run_dir=%s",
+                "async eval started: step=%s seed_base=%s xi=%.6f xi_mode=%s schedule_step=%s pid=%s run_dir=%s",
                 step,
                 eval_seed_base,
+                float(eval_xi),
+                eval_xi_mode,
+                eval_xi_schedule_step,
                 running_proc.pid,
                 eval_run_dir,
             )
@@ -507,6 +603,13 @@ def main() -> None:
                 "timestamp": _timestamp(),
                 "step": int(running_step) if running_step is not None else None,
                 "seed_base": int(running_seed_base) if running_seed_base is not None else None,
+                "eval_xi": float(running_eval_xi) if running_eval_xi is not None else None,
+                "eval_xi_mode": running_eval_xi_mode,
+                "eval_xi_schedule_step": (
+                    int(running_eval_xi_schedule_step)
+                    if running_eval_xi_schedule_step is not None
+                    else None
+                ),
                 "eval_run_dir": str(running_eval_dir) if running_eval_dir is not None else None,
                 "status": "aborted",
                 "return_code": int(running_proc.returncode) if running_proc.returncode is not None else None,

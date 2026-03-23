@@ -6,7 +6,7 @@
 ## 1. 总体结论
 
 - 完成情况：8/8 组均跑满预算（`global_env_step = max_online_env_steps = 100000`）。
-- 稳定最优组合：`xi=0.05, gripper_delta_limit=2.0 (grip2)`。
+- 稳定最优组合：`xi=0.05, action_limits[-1]=2.0 (grip2)`。
 - 明显趋势：`xi` 增大后训练表现整体下降，`xi=0.125` 两组最差。
 - 异步评估共性：每组都有 1 次失败（首个 5000 step 评估），主要原因是评估环境端口短暂未就绪（`ConnectionRefusedError`），之后均恢复。
 

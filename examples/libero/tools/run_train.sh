@@ -60,7 +60,7 @@ Usage:
 
 Examples:
   bash tools/run_train.sh train_residual_sac.yaml --gpu_id 0
-  bash tools/run_train.sh /abs/path/to/train_pld_task0_m06_boot50_w100_xi05_sched300k.yaml --gpu_id 1 seed=1
+  bash tools/run_train.sh train_pld_residual_sac.yaml --gpu_id 1
 EOF
 }
 

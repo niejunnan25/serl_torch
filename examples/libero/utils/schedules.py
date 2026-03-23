@@ -4,22 +4,6 @@ from __future__ import annotations
 from omegaconf import DictConfig
 
 
-def _scheduled_residual_scale(cfg: DictConfig, phase_scale: float, global_policy_step: int) -> float:
-    sched_cfg = cfg.training.get("residual_scale_scheduler", None)
-    if sched_cfg is None or (not bool(sched_cfg.get("enabled", False))):
-        return float(phase_scale)
-
-    min_scale = float(sched_cfg.get("min_scale", phase_scale))
-    warmup_steps = int(sched_cfg.get("warmup_steps", 0))
-    anneal_steps = int(sched_cfg.get("anneal_steps", 1))
-    if global_policy_step < warmup_steps:
-        return float(min_scale)
-    if anneal_steps <= 0:
-        return float(phase_scale)
-    progress = min(1.0, max(0.0, (global_policy_step - warmup_steps) / float(anneal_steps)))
-    return float(min_scale + (float(phase_scale) - min_scale) * progress)
-
-
 def _scheduled_xi(cfg: DictConfig, base_xi: float, global_policy_step: int) -> float:
     sched_cfg = cfg.training.get("xi_scheduler", None)
     if sched_cfg is None or (not bool(sched_cfg.get("enabled", False))):

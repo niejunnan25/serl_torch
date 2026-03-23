@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -16,12 +16,19 @@ from .setup import (
 )
 
 
+def _clone_obs_tree(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _clone_obs_tree(v) for k, v in value.items()}
+    return np.array(value, copy=True)
+
+
 class LiberoTaskEnv:
     def __init__(
         self,
         *,
         suite_name: str,
         task_id: int,
+        action_dim: Optional[int] = None,
         resolution: int = 256,
         num_steps_wait: int = 10,
         max_episode_steps: Optional[int] = None,
@@ -75,6 +82,19 @@ class LiberoTaskEnv:
             "camera_widths": self.resolution,
         }
         self.env = OffScreenRenderEnv(**env_args)
+        env_action_shape = getattr(self.env.action_space, "shape", None)
+        if env_action_shape is None:
+            raise ValueError("Libero env action_space has no shape")
+        runtime_action_dim = int(np.prod(env_action_shape))
+        requested_action_dim = int(action_dim) if action_dim is not None else runtime_action_dim
+        if requested_action_dim <= 0:
+            raise ValueError(f"action_dim must be positive, got {requested_action_dim}")
+        if requested_action_dim != runtime_action_dim:
+            raise ValueError(
+                f"Configured env.action_dim ({requested_action_dim}) does not match env action space "
+                f"dim ({runtime_action_dim})"
+            )
+        self._action_dim = int(requested_action_dim)
         if self.env_seed_mode == "fixed":
             if self.fixed_env_seed is None:
                 raise ValueError("fixed_env_seed must be provided when env_seed_mode='fixed'")
@@ -103,6 +123,10 @@ class LiberoTaskEnv:
     def take_action_cnt(self) -> int:
         return int(self._take_action_cnt)
 
+    @property
+    def action_dim(self) -> int:
+        return int(self._action_dim)
+
     def expert_precheck(self, seed: int, episode_id: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
         del seed, episode_id
         return True, None
@@ -128,9 +152,11 @@ class LiberoTaskEnv:
             self.env.seed(int(seed))
         self.env.reset()
         obs = self.env.set_init_state(self.initial_states[self.current_init_state_idx])
-        dummy_action = [0.0] * 6 + [-1.0]
+        dummy_action = np.zeros((self._action_dim,), dtype=np.float32)
+        if self._action_dim > 0:
+            dummy_action[-1] = -1.0
         for _ in range(self.num_steps_wait):
-            obs, _, _, _ = self.env.step(dummy_action)
+            obs, _, _, _ = self.env.step(dummy_action.tolist())
         self.logger.info(
             "LIBERO reset: suite=%s task_id=%s episode_id=%s init_state_idx=%s seed=%s",
             self.suite_name,
@@ -156,6 +182,51 @@ class LiberoTaskEnv:
             }
         )
         return obs, float(reward), bool(done), False, info_dict
+
+    def step_chunk(self, actions: np.ndarray) -> Dict[str, Any]:
+        action_chunk = np.asarray(actions, dtype=np.float32)
+        if action_chunk.ndim == 1:
+            if action_chunk.size % self._action_dim != 0:
+                raise ValueError(
+                    "Flat action chunk size must be divisible by action_dim="
+                    f"{self._action_dim}, got {action_chunk.shape}"
+                )
+            action_chunk = action_chunk.reshape(-1, self._action_dim)
+        if action_chunk.ndim != 2 or action_chunk.shape[1] != self._action_dim:
+            raise ValueError(f"Unexpected action chunk shape: {action_chunk.shape}")
+
+        observations: List[Dict[str, Any]] = []
+        rewards: List[float] = []
+        dones: List[bool] = []
+        infos: List[Dict[str, Any]] = []
+
+        truncated = False
+        for step_action in action_chunk:
+            obs, reward, done, truncated, info = self.step(step_action)
+            # OffScreen envs may reuse internal observation buffers.
+            # Clone per-step observations so chunk history is immutable.
+            observations.append(_clone_obs_tree(obs))
+            rewards.append(float(reward))
+            dones.append(bool(done))
+            infos.append(dict(info))
+            if done or truncated:
+                break
+
+        if not observations:
+            raise RuntimeError("step_chunk received an empty action chunk")
+
+        return {
+            "obs": observations[-1],
+            "observations": observations,
+            "reward_sum": float(sum(rewards)),
+            "rewards": rewards,
+            "dones": dones,
+            "done": bool(dones[-1]),
+            "truncated": bool(truncated),
+            "infos": infos,
+            "info": dict(infos[-1]),
+            "num_steps": int(len(rewards)),
+        }
 
     def close(self, clear_cache: bool = False) -> None:
         del clear_cache

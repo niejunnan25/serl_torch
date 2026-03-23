@@ -64,7 +64,7 @@ def resolve_image_keys(cfg: DictConfig) -> Tuple[str, ...]:
     return image_keys
 
 
-def resolve_control_indices_from_cfg(cfg: DictConfig) -> np.ndarray:
+def resolve_control_indices_from_cfg(cfg: DictConfig, *, full_action_dim: int) -> np.ndarray:
     action_dim_cfg = cfg.residual.get("action_dim", None)
     action_dim = int(action_dim_cfg) if action_dim_cfg is not None else None
 
@@ -77,10 +77,34 @@ def resolve_control_indices_from_cfg(cfg: DictConfig) -> np.ndarray:
     control_gripper = bool(control_gripper_cfg) if control_gripper_cfg is not None else None
 
     return resolve_control_indices(
+        full_action_dim=int(full_action_dim),
         action_dim=action_dim,
         action_indices=action_indices,
         control_gripper=control_gripper,
     )
+
+
+def build_residual_action_transform(
+    *,
+    control_indices: np.ndarray,
+    residual_limits: np.ndarray,
+    full_action_dim: int,
+    chunk_horizon: int,
+    chunk_step_enabled: bool,
+    clip_gripper: bool,
+) -> Dict[str, Any]:
+    return {
+        "type": "residual_combined",
+        "control_indices": [int(v) for v in np.asarray(control_indices, dtype=np.int64).reshape(-1)],
+        "limits": [float(v) for v in np.asarray(residual_limits, dtype=np.float32).reshape(-1)],
+        "full_action_dim": int(full_action_dim),
+        "chunk_horizon": int(chunk_horizon),
+        "chunk_step_enabled": bool(chunk_step_enabled),
+        "clip_gripper": bool(clip_gripper),
+        "base_action_key": "base_action",
+        "base_action_chunk_key": "base_action_chunk",
+        "scale_key": "xi",
+    }
 
 
 def build_drq_agent(
@@ -88,10 +112,17 @@ def build_drq_agent(
     sample_obs: Dict[str, np.ndarray],
     action_dim: int,
     image_keys: Tuple[str, ...],
+    *,
+    critic_action_dim: int | None = None,
+    action_transform: Dict[str, Any] | None = None,
 ):
     from serl_launcher.agents.continuous.drq import DrQAgent
 
     sample_action = np.zeros((action_dim,), dtype=np.float32)
+    sample_critic_action = np.zeros(
+        (int(critic_action_dim) if critic_action_dim is not None else int(action_dim),),
+        dtype=np.float32,
+    )
     actor_optim_kwargs = build_optimizer_kwargs(cfg, for_temperature=False)
     critic_optim_kwargs = build_optimizer_kwargs(cfg, for_temperature=False)
     temp_optim_kwargs = build_optimizer_kwargs(cfg, for_temperature=True)
@@ -117,6 +148,7 @@ def build_drq_agent(
         int(cfg.seed),
         sample_obs,
         sample_action,
+        critic_actions=sample_critic_action,
         encoder_type=str(cfg.sac.encoder_type),
         shared_encoder=bool(cfg.sac.shared_encoder),
         use_proprio=bool(cfg.sac.use_proprio),
@@ -154,6 +186,7 @@ def build_drq_agent(
             else None
         ),
         temperature_init=float(cfg.sac.temperature_init),
+        action_transform=action_transform,
     )
 
 
