@@ -59,8 +59,8 @@ Usage:
   bash tools/run_train.sh <yaml_file_name.yaml|/abs/path/to/config.yaml> [--gpu_id N] [extra hydra overrides...]
 
 Examples:
-  bash tools/run_train.sh train_residual_sac_xi025_mix50_calql_on_utd2_start200.yaml --gpu_id 0
-  bash tools/run_train.sh /abs/path/to/train_residual_sac_xi035_mix25_calql_off_utd4_start1000.yaml --gpu_id 1 seed=1
+  bash tools/run_train.sh train_residual_sac.yaml --gpu_id 0
+  bash tools/run_train.sh train_pld_residual_sac.yaml --gpu_id 1
 EOF
 }
 
@@ -191,7 +191,8 @@ PY
 )"
 
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
-SUPPORT_DIR="$ROOT_DIR/outputs/libero/run_train_support/${STAMP}_${CONFIG_NAME}_gpu${GPU_ID}_$$"
+SUPPORT_ROOT="${RUN_TRAIN_SUPPORT_ROOT:-$ROOT_DIR/outputs/libero/run_train_support}"
+SUPPORT_DIR="$SUPPORT_ROOT/${STAMP}_${CONFIG_NAME}_gpu${GPU_ID}_$$"
 mkdir -p "$SUPPORT_DIR"
 
 ENV_LOG="$SUPPORT_DIR/env_server.log"
@@ -307,6 +308,7 @@ echo "Starting training..." | tee -a "$LAUNCH_LOG"
 cd "$ROOT_DIR"
 CUDA_VISIBLE_DEVICES="$GPU_ID" \
 bash "$TOOLS_DIR/train.sh" \
+    --config-path "$CONFIG_DIR" \
     --config-name "$CONFIG_NAME" \
     env.remote.host="$ENV_HOST" \
     env.remote.port="$ENV_PORT" \

@@ -28,13 +28,19 @@ from serl_torch.examples.libero.policy import (
     LiberoObservationCache,
     OpenPIChunkClient,
     as_numpy_action,
+    as_numpy_action_chunk,
     build_residual_limits,
     build_residual_step_obs,
     compose_residual_action,
+    compose_residual_action_chunk,
     select_action_chunk_window,
 )
-from serl_torch.examples.libero.utils import JsonlLogger, ensure_serl_launcher_importable
+from serl_torch.examples.libero.utils import (
+    JsonlLogger,
+    ensure_serl_launcher_importable,
+)
 from serl_torch.examples.libero.utils.config_utils import (
+    build_residual_action_transform,
     build_drq_agent,
     resolve_control_indices_from_cfg,
     resolve_image_keys,
@@ -54,10 +60,13 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
     common_kwargs = dict(
         suite_name=str(cfg.task.suite_name),
         task_id=int(cfg.task.task_id),
+        action_dim=cfg.get("env", {}).get("action_dim", None),
         resolution=int(cfg.task.resolution),
         num_steps_wait=int(cfg.task.num_steps_wait),
         max_episode_steps=(
-            int(cfg.task.max_episode_steps) if cfg.task.max_episode_steps is not None else None
+            int(cfg.task.max_episode_steps)
+            if cfg.task.max_episode_steps is not None
+            else None
         ),
         libero_root=cfg.get("libero_root", None),
         openpi_root=cfg.get("openpi_root", None),
@@ -86,7 +95,9 @@ def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
+    )
     logger = logging.getLogger("libero_eval_residual_fast")
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
@@ -109,7 +120,9 @@ def main(cfg: DictConfig) -> None:
     norm_cfg = cfg.get("normalization", None)
     if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
         task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
-        normalizer = load_normalizer(task_key, stats_dir=norm_cfg.get("stats_dir", None))
+        normalizer = load_normalizer(
+            task_key, stats_dir=norm_cfg.get("stats_dir", None)
+        )
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
 
@@ -124,14 +137,48 @@ def main(cfg: DictConfig) -> None:
     if stack_horizon != 1:
         raise ValueError("Only obs_stack_horizon=1 is currently supported")
 
-    control_indices = resolve_control_indices_from_cfg(cfg)
-    action_dim = int(len(control_indices))
+    env_action_dim_cfg = cfg.get("env", {}).get("action_dim", None)
+    if env_action_dim_cfg is None:
+        raise ValueError("env.action_dim must be set in yaml (e.g. env.action_dim: 7)")
+    env_action_dim = int(env_action_dim_cfg)
+    if env_action_dim <= 0:
+        raise ValueError(f"env.action_dim must be positive, got {env_action_dim}")
+
+    control_indices = resolve_control_indices_from_cfg(
+        cfg, full_action_dim=env_action_dim
+    )
+    step_action_dim = int(len(control_indices))
     chunk_horizon = int(cfg.residual.chunk_horizon)
     residual_xi = float(cfg.residual.get("xi", 1.0))
+    chunk_step_cfg = cfg.get("chunk_step", None)
+    chunk_step_enabled = (
+        bool(chunk_step_cfg.get("enabled", False))
+        if chunk_step_cfg is not None
+        else False
+    )
+    agent_action_dim = (
+        int(step_action_dim * chunk_horizon)
+        if chunk_step_enabled
+        else int(step_action_dim)
+    )
+    critic_action_dim = (
+        int(env_action_dim * chunk_horizon)
+        if chunk_step_enabled
+        else int(env_action_dim)
+    )
+    residual_action_limits_cfg = cfg.residual.get("action_limits", None)
     residual_limits = build_residual_limits(
         control_indices,
-        arm_limit=float(cfg.residual.arm_delta_limit),
-        gripper_limit=float(cfg.residual.gripper_delta_limit),
+        action_limits=residual_action_limits_cfg,
+        full_action_dim=env_action_dim,
+    )
+    action_transform = build_residual_action_transform(
+        control_indices=control_indices,
+        residual_limits=residual_limits,
+        full_action_dim=env_action_dim,
+        chunk_horizon=chunk_horizon,
+        chunk_step_enabled=chunk_step_enabled,
+        clip_gripper=bool(cfg.residual.clip_gripper),
     )
 
     checkpoint_path = str(cfg.eval.checkpoint_path) if cfg.eval.checkpoint_path else ""
@@ -152,45 +199,31 @@ def main(cfg: DictConfig) -> None:
     total_success = 0
     total_env_steps = 0
     total_policy_steps = 0
-    skipped_seeds = 0
-    seed_attempts = 0
+    precheck_failed_episodes = 0
     total_probing_steps = 0
     obs_cache = LiberoObservationCache()
 
-    max_seed_attempts_cfg = cfg.eval.get("max_seed_attempts", None)
-    if max_seed_attempts_cfg is None:
-        max_seed_attempts = max(1000, int(cfg.eval.episodes) * 100)
-    else:
-        max_seed_attempts = int(max_seed_attempts_cfg)
-    fixed_seed_cfg = cfg.eval.get("fixed_seed", None)
-    fixed_seed = None if fixed_seed_cfg is None else int(fixed_seed_cfg)
-    if fixed_seed is not None:
-        logger.info("Evaluation fixed_seed enabled: all episodes use seed=%s", fixed_seed)
+    eval_seed = int(cfg.eval.get("seed", 7))
+    logger.info("Evaluation uses fixed seed=%s for all episodes", eval_seed)
 
     try:
         episode_id = 0
-        seed_cursor = int(cfg.task.seed_base)
         while episode_id < int(cfg.eval.episodes):
-            seed_attempts += 1
-            if seed_attempts > max_seed_attempts:
-                raise RuntimeError(
-                    "Exceeded max seed attempts during evaluation. "
-                    f"attempts={seed_attempts}, completed_episodes={episode_id}, skipped_seeds={skipped_seeds}"
-                )
-            if fixed_seed is None:
-                seed = int(seed_cursor)
-                seed_cursor += 1
-            else:
-                seed = int(fixed_seed)
+            seed = int(eval_seed)
 
             if bool(cfg.eval.get("expert_check", False)):
-                passed, _ = env.expert_precheck(seed=seed, episode_id=episode_id)
+                passed, _ = env.expert_precheck(seed=seed, init_episode_idx=episode_id)
                 if not passed:
-                    skipped_seeds += 1
-                    logger.warning("skip seed=%s: expert precheck failed", seed)
+                    precheck_failed_episodes += 1
+                    logger.warning(
+                        "expert precheck failed for eval episode=%s (seed=%s); counting as failed episode",
+                        episode_id,
+                        seed,
+                    )
+                    episode_id += 1
                     continue
 
-            obs_raw = env.reset(seed=seed, episode_id=episode_id)
+            obs_raw = env.reset(seed=seed, init_episode_idx=episode_id)
             obs_cache.clear()
             success = False
             episode_steps = 0
@@ -198,18 +231,28 @@ def main(cfg: DictConfig) -> None:
 
             max_episode_steps = int(env.step_limit)
             if cfg.eval.max_env_steps_per_episode is not None:
-                max_episode_steps = min(max_episode_steps, int(cfg.eval.max_env_steps_per_episode))
+                max_episode_steps = min(
+                    max_episode_steps, int(cfg.eval.max_env_steps_per_episode)
+                )
 
-            probing_steps_target = sample_probing_steps(cfg.eval, episode_horizon=max_episode_steps)
+            probing_steps_target = sample_probing_steps(
+                cfg.eval, episode_horizon=max_episode_steps
+            )
             if probing_steps_target > 0:
-                probing_remaining = int(min(probing_steps_target, max_episode_steps - episode_steps))
+                probing_remaining = int(
+                    min(probing_steps_target, max_episode_steps - episode_steps)
+                )
                 while probing_remaining > 0 and episode_steps < max_episode_steps:
                     probe_chunk, probe_info = openpi_client.infer_chunk(
                         obs_raw,
                         env.current_instruction,
                         obs_cache=obs_cache,
                     )
-                    probe_base_chunk = select_action_chunk_window(probe_chunk, horizon=chunk_horizon)
+                    probe_base_chunk = select_action_chunk_window(
+                        probe_chunk,
+                        horizon=chunk_horizon,
+                        action_dim=env_action_dim,
+                    )
                     probe_done = False
                     for probe_step in range(chunk_horizon):
                         if probing_remaining <= 0 or episode_steps >= max_episode_steps:
@@ -230,18 +273,25 @@ def main(cfg: DictConfig) -> None:
                                 "global_policy_step": int(total_policy_steps),
                                 "episode_id": episode_id,
                                 "episode_step": episode_steps,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
                                 "is_probing": True,
                                 "replan_point": bool(probe_step == 0),
                                 "chunk_step": int(probe_step),
                                 "chunk_horizon": int(chunk_horizon),
-                                "infer_e2e_ms": probe_info.get("e2e_ms") if probe_step == 0 else None,
-                                "infer_policy_ms": probe_info.get("policy_ms") if probe_step == 0 else None,
-                                "infer_server_ms": probe_info.get("server_ms") if probe_step == 0 else None,
+                                "infer_e2e_ms": probe_info.get("e2e_ms")
+                                if probe_step == 0
+                                else None,
+                                "infer_policy_ms": probe_info.get("policy_ms")
+                                if probe_step == 0
+                                else None,
+                                "infer_server_ms": probe_info.get("server_ms")
+                                if probe_step == 0
+                                else None,
                                 "a_base": base_action.tolist(),
-                                "a_res": [0.0] * action_dim,
+                                "a_res": [0.0] * step_action_dim,
                                 "a_final": base_action.tolist(),
-                                "residual_scale": 0.0,
                                 "reward": float(reward),
                                 "done": bool(done),
                                 "success": bool(success),
@@ -263,7 +313,11 @@ def main(cfg: DictConfig) -> None:
                     env.current_instruction,
                     obs_cache=obs_cache,
                 )
-                base_chunk = select_action_chunk_window(openpi_chunk, horizon=chunk_horizon)
+                base_chunk = select_action_chunk_window(
+                    openpi_chunk,
+                    horizon=chunk_horizon,
+                    action_dim=env_action_dim,
+                )
                 next_obs_raw = obs_raw
                 for chunk_step in range(chunk_horizon):
                     if episode_steps >= max_episode_steps:
@@ -277,74 +331,175 @@ def main(cfg: DictConfig) -> None:
                         stack_horizon=stack_horizon,
                         normalizer=normalizer,
                         obs_cache=obs_cache,
+                        base_action_chunk=(base_chunk if chunk_step_enabled else None),
+                        xi=float(residual_xi),
                     )
 
                     if checkpoint_path and agent is None:
                         agent = build_drq_agent(
                             cfg,
                             sample_obs=obs_input,
-                            action_dim=action_dim,
+                            action_dim=agent_action_dim,
                             image_keys=image_keys,
+                            critic_action_dim=critic_action_dim,
+                            action_transform=action_transform,
                         )
                         agent = load_agent_checkpoint(checkpoint_path, agent)
                         checkpoint_loaded = True
-                        logger.info("Loaded residual checkpoint from: %s", checkpoint_path)
-
-                    if checkpoint_loaded and agent is not None:
-                        sampled = agent.sample_actions(
-                            obs_input,
-                            deterministic=bool(cfg.eval.deterministic),
+                        logger.info(
+                            "Loaded residual checkpoint from: %s", checkpoint_path
                         )
-                        residual_step_action = as_numpy_action(sampled, action_dim)
-                    else:
-                        residual_step_action = np.zeros((action_dim,), dtype=np.float32)
 
-                    delta_action, final_action = compose_residual_action(
-                        base_action=base_chunk[chunk_step],
-                        residual_action=residual_step_action,
-                        indices=control_indices,
-                        limits=residual_limits,
-                        residual_scale=float(cfg.eval.residual_scale),
-                        xi=residual_xi,
-                        clip_gripper=bool(cfg.residual.clip_gripper),
-                    )
+                    if chunk_step_enabled:
+                        if checkpoint_loaded and agent is not None:
+                            sampled = agent.sample_actions(
+                                obs_input,
+                                deterministic=bool(cfg.eval.deterministic),
+                            )
+                            residual_chunk = as_numpy_action_chunk(
+                                sampled,
+                                action_dim=step_action_dim,
+                                chunk_horizon=chunk_horizon,
+                            )
+                        else:
+                            residual_chunk = np.zeros(
+                                (chunk_horizon, step_action_dim), dtype=np.float32
+                            )
 
-                    total_policy_steps += 1
-                    next_obs_raw, reward, env_done, _, info = env.step(final_action)
-                    episode_steps += 1
-                    total_env_steps += 1
-                    episode_return += float(reward)
-                    success = bool(info["success"])
+                        execute_horizon = int(
+                            min(chunk_horizon, max_episode_steps - episode_steps)
+                        )
+                        executed_base_chunk = base_chunk[:execute_horizon]
+                        executed_residual_chunk = residual_chunk[:execute_horizon]
+                        delta_chunk, final_chunk = compose_residual_action_chunk(
+                            base_chunk=executed_base_chunk,
+                            residual_chunk=executed_residual_chunk,
+                            indices=control_indices,
+                            limits=residual_limits,
+                            xi=residual_xi,
+                            clip_gripper=bool(cfg.residual.clip_gripper),
+                        )
 
-                    timeout = bool(episode_steps >= max_episode_steps)
-                    done = bool(env_done or timeout)
-                    step_logger.write(
-                        {
-                            "global_env_step": int(total_env_steps),
-                            "global_policy_step": int(total_policy_steps),
-                            "episode_id": episode_id,
-                            "episode_step": episode_steps,
-                            "seed": int(env.last_seed if env.last_seed is not None else seed),
-                            "is_probing": False,
-                            "replan_point": bool(chunk_step == 0),
-                            "chunk_step": int(chunk_step),
-                            "chunk_horizon": int(chunk_horizon),
-                            "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                            "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                            "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
-                            "a_base": base_chunk[chunk_step].tolist(),
-                            "a_res": delta_action.tolist(),
-                            "a_final": final_action.tolist(),
-                            "residual_scale": float(cfg.eval.residual_scale),
-                            "reward": float(reward),
-                            "done": bool(done),
-                            "success": bool(success),
-                        }
-                    )
+                        total_policy_steps += 1
+                        chunk_result = env.step_chunk(final_chunk)
+                        next_obs_raw = chunk_result["obs"]
+                        chunk_rewards = [float(v) for v in chunk_result["rewards"]]
+                        chunk_infos = [dict(v) for v in chunk_result["infos"]]
+                        chunk_dones = [bool(v) for v in chunk_result["dones"]]
 
-                    if done:
-                        decision_done = True
+                        for executed_step in range(len(chunk_rewards)):
+                            reward = float(chunk_rewards[executed_step])
+                            info = chunk_infos[executed_step]
+                            episode_steps += 1
+                            total_env_steps += 1
+                            episode_return += reward
+                            success = bool(info.get("success", success))
+                            timeout = bool(episode_steps >= max_episode_steps)
+                            done = bool(chunk_dones[executed_step] or timeout)
+                            step_logger.write(
+                                {
+                                    "global_env_step": int(total_env_steps),
+                                    "global_policy_step": int(total_policy_steps),
+                                    "episode_id": episode_id,
+                                    "episode_step": episode_steps,
+                                    "seed": int(
+                                        env.last_seed
+                                        if env.last_seed is not None
+                                        else seed
+                                    ),
+                                    "is_probing": False,
+                                    "replan_point": bool(executed_step == 0),
+                                    "chunk_step": int(executed_step),
+                                    "chunk_horizon": int(execute_horizon),
+                                    "infer_e2e_ms": infer_info.get("e2e_ms")
+                                    if executed_step == 0
+                                    else None,
+                                    "infer_policy_ms": infer_info.get("policy_ms")
+                                    if executed_step == 0
+                                    else None,
+                                    "infer_server_ms": infer_info.get("server_ms")
+                                    if executed_step == 0
+                                    else None,
+                                    "a_base": executed_base_chunk[
+                                        executed_step
+                                    ].tolist(),
+                                    "a_res": delta_chunk[executed_step].tolist(),
+                                    "a_final": final_chunk[executed_step].tolist(),
+                                    "reward": float(reward),
+                                    "done": bool(done),
+                                    "success": bool(success),
+                                }
+                            )
+                            if done:
+                                decision_done = True
+                                break
                         break
+                    else:
+                        if checkpoint_loaded and agent is not None:
+                            sampled = agent.sample_actions(
+                                obs_input,
+                                deterministic=bool(cfg.eval.deterministic),
+                            )
+                            residual_step_action = as_numpy_action(
+                                sampled, step_action_dim
+                            )
+                        else:
+                            residual_step_action = np.zeros(
+                                (step_action_dim,), dtype=np.float32
+                            )
+
+                        delta_action, final_action = compose_residual_action(
+                            base_action=base_chunk[chunk_step],
+                            residual_action=residual_step_action,
+                            indices=control_indices,
+                            limits=residual_limits,
+                            xi=residual_xi,
+                            clip_gripper=bool(cfg.residual.clip_gripper),
+                        )
+
+                        total_policy_steps += 1
+                        next_obs_raw, reward, env_done, _, info = env.step(final_action)
+                        episode_steps += 1
+                        total_env_steps += 1
+                        episode_return += float(reward)
+                        success = bool(info["success"])
+
+                        timeout = bool(episode_steps >= max_episode_steps)
+                        done = bool(env_done or timeout)
+                        step_logger.write(
+                            {
+                                "global_env_step": int(total_env_steps),
+                                "global_policy_step": int(total_policy_steps),
+                                "episode_id": episode_id,
+                                "episode_step": episode_steps,
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
+                                "is_probing": False,
+                                "replan_point": bool(chunk_step == 0),
+                                "chunk_step": int(chunk_step),
+                                "chunk_horizon": int(chunk_horizon),
+                                "infer_e2e_ms": infer_info.get("e2e_ms")
+                                if chunk_step == 0
+                                else None,
+                                "infer_policy_ms": infer_info.get("policy_ms")
+                                if chunk_step == 0
+                                else None,
+                                "infer_server_ms": infer_info.get("server_ms")
+                                if chunk_step == 0
+                                else None,
+                                "a_base": base_chunk[chunk_step].tolist(),
+                                "a_res": delta_action.tolist(),
+                                "a_final": final_action.tolist(),
+                                "reward": float(reward),
+                                "done": bool(done),
+                                "success": bool(success),
+                            }
+                        )
+
+                        if done:
+                            decision_done = True
+                            break
 
                 obs_raw = next_obs_raw
                 if decision_done:
@@ -369,7 +524,9 @@ def main(cfg: DictConfig) -> None:
                 tb_writer.add_scalar("eval/success", int(success), episode_id)
                 tb_writer.add_scalar("eval/return", float(episode_return), episode_id)
                 tb_writer.add_scalar("eval/length", int(episode_steps), episode_id)
-                tb_writer.add_scalar("eval/running_success_rate", running_success_rate, episode_id)
+                tb_writer.add_scalar(
+                    "eval/running_success_rate", running_success_rate, episode_id
+                )
 
             logger.info(
                 "episode=%s success=%s steps=%s return=%.2f success_rate=%.3f",
@@ -390,15 +547,12 @@ def main(cfg: DictConfig) -> None:
             "checkpoint_loaded": checkpoint_loaded,
             "checkpoint_path": checkpoint_path,
             "chunk_horizon": int(chunk_horizon),
-            "residual_action_dim": int(action_dim),
+            "residual_action_dim": int(agent_action_dim),
+            "chunk_step_enabled": bool(chunk_step_enabled),
             "residual_xi": float(residual_xi),
             "expert_check": bool(cfg.eval.expert_check),
-            "skipped_seeds": int(skipped_seeds),
-            "seed_attempts": int(seed_attempts),
-            "max_seed_attempts": int(max_seed_attempts),
-            "seed_start": int(cfg.task.seed_base),
-            "seed_next": int(seed_cursor),
-            "fixed_seed": int(fixed_seed) if fixed_seed is not None else None,
+            "eval_seed": int(eval_seed),
+            "expert_precheck_failed_episodes": int(precheck_failed_episodes),
             "enable_base_probing": bool(cfg.eval.get("enable_base_probing", False)),
             "probing_alpha": (
                 float(cfg.eval.get("probing_alpha"))

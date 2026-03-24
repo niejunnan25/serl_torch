@@ -17,7 +17,11 @@ from .checkpoint import (
     _write_checkpoint_payload,
 )
 from .profiling import _RuntimeProfiler
-from .replay_batch import _PreparedBatch, _consume_prepared_replay_batch, _prepare_replay_batch
+from .replay_batch import (
+    _PreparedBatch,
+    _consume_prepared_replay_batch,
+    _prepare_replay_batch,
+)
 
 if TYPE_CHECKING:
     from serl_launcher.data.replay_buffer import ReplayBuffer
@@ -27,10 +31,14 @@ if TYPE_CHECKING:
 def _sync_agent_modules_inplace(target_agent: Any, source_agent: Any) -> None:
     for name, source_module in source_agent.state.modules.items():
         if name in target_agent.state.modules:
-            target_agent.state.modules[name].load_state_dict(source_module.state_dict(), strict=True)
+            target_agent.state.modules[name].load_state_dict(
+                source_module.state_dict(), strict=True
+            )
     for name, source_module in source_agent.state.target_modules.items():
         if name in target_agent.state.target_modules:
-            target_agent.state.target_modules[name].load_state_dict(source_module.state_dict(), strict=True)
+            target_agent.state.target_modules[name].load_state_dict(
+                source_module.state_dict(), strict=True
+            )
     target_agent.state.step = int(source_agent.state.step)
 
 
@@ -58,20 +66,29 @@ class _MixedBatchPrefetcher:
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._queue: "queue.Queue[_PreparedBatch]" = queue.Queue(maxsize=self.queue_size)
+        self._queue: "queue.Queue[_PreparedBatch]" = queue.Queue(
+            maxsize=self.queue_size
+        )
         self._exception: Optional[BaseException] = None
 
         self._use_cuda_stream = bool(
-            self.to_device and self.device is not None and self.device.type == "cuda" and torch.cuda.is_available()
+            self.to_device
+            and self.device is not None
+            and self.device.type == "cuda"
+            and torch.cuda.is_available()
         )
         self._cuda_stream = (
-            torch.cuda.Stream(device=self.device) if self._use_cuda_stream and self.device is not None else None
+            torch.cuda.Stream(device=self.device)
+            if self._use_cuda_stream and self.device is not None
+            else None
         )
 
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._thread = threading.Thread(target=self._run, daemon=True, name="libero-batch-prefetch")
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="libero-batch-prefetch"
+        )
         self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -157,7 +174,11 @@ def _sample_mixed_batch(
     offline_ratio: float,
     symmetric_replay: bool = False,
 ) -> Tuple[Dict[str, Any], int, int]:
-    if offline_buffer is None or len(offline_buffer) == 0 or ((not symmetric_replay) and offline_ratio <= 0.0):
+    if (
+        offline_buffer is None
+        or len(offline_buffer) == 0
+        or ((not symmetric_replay) and offline_ratio <= 0.0)
+    ):
         return online_buffer.sample(batch_size=batch_size), int(batch_size), 0
 
     if symmetric_replay:
@@ -179,6 +200,10 @@ def _sample_mixed_batch(
     offline_batch = offline_buffer.sample(batch_size=offline_bs)
     mixed_batch = concat_batches(offline_batch, online_batch, axis=0)
     return mixed_batch, int(online_bs), int(offline_bs)
+
+
+def _replay_progress_size(buffer: Any) -> int:
+    return int(getattr(buffer, "num_steps", len(buffer)))
 
 
 class _AsyncLearner:
@@ -256,7 +281,9 @@ class _AsyncLearner:
                 profiler=self.profiler,
             )
             self._prefetcher.start()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="libero-async-learner")
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="libero-async-learner"
+        )
         self._thread.start()
 
     def stop(self, timeout: float = 10.0) -> None:
@@ -267,12 +294,16 @@ class _AsyncLearner:
             self._thread.join(timeout=timeout)
         self.sync_now()
 
-    def sample_actor_action(self, obs_input: Dict[str, np.ndarray], action_dim: int) -> np.ndarray:
+    def sample_actor_action(
+        self, obs_input: Dict[str, np.ndarray], action_dim: int
+    ) -> np.ndarray:
         start = time.perf_counter()
         with self.actor_lock:
             sampled = self.actor_agent.sample_actions(obs_input, deterministic=False)
         if self.profiler is not None:
-            self.profiler.record_duration("agent_sample_actions", (time.perf_counter() - start) * 1000.0)
+            self.profiler.record_duration(
+                "agent_sample_actions", (time.perf_counter() - start) * 1000.0
+            )
         return as_numpy_action(sampled, action_dim)
 
     def save_checkpoint(self, checkpoint_dir: str, *, step: int, keep: int) -> None:
@@ -314,7 +345,7 @@ class _AsyncLearner:
 
     def _sample_batch(self) -> Optional[Tuple[Dict[str, Any], int, int]]:
         with self.replay_lock:
-            if len(self.online_buffer) < self.training_starts:
+            if _replay_progress_size(self.online_buffer) < self.training_starts:
                 return None
             batch, online_bs, offline_bs = _sample_mixed_batch(
                 self.online_buffer,
@@ -377,7 +408,9 @@ class _AsyncLearner:
                     )
                 info["online_batch_size"] = int(online_bs)
                 info["offline_batch_size"] = int(offline_bs)
-                info["offline_fraction"] = float(offline_bs / max(1, online_bs + offline_bs))
+                info["offline_fraction"] = float(
+                    offline_bs / max(1, online_bs + offline_bs)
+                )
                 self.last_update_info = info
                 self.update_steps += 1
                 if self.update_steps % self.update_frequency == 0:

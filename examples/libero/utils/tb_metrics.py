@@ -6,7 +6,12 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 
 
-def _log_info_scalars(tb_writer, info: Dict[str, Any], global_step: int, pairs: Tuple[Tuple[str, str], ...]) -> None:
+def _log_info_scalars(
+    tb_writer,
+    info: Dict[str, Any],
+    global_step: int,
+    pairs: Tuple[Tuple[str, str], ...],
+) -> None:
     for tb_key, info_key in pairs:
         if info_key in info and info[info_key] is not None:
             tb_writer.add_scalar(tb_key, float(info[info_key]), global_step)
@@ -15,7 +20,6 @@ def _log_info_scalars(tb_writer, info: Dict[str, Any], global_step: int, pairs: 
 def _new_tb_step_window() -> Dict[str, List[Any]]:
     return {
         "reward": [],
-        "residual_scale": [],
         "xi": [],
         "delta_norm": [],
         "policy_norm": [],
@@ -33,7 +37,6 @@ def _append_tb_step_window(
     step_window: Dict[str, List[Any]],
     *,
     reward: float,
-    residual_scale: float,
     xi: float,
     residual_action: np.ndarray,
     delta_action: np.ndarray,
@@ -48,7 +51,6 @@ def _append_tb_step_window(
     final_action = np.asarray(final_action, dtype=np.float32).reshape(-1)
 
     step_window["reward"].append(float(reward))
-    step_window["residual_scale"].append(float(residual_scale))
     step_window["xi"].append(float(xi))
     step_window["delta_norm"].append(float(np.linalg.norm(delta_action)))
     step_window["policy_norm"].append(float(np.linalg.norm(residual_action)))
@@ -82,7 +84,6 @@ def _flush_tb_step_window(
     scalar_lists = (
         ("step/reward", "reward"),
         ("step/reward_nonzero_rate", "reward"),
-        ("step/residual_scale", "residual_scale"),
         ("step/xi", "xi"),
         ("step/residual_action_magnitude", "delta_norm"),
         ("step/residual_policy_action_magnitude", "policy_norm"),
@@ -121,7 +122,9 @@ def _flush_tb_step_window(
             float(np.mean(residual_abs >= 0.999)),
             global_env_step,
         )
-        for dim_idx, control_idx in enumerate(np.asarray(control_indices, dtype=np.int64).tolist()):
+        for dim_idx, control_idx in enumerate(
+            np.asarray(control_indices, dtype=np.int64).tolist()
+        ):
             dim_abs = residual_abs[:, dim_idx]
             tb_writer.add_scalar(
                 f"step/residual_policy_action_abs_dim_{int(control_idx)}",
@@ -147,7 +150,9 @@ def _flush_tb_step_window(
             float(np.percentile(controlled_delta_abs, 95)),
             global_env_step,
         )
-        for dim_idx, control_idx in enumerate(np.asarray(control_indices, dtype=np.int64).tolist()):
+        for dim_idx, control_idx in enumerate(
+            np.asarray(control_indices, dtype=np.int64).tolist()
+        ):
             dim_abs = controlled_delta_abs[:, dim_idx]
             tb_writer.add_scalar(
                 f"step/residual_delta_abs_dim_{int(control_idx)}",
@@ -163,16 +168,22 @@ def _flush_tb_step_window(
         )
 
     if histogram and residual_actions.size > 0:
-        tb_writer.add_histogram("hist/residual_policy_action", residual_actions.reshape(-1), global_env_step)
+        tb_writer.add_histogram(
+            "hist/residual_policy_action", residual_actions.reshape(-1), global_env_step
+        )
     if histogram and delta_actions.size > 0:
         controlled_delta = delta_actions[:, np.asarray(control_indices, dtype=np.int64)]
-        tb_writer.add_histogram("hist/residual_delta_action", controlled_delta.reshape(-1), global_env_step)
+        tb_writer.add_histogram(
+            "hist/residual_delta_action", controlled_delta.reshape(-1), global_env_step
+        )
 
     for values in step_window.values():
         values.clear()
 
 
-def _log_update_metrics(tb_writer, update_info: Dict[str, Any], global_env_step: int) -> None:
+def _log_update_metrics(
+    tb_writer, update_info: Dict[str, Any], global_env_step: int
+) -> None:
     _log_info_scalars(
         tb_writer,
         update_info,

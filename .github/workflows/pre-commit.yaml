@@ -9,6 +9,19 @@ jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-python@v3
-    - uses: pre-commit/action@v3.0.0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run pre-commit on PR diff
+        if: github.event_name == 'pull_request'
+        uses: pre-commit/action@v3.0.0
+        with:
+          extra_args: --from-ref origin/${{ github.base_ref }} --to-ref HEAD
+      - name: Run pre-commit on all files (push to main)
+        if: github.event_name == 'push'
+        uses: pre-commit/action@v3.0.0
+        with:
+          extra_args: --all-files

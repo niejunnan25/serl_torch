@@ -1,9 +1,15 @@
+# ---------------------------
+# Global / Paths
+# ---------------------------
 seed: 0
 openpi_root: null
 libero_root: null
 libero_config_dir: null
 libero_datasets_root: null
 
+# ---------------------------
+# Task / Environment
+# ---------------------------
 task:
   suite_name: libero_10
   task_id: 8
@@ -20,23 +26,36 @@ openpi:
   port: 30001
 
 env:
+  action_dim: 7
   backend: remote
   remote:
     host: 127.0.0.1
     port: 30000
     timeout_sec: 180.0
 
+# ---------------------------
+# Residual Policy
+# ---------------------------
 residual:
   image_keys: [image, wrist_image]
+  xi: 0.35
   action_dim: 7
   action_indices: null
-  xi: 0.35
+  action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   control_gripper: true
-  arm_delta_limit: 1.0
-  gripper_delta_limit: 1.0
   clip_gripper: true
   chunk_horizon: 5
 
+chunk_step:
+  enabled: false
+  sample_stride: 1
+  require_full_horizon: false
+  pad_action_to_horizon: true
+  scheduler_clock: env_step
+
+# ---------------------------
+# SAC Agent
+# ---------------------------
 sac:
   policy_hidden_dims: [256, 256, 256]
   critic_hidden_dims: [256, 256, 256]
@@ -81,6 +100,9 @@ replay:
   capacity: 250000
   batch_size: 128
 
+# ---------------------------
+# Offline Data
+# ---------------------------
 offline:
   enabled: true
   dataset_paths:
@@ -99,25 +121,34 @@ offline:
     max_env_steps_per_episode: null
     only_success: true
 
+# ---------------------------
+# Training Loop
+# ---------------------------
 training:
+  # Budget / rollout
   max_env_steps_per_episode: null
-  max_online_env_steps: 300000
+  max_train_env_steps: 300000
   expert_check: false
-  warmup_base_episodes: 5
-  warmup_base_steps: 0
+
+  # Warmup / gating
+  warmup:
+    episodes: 5
   random_steps: 0
-  random_action_scale: 0.3
   enable_base_probing: false
   probing_alpha: null
   probing_min_steps: 0
   probing_max_steps: 0
-  training_starts: 200
+
+  # Learner updates
+  training_starts: 1000
   update_every: 1
   updates_per_step: 1
   async:
     enabled: false
     update_frequency: 10
     idle_sleep_sec: 0.002
+
+  # Performance
   replay_prefetch:
     enabled: true
     queue_size: 2
@@ -128,20 +159,21 @@ training:
     window_size: 2048
     log_period_steps: 500
     log_file: profiling_logs.jsonl
-  checkpoint_period: 2500
-  keep_checkpoints: 0
-  checkpoint_dir: checkpoints
+
+  # Checkpointing
+  checkpoint:
+    every_steps: 2500
+    keep: 0
+    dir: checkpoints
+
+  # Async evaluation
   async_eval:
     enabled: true
-    every_steps: 5000
+    every_episodes: 20
     episodes: 50
-    seed_base: 1000000
-    seed_stride: 10000
-    fixed_seed: 7
+    seed: 7
     expert_check: false
     deterministic: true
-    residual_scale: 1.0
-    max_seed_attempts: 5000
     enable_base_probing: false
     probing_alpha: null
     probing_min_steps: 0
@@ -158,6 +190,10 @@ training:
     summary_jsonl: async_eval_results.jsonl
     eval_script: null
     python_executable: null
+    xi_mode: checkpoint_schedule  # checkpoint_schedule | base | fixed
+    fixed_xi: null
+
+  # Optional pretrain / scheduler
   calql_pretrain:
     enabled: true
     steps: 2000
@@ -165,24 +201,21 @@ training:
     alpha: 1.0
     n_actions: 10
     temperature: 1.0
-  residual_scale_scheduler:
-    enabled: false
-    type: linear
-    min_scale: 0.1
-    warmup_steps: 0
-    anneal_steps: 20000
   xi_scheduler:
     enabled: false
     type: linear
     min_xi: 0.05
     warmup_steps: 0
     anneal_steps: 20000
+
   phases:
     - name: residual_rl
       episodes: 2000
-      residual_scale: 1.0
       train: true
 
+# ---------------------------
+# Logging / Misc
+# ---------------------------
 logging:
   step_log_file: step_logs.jsonl
   episode_log_file: episode_logs.jsonl

@@ -36,6 +36,7 @@ class DrQAgent(SACAgent):
         actor_def,
         critic_def,
         temperature_def,
+        critic_actions=None,
         actor_optimizer_kwargs={"learning_rate": 3e-4},
         critic_optimizer_kwargs={"learning_rate": 3e-4},
         temperature_optimizer_kwargs={"learning_rate": 3e-4},
@@ -57,6 +58,7 @@ class DrQAgent(SACAgent):
             actor_def=actor_def,
             critic_def=critic_def,
             temperature_def=temperature_def,
+            critic_actions=critic_actions,
             actor_optimizer_kwargs=actor_optimizer_kwargs,
             critic_optimizer_kwargs=critic_optimizer_kwargs,
             temperature_optimizer_kwargs=temperature_optimizer_kwargs,
@@ -79,6 +81,7 @@ class DrQAgent(SACAgent):
         rng,
         observations,
         actions,
+        critic_actions=None,
         encoder_type: str = "small",
         shared_encoder: bool = True,
         use_proprio: bool = False,
@@ -136,7 +139,9 @@ class DrQAgent(SACAgent):
                 key: ResNetEncoder(
                     backbone=backbone,
                     freeze_backbone=kw.get("freeze_backbone", False),
-                    pooling_method=kw.get("pooling_method", "spatial_learned_embeddings"),
+                    pooling_method=kw.get(
+                        "pooling_method", "spatial_learned_embeddings"
+                    ),
                     num_spatial_blocks=kw.get("num_spatial_blocks", 8),
                     bottleneck_dim=kw.get("bottleneck_dim", 256),
                 )
@@ -162,8 +167,12 @@ class DrQAgent(SACAgent):
             critic_encoder = copy.deepcopy(encoder_def)
 
         # Q 网络：编码器 + MLP，多份组成 ensemble
-        critic_ctor = lambda: Critic(encoder=critic_encoder, network=MLP(**critic_network_kwargs))
-        critic_def = CriticEnsemble(critic_ctor=critic_ctor, num_qs=critic_ensemble_size)
+        critic_ctor = lambda: Critic(
+            encoder=critic_encoder, network=MLP(**critic_network_kwargs)
+        )
+        critic_def = CriticEnsemble(
+            critic_ctor=critic_ctor, num_qs=critic_ensemble_size
+        )
 
         # 策略网络：编码器 + MLP，输出动作分布
         policy_def = Policy(
@@ -186,6 +195,7 @@ class DrQAgent(SACAgent):
             actor_def=policy_def,
             critic_def=critic_def,
             temperature_def=temperature_def,
+            critic_actions=critic_actions,
             critic_ensemble_size=critic_ensemble_size,
             critic_subsample_size=critic_subsample_size,
             image_keys=image_keys,
@@ -223,7 +233,9 @@ class DrQAgent(SACAgent):
 
         batch = _to_torch(batch, self.device)
         batch["observations"] = self.data_augmentation_fn(batch["observations"])
-        batch["next_observations"] = self.data_augmentation_fn(batch["next_observations"])
+        batch["next_observations"] = self.data_augmentation_fn(
+            batch["next_observations"]
+        )
 
         return super().update_high_utd(batch, utd_ratio=utd_ratio)
 
@@ -243,7 +255,9 @@ class DrQAgent(SACAgent):
 
         batch = _to_torch(batch, self.device)
         batch["observations"] = self.data_augmentation_fn(batch["observations"])
-        batch["next_observations"] = self.data_augmentation_fn(batch["next_observations"])
+        batch["next_observations"] = self.data_augmentation_fn(
+            batch["next_observations"]
+        )
 
         return self.update(batch, networks_to_update=frozenset({"critic"}))
 
@@ -266,7 +280,9 @@ class DrQAgent(SACAgent):
 
         batch = _to_torch(batch, self.device)
         batch["observations"] = self.data_augmentation_fn(batch["observations"])
-        batch["next_observations"] = self.data_augmentation_fn(batch["next_observations"])
+        batch["next_observations"] = self.data_augmentation_fn(
+            batch["next_observations"]
+        )
         return super().update_critics_calql(
             batch,
             calql_alpha=float(calql_alpha),

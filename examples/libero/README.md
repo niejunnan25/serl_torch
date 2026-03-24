@@ -105,14 +105,9 @@ bash tools/eval.sh \
 
 
 ```bash
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi025_mix50_calql_on_utd2_start200.yaml --gpu_id 0
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi035_mix50_calql_on_utd2_start200.yaml --gpu_id 1
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi050_mix50_calql_on_utd2_start200.yaml --gpu_id 2
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi075_mix50_calql_on_utd2_start200.yaml --gpu_id 3
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi025_mix25_calql_off_utd4_start1000.yaml --gpu_id 4
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi035_mix25_calql_off_utd4_start1000.yaml --gpu_id 5
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi050_mix25_calql_off_utd4_start1000.yaml --gpu_id 6
-bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_xi075_mix25_calql_off_utd4_start1000.yaml --gpu_id 7
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac.yaml --gpu_id 0
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_pld_residual_sac.yaml --gpu_id 1
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh train_residual_sac_chunk_step_sequence.yaml --gpu_id 2
 
 
 ```
