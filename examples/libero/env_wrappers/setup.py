@@ -60,7 +60,9 @@ def resolve_libero_root(libero_root: Optional[str], openpi_root: Optional[str] =
 def resolve_libero_config_dir(config_dir: Optional[str]) -> Path:
     if config_dir:
         return Path(config_dir).expanduser().resolve()
-    return (_find_serl_repo_root() / ".libero").resolve()
+    return (
+        _find_serl_repo_root() / "examples" / "libero" / ".local" / "libero_config"
+    ).resolve()
 
 
 def resolve_libero_datasets_root(dataset_root: Optional[str], libero_root: Optional[Path] = None) -> Path:

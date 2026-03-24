@@ -1,0 +1,5 @@
+benchmark_root: /vla/users/niejunnan/codebase/LIBERO/libero/libero
+bddl_files: /vla/users/niejunnan/codebase/LIBERO/libero/libero/bddl_files
+init_states: /vla/users/niejunnan/codebase/LIBERO/libero/libero/init_files
+datasets: /vla/users/niejunnan/datasets
+assets: /vla/users/niejunnan/codebase/LIBERO/libero/libero/assets
