@@ -187,6 +187,16 @@ class SACAgent:
             )
         return (log_prob_per_dim * mask).sum(dim=-1)
 
+    @staticmethod
+    def _clip_gripper_last_dim(actions: torch.Tensor) -> torch.Tensor:
+        """Clip only the last action dim without in-place writes."""
+        if actions.shape[-1] <= 0:
+            return actions
+        clipped_last = torch.clamp(actions[..., -1:], -1.0, 1.0)
+        if actions.shape[-1] == 1:
+            return clipped_last
+        return torch.cat([actions[..., :-1], clipped_last], dim=-1)
+
     def _transform_policy_actions_for_critic(
         self,
         observations: Data,
@@ -244,7 +254,7 @@ class SACAgent:
                 raise ValueError(f"Unsupported policy action rank for step transform: {clipped.shape}")
 
             if clip_gripper and final_action.shape[-1] > 0:
-                final_action[..., -1] = torch.clamp(final_action[..., -1], -1.0, 1.0)
+                final_action = self._clip_gripper_last_dim(final_action)
             return final_action
 
         base_chunk_key = str(transform_cfg.get("base_action_chunk_key", "base_action_chunk"))
@@ -268,7 +278,7 @@ class SACAgent:
             final_chunk = base_chunk.clone()
             final_chunk[:, :, control_indices] = final_chunk[:, :, control_indices] + delta
             if clip_gripper and final_chunk.shape[-1] > 0:
-                final_chunk[..., -1] = torch.clamp(final_chunk[..., -1], -1.0, 1.0)
+                final_chunk = self._clip_gripper_last_dim(final_chunk)
             return final_chunk.reshape(-1, chunk_horizon * full_action_dim)
 
         if clipped.ndim == 3:
@@ -277,7 +287,7 @@ class SACAgent:
             final_chunk = base_chunk.unsqueeze(1).expand(-1, clipped.shape[1], -1, -1).clone()
             final_chunk[:, :, :, control_indices] = final_chunk[:, :, :, control_indices] + delta
             if clip_gripper and final_chunk.shape[-1] > 0:
-                final_chunk[..., -1] = torch.clamp(final_chunk[..., -1], -1.0, 1.0)
+                final_chunk = self._clip_gripper_last_dim(final_chunk)
             return final_chunk.reshape(-1, clipped.shape[1], chunk_horizon * full_action_dim)
 
         raise ValueError(f"Unsupported policy action rank for chunk transform: {clipped.shape}")

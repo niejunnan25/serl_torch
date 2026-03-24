@@ -13,8 +13,8 @@ _OBS_SPECIAL_KEYS = {"state", "base_action", "base_action_chunk", "xi"}
 def _strip_sample_axis(template: np.ndarray) -> np.ndarray:
     arr = np.asarray(template)
     if arr.ndim >= 1 and arr.shape[0] == 1:
-        return np.asarray(arr[0], copy=True)
-    return np.asarray(arr, copy=True)
+        return np.array(arr[0], copy=True)
+    return np.array(arr, copy=True)
 
 
 class StepChunkReplayBuffer:
@@ -53,7 +53,7 @@ class StepChunkReplayBuffer:
             raise ValueError("StepChunkReplayBuffer currently requires pad_action_to_horizon=true")
 
         self._sample_observation_template = {
-            key: np.asarray(value, copy=True)
+            key: np.array(value, copy=True)
             for key, value in sample_observation_template.items()
         }
         stripped_template = {

@@ -185,7 +185,7 @@ def build_residual_step_core(
         )
     payload: Dict[str, np.ndarray] = {"state_core": np.asarray(state_core, dtype=np.float32)}
     for key in image_keys:
-        payload[key] = np.asarray(images_all[key], copy=True)
+        payload[key] = np.array(images_all[key], copy=True)
     return payload
 
 
@@ -219,7 +219,7 @@ def build_residual_step_obs_from_core(
     for key, value in core.items():
         if key == "state_core":
             continue
-        obs_out[key] = np.asarray(value, copy=True)
+        obs_out[key] = np.array(value, copy=True)
     if base_action_chunk_arr is not None:
         obs_out["base_action_chunk"] = base_action_chunk_arr.astype(np.float32)
     return obs_out

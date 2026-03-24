@@ -22,6 +22,64 @@ def _clone_obs_tree(value: Any) -> Any:
     return np.array(value, copy=True)
 
 
+def _shape_to_dim(shape: Any) -> Optional[int]:
+    if shape is None:
+        return None
+    try:
+        dim = int(np.prod(shape))
+    except Exception:  # noqa: BLE001
+        return None
+    if dim <= 0:
+        return None
+    return dim
+
+
+def _action_spec_to_dim(action_spec: Any) -> Optional[int]:
+    if action_spec is None:
+        return None
+    if isinstance(action_spec, tuple) and len(action_spec) == 2:
+        low, high = action_spec
+        low_dim = _shape_to_dim(getattr(low, "shape", None))
+        if low_dim is not None:
+            return low_dim
+        high_dim = _shape_to_dim(getattr(high, "shape", None))
+        if high_dim is not None:
+            return high_dim
+    return _shape_to_dim(getattr(action_spec, "shape", None))
+
+
+def _infer_runtime_action_dim(env: Any) -> Tuple[int, str]:
+    sources: List[Tuple[str, Any]] = [("offscreen", env)]
+    inner = getattr(env, "env", None)
+    if inner is not None:
+        sources.append(("inner", inner))
+
+    for source_name, source_env in sources:
+        action_space = getattr(source_env, "action_space", None)
+        dim = _shape_to_dim(getattr(action_space, "shape", None))
+        if dim is not None:
+            return dim, f"{source_name}.action_space.shape"
+
+    for source_name, source_env in sources:
+        dim = _action_spec_to_dim(getattr(source_env, "action_spec", None))
+        if dim is not None:
+            return dim, f"{source_name}.action_spec"
+
+    robots = getattr(inner, "robots", None)
+    if isinstance(robots, (list, tuple)) and robots:
+        for idx, robot in enumerate(robots):
+            try:
+                dim = int(getattr(robot, "action_dim"))
+            except Exception:  # noqa: BLE001
+                continue
+            if dim > 0:
+                return dim, f"inner.robots[{idx}].action_dim"
+
+    raise ValueError(
+        "Unable to infer LIBERO action dim: expected action_space/action_spec/robot.action_dim"
+    )
+
+
 class LiberoTaskEnv:
     def __init__(
         self,
@@ -82,19 +140,21 @@ class LiberoTaskEnv:
             "camera_widths": self.resolution,
         }
         self.env = OffScreenRenderEnv(**env_args)
-        env_action_shape = getattr(self.env.action_space, "shape", None)
-        if env_action_shape is None:
-            raise ValueError("Libero env action_space has no shape")
-        runtime_action_dim = int(np.prod(env_action_shape))
+        runtime_action_dim, runtime_action_dim_source = _infer_runtime_action_dim(self.env)
         requested_action_dim = int(action_dim) if action_dim is not None else runtime_action_dim
         if requested_action_dim <= 0:
             raise ValueError(f"action_dim must be positive, got {requested_action_dim}")
         if requested_action_dim != runtime_action_dim:
             raise ValueError(
                 f"Configured env.action_dim ({requested_action_dim}) does not match env action space "
-                f"dim ({runtime_action_dim})"
+                f"dim ({runtime_action_dim}, source={runtime_action_dim_source})"
             )
         self._action_dim = int(requested_action_dim)
+        self.logger.info(
+            "LIBERO action dim=%d (source=%s)",
+            self._action_dim,
+            runtime_action_dim_source,
+        )
         if self.env_seed_mode == "fixed":
             if self.fixed_env_seed is None:
                 raise ValueError("fixed_env_seed must be provided when env_seed_mode='fixed'")
