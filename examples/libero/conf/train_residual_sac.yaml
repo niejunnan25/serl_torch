@@ -127,12 +127,12 @@ offline:
 training:
   # Budget / rollout
   max_env_steps_per_episode: null
-  max_online_env_steps: 300000
+  max_train_env_steps: 300000
   expert_check: false
 
   # Warmup / gating
-  warmup_base_episodes: 5
-  warmup_base_steps: 0
+  warmup:
+    episodes: 5
   random_steps: 0
   enable_base_probing: false
   probing_alpha: null
@@ -161,21 +161,19 @@ training:
     log_file: profiling_logs.jsonl
 
   # Checkpointing
-  checkpoint_period: 2500
-  keep_checkpoints: 0
-  checkpoint_dir: checkpoints
+  checkpoint:
+    every_steps: 2500
+    keep: 0
+    dir: checkpoints
 
   # Async evaluation
   async_eval:
     enabled: true
-    every_steps: 5000
+    every_episodes: 20
     episodes: 50
-    seed_base: 1000000
-    seed_stride: 10000
-    fixed_seed: 7
+    seed: 7
     expert_check: false
     deterministic: true
-    max_seed_attempts: 5000
     enable_base_probing: false
     probing_alpha: null
     probing_min_steps: 0

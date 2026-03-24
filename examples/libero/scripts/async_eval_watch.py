@@ -77,7 +77,7 @@ def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _load_completed_steps(path: Path) -> set[int]:
+def _load_completed_eval_indices(path: Path) -> set[int]:
     if not path.exists():
         return set()
     completed: set[int] = set()
@@ -90,10 +90,10 @@ def _load_completed_steps(path: Path) -> set[int]:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            step = payload.get("step", None)
+            eval_index = payload.get("eval_index", None)
             try:
-                if step is not None:
-                    completed.add(int(step))
+                if eval_index is not None:
+                    completed.add(int(eval_index))
             except Exception:  # noqa: BLE001
                 continue
     return completed
@@ -170,6 +170,8 @@ def _resolve_eval_residual_xi(
     min_xi = float(xi_scheduler_cfg.get("min_xi", base_xi))
     warmup_steps = int(xi_scheduler_cfg.get("warmup_steps", 0))
     anneal_steps = int(xi_scheduler_cfg.get("anneal_steps", 1))
+    # Async eval receives checkpoint snapshots keyed by train env-step only.
+    # Therefore xi reconstruction in checkpoint_schedule mode is always env-step based.
     schedule_step = int(checkpoint_step)
 
     if schedule_step < warmup_steps:
@@ -189,7 +191,7 @@ def _build_eval_command(
     train_cfg: Dict[str, Any],
     eval_run_dir: Path,
     checkpoint_path: Path,
-    eval_seed_base: int,
+    eval_seed: int,
     eval_cfg: Dict[str, Any],
     eval_residual_xi: float,
 ) -> List[str]:
@@ -199,8 +201,6 @@ def _build_eval_command(
         top_value = train_cfg.get(top_key, None)
         if isinstance(top_value, dict):
             overrides.extend(_flatten_overrides(top_key, top_value))
-
-    fixed_seed = eval_cfg.get("fixed_seed", None)
 
     # Explicit eval runtime overrides (last writer wins in Hydra).
     overrides.extend(
@@ -212,12 +212,11 @@ def _build_eval_command(
             f"openpi.host={_to_override_value(eval_cfg['openpi_host'])}",
             f"openpi.port={_to_override_value(eval_cfg['openpi_port'])}",
             f"residual.xi={_to_override_value(eval_residual_xi)}",
-            f"task.seed_base={_to_override_value(eval_seed_base)}",
+            f"task.seed_base={_to_override_value(eval_seed)}",
             f"eval.episodes={_to_override_value(eval_cfg['episodes'])}",
             f"eval.expert_check={_to_override_value(eval_cfg['expert_check'])}",
-            f"eval.max_seed_attempts={_to_override_value(eval_cfg['max_seed_attempts'])}",
+            f"eval.seed={_to_override_value(eval_cfg['seed'])}",
             f"eval.deterministic={_to_override_value(eval_cfg['deterministic'])}",
-            f"eval.fixed_seed={_to_override_value(fixed_seed)}",
             f"eval.enable_base_probing={_to_override_value(eval_cfg['enable_base_probing'])}",
             f"eval.probing_alpha={_to_override_value(eval_cfg['probing_alpha'])}",
             f"eval.probing_min_steps={_to_override_value(eval_cfg['probing_min_steps'])}",
@@ -227,15 +226,14 @@ def _build_eval_command(
             "logging.tensorboard=false",
         ]
     )
-    if fixed_seed is not None:
-        # Ensure env wrapper uses fixed seed while cycling init states by episode id.
-        overrides.extend(
-            [
-                "task.env_seed_mode=fixed",
-                f"task.fixed_env_seed={_to_override_value(fixed_seed)}",
-                "task.init_state_index_mode=episode_id",
-            ]
-        )
+    # Ensure env wrapper uses one fixed seed while cycling init states by episode id.
+    overrides.extend(
+        [
+            "task.env_seed_mode=fixed",
+            f"task.fixed_env_seed={_to_override_value(eval_seed)}",
+            "task.init_state_index_mode=episode_id",
+        ]
+    )
 
     return [python_executable, str(eval_script), *overrides]
 
@@ -250,7 +248,7 @@ def main() -> None:
     parser.add_argument("--train-config", type=str, default=None)
     parser.add_argument("--checkpoints-dir", type=str, default=None)
     parser.add_argument("--summary-jsonl", type=str, default=None)
-    parser.add_argument("--eval-every-steps", type=int, default=None)
+    parser.add_argument("--queue-file", type=str, default=None)
     parser.add_argument("--poll-sec", type=float, default=None)
     parser.add_argument("--file-stable-sec", type=float, default=None)
     parser.add_argument("--queue-policy", type=str, default=None, choices=("all", "latest"))
@@ -286,13 +284,11 @@ def main() -> None:
         logger.info("training.async_eval.enabled is false; watcher exits.")
         return
 
-    every_steps = (
-        int(args.eval_every_steps)
-        if args.eval_every_steps is not None
-        else int(async_eval_cfg.get("every_steps", 5000))
-    )
-    if every_steps <= 0:
-        raise ValueError(f"eval_every_steps must be > 0, got {every_steps}")
+    # Trigger cadence is decided by the trainer enqueue logic.
+    # Watcher keeps this for config sanity checks and startup diagnostics.
+    every_episodes = int(async_eval_cfg.get("every_episodes", 0))
+    if every_episodes <= 0:
+        raise ValueError(f"training.async_eval.every_episodes must be > 0, got {every_episodes}")
 
     poll_sec = float(args.poll_sec) if args.poll_sec is not None else float(async_eval_cfg.get("poll_sec", 15.0))
     file_stable_sec = (
@@ -315,6 +311,14 @@ def main() -> None:
     )
     if not summary_jsonl.is_absolute():
         summary_jsonl = (train_run_dir / summary_jsonl).resolve()
+
+    queue_file = (
+        Path(args.queue_file).expanduser().resolve()
+        if args.queue_file is not None
+        else Path(str(async_eval_cfg.get("queue_file", "async_eval_queue.jsonl")))
+    )
+    if not queue_file.is_absolute():
+        queue_file = (train_run_dir / queue_file).resolve()
 
     train_env_cfg = train_cfg.get("env", {}) if isinstance(train_cfg, dict) else {}
     train_remote_cfg = train_env_cfg.get("remote", {}) if isinstance(train_env_cfg, dict) else {}
@@ -340,11 +344,7 @@ def main() -> None:
         )
 
     episodes = int(async_eval_cfg.get("episodes", 50))
-    seed_base = int(async_eval_cfg.get("seed_base", 1_000_000))
-    seed_stride = int(async_eval_cfg.get("seed_stride", 10_000))
-    fixed_seed_cfg = async_eval_cfg.get("fixed_seed", None)
-    fixed_seed = None if fixed_seed_cfg is None else int(fixed_seed_cfg)
-    max_seed_attempts = int(async_eval_cfg.get("max_seed_attempts", max(1000, episodes * 100)))
+    seed = int(async_eval_cfg.get("seed", 7))
     deterministic = _as_bool(async_eval_cfg.get("deterministic", True))
     expert_check = _as_bool(async_eval_cfg.get("expert_check", False))
     enable_base_probing = _as_bool(async_eval_cfg.get("enable_base_probing", False))
@@ -359,10 +359,11 @@ def main() -> None:
         chunk_step_cfg = train_cfg.get("chunk_step", {}) if isinstance(train_cfg, dict) else {}
         scheduler_clock = str(chunk_step_cfg.get("scheduler_clock", "env_step")).strip().lower()
         if scheduler_clock != "env_step":
-            logger.warning(
-                "training.chunk_step.scheduler_clock=%s; checkpoint step is env_step, "
-                "so xi reconstruction may not match policy-step scheduling exactly.",
-                scheduler_clock,
+            # Hard guard: checkpoint-schedule async eval only supports env-step clock.
+            raise ValueError(
+                "training.async_eval.xi_mode=checkpoint_schedule requires "
+                "training.chunk_step.scheduler_clock=env_step "
+                f"(got {scheduler_clock})"
             )
 
     eval_script = async_eval_cfg.get("eval_script", None)
@@ -381,8 +382,7 @@ def main() -> None:
         "episodes": episodes,
         "deterministic": deterministic,
         "expert_check": expert_check,
-        "fixed_seed": fixed_seed,
-        "max_seed_attempts": max_seed_attempts,
+        "seed": seed,
         "enable_base_probing": enable_base_probing,
         "probing_alpha": probing_alpha,
         "probing_min_steps": probing_min_steps,
@@ -397,12 +397,13 @@ def main() -> None:
     }
 
     logger.info(
-        "watch start: checkpoints=%s every_steps=%s episodes=%s fixed_seed=%s xi_mode=%s fixed_xi=%s "
+        "watch start: checkpoints=%s queue=%s every_episodes=%s eval_episodes=%s seed=%s xi_mode=%s fixed_xi=%s "
         "queue_policy=%s poll_sec=%.2f stable_sec=%.2f",
         checkpoints_dir,
-        every_steps,
+        queue_file,
+        every_episodes,
         episodes,
-        fixed_seed,
+        seed,
         xi_mode,
         fixed_xi,
         queue_policy,
@@ -419,15 +420,19 @@ def main() -> None:
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
 
-    completed_steps = _load_completed_steps(summary_jsonl)
-    pending_steps: List[int] = []
+    completed_eval_indices = _load_completed_eval_indices(summary_jsonl)
+    pending_requests: List[Dict[str, Any]] = []
     stable_state: Dict[int, Dict[str, float]] = {}
     async_eval_root = (train_run_dir / "async_eval").resolve()
     summary_file_name = str((train_cfg.get("logging", {}) or {}).get("summary_file", "summary.json"))
 
     running_proc: Optional[subprocess.Popen] = None
-    running_step: Optional[int] = None
-    running_seed_base: Optional[int] = None
+    running_eval_index: Optional[int] = None
+    running_train_episode_id: Optional[int] = None
+    running_train_env_step: Optional[int] = None
+    running_checkpoint_step: Optional[int] = None
+    running_checkpoint_path: Optional[Path] = None
+    running_seed: Optional[int] = None
     running_start_time = 0.0
     running_eval_dir: Optional[Path] = None
     running_log_fp = None
@@ -455,8 +460,16 @@ def main() -> None:
             status = "ok" if return_code == 0 else "failed"
             record = {
                 "timestamp": _timestamp(),
-                "step": int(running_step) if running_step is not None else None,
-                "seed_base": int(running_seed_base) if running_seed_base is not None else None,
+                "eval_index": int(running_eval_index) if running_eval_index is not None else None,
+                "train_episode_id": (
+                    int(running_train_episode_id)
+                    if running_train_episode_id is not None
+                    else None
+                ),
+                "train_env_step": int(running_train_env_step) if running_train_env_step is not None else None,
+                "checkpoint_step": int(running_checkpoint_step) if running_checkpoint_step is not None else None,
+                "checkpoint_path": str(running_checkpoint_path) if running_checkpoint_path is not None else None,
+                "seed": int(running_seed) if running_seed is not None else None,
                 "eval_xi": float(running_eval_xi) if running_eval_xi is not None else None,
                 "eval_xi_mode": running_eval_xi_mode,
                 "eval_xi_schedule_step": (
@@ -471,77 +484,127 @@ def main() -> None:
                 "summary": summary,
             }
             _append_jsonl(summary_jsonl, record)
-            if running_step is not None:
-                completed_steps.add(int(running_step))
+            if running_eval_index is not None:
+                completed_eval_indices.add(int(running_eval_index))
             logger.info(
-                "async eval finished: step=%s status=%s return_code=%s duration=%.1fs",
-                running_step,
+                "async eval finished: eval_index=%s train_episode=%s train_env_step=%s status=%s "
+                "return_code=%s duration=%.1fs",
+                running_eval_index,
+                running_train_episode_id,
+                running_train_env_step,
                 status,
                 return_code,
                 duration_sec,
             )
             running_proc = None
-            running_step = None
-            running_seed_base = None
+            running_eval_index = None
+            running_train_episode_id = None
+            running_train_env_step = None
+            running_checkpoint_step = None
+            running_checkpoint_path = None
+            running_seed = None
             running_eval_dir = None
             running_eval_xi = None
             running_eval_xi_mode = None
             running_eval_xi_schedule_step = None
             continue
 
-        checkpoint_paths = sorted(
-            checkpoints_dir.glob("checkpoint_*.pt"),
-            key=lambda p: _extract_checkpoint_step(p) or -1,
-        )
+        queue_requests: List[Dict[str, Any]] = []
+        if queue_file.exists():
+            with open(queue_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    eval_index_raw = payload.get("eval_index", None)
+                    checkpoint_step_raw = payload.get("checkpoint_step", None)
+                    checkpoint_path_raw = payload.get("checkpoint_path", None)
+                    train_episode_id_raw = payload.get("train_episode_id", None)
+                    train_env_step_raw = payload.get("train_env_step", None)
+                    try:
+                        eval_index = int(eval_index_raw)
+                        checkpoint_step = int(checkpoint_step_raw)
+                        checkpoint_path = Path(str(checkpoint_path_raw)).expanduser().resolve()
+                    except Exception:  # noqa: BLE001
+                        continue
+                    try:
+                        train_episode_id = (
+                            int(train_episode_id_raw) if train_episode_id_raw is not None else None
+                        )
+                    except Exception:  # noqa: BLE001
+                        train_episode_id = None
+                    try:
+                        train_env_step = (
+                            int(train_env_step_raw) if train_env_step_raw is not None else None
+                        )
+                    except Exception:  # noqa: BLE001
+                        train_env_step = None
+                    if eval_index in completed_eval_indices:
+                        continue
+                    if any(int(request.get("eval_index", -1)) == eval_index for request in pending_requests):
+                        continue
+                    queue_requests.append(
+                        {
+                            "eval_index": int(eval_index),
+                            "train_episode_id": train_episode_id,
+                            "train_env_step": train_env_step,
+                            "checkpoint_step": int(checkpoint_step),
+                            "checkpoint_path": checkpoint_path,
+                        }
+                    )
+
         now = time.time()
         discovered_steps: set[int] = set()
-        for path in checkpoint_paths:
-            step = _extract_checkpoint_step(path)
-            if step is None:
-                continue
-            discovered_steps.add(step)
-            if step <= 0 or (step % every_steps != 0):
-                continue
-            if step in completed_steps or step in pending_steps:
-                continue
+        for request in queue_requests:
+            checkpoint_step = int(request["checkpoint_step"])
+            checkpoint_path = Path(request["checkpoint_path"])
+            discovered_steps.add(checkpoint_step)
             if not _is_checkpoint_stable(
-                step=step,
-                path=path,
+                step=checkpoint_step,
+                path=checkpoint_path,
                 now=now,
                 stable_sec=file_stable_sec,
                 stable_state=stable_state,
             ):
                 continue
-            pending_steps.append(step)
+            pending_requests.append(request)
 
         for stale_step in list(stable_state.keys()):
             if stale_step not in discovered_steps:
                 stable_state.pop(stale_step, None)
 
-        if queue_policy == "latest" and len(pending_steps) > 1:
-            pending_steps = [max(pending_steps)]
+        if queue_policy == "latest" and len(pending_requests) > 1:
+            pending_requests = [max(pending_requests, key=lambda request: int(request["eval_index"]))]
 
-        pending_steps.sort()
-        if pending_steps:
-            step = pending_steps.pop(0 if queue_policy == "all" else -1)
-            checkpoint_path = checkpoints_dir / f"checkpoint_{step}.pt"
+        pending_requests.sort(key=lambda request: int(request["eval_index"]))
+        if pending_requests:
+            request = pending_requests.pop(0 if queue_policy == "all" else -1)
+            eval_index = int(request["eval_index"])
+            train_episode_id = request.get("train_episode_id", None)
+            train_env_step = request.get("train_env_step", None)
+            checkpoint_step = int(request["checkpoint_step"])
+            checkpoint_path = Path(request["checkpoint_path"])
             if not checkpoint_path.exists():
                 logger.warning("checkpoint disappeared before eval launch: %s", checkpoint_path)
                 time.sleep(poll_sec)
                 continue
 
-            if fixed_seed is None:
-                eval_index = max(0, int(step // every_steps) - 1)
-                eval_seed_base = int(seed_base + eval_index * seed_stride)
-            else:
-                eval_seed_base = int(fixed_seed)
-            eval_run_dir = (async_eval_root / f"step_{step:07d}").resolve()
+            eval_seed = int(seed)
+            episode_label = int(train_episode_id) if train_episode_id is not None else -1
+            step_label = int(train_env_step) if train_env_step is not None else checkpoint_step
+            eval_run_dir = (async_eval_root / f"episode_{episode_label:06d}_step_{step_label:07d}").resolve()
             eval_run_dir.mkdir(parents=True, exist_ok=True)
             eval_log_path = eval_run_dir / "eval_runner.log"
             eval_xi, eval_xi_mode, eval_xi_schedule_step = _resolve_eval_residual_xi(
                 train_cfg=train_cfg,
                 async_eval_cfg=async_eval_cfg,
-                checkpoint_step=int(step),
+                checkpoint_step=int(checkpoint_step),
                 logger=logger,
             )
 
@@ -551,7 +614,7 @@ def main() -> None:
                 train_cfg=train_cfg,
                 eval_run_dir=eval_run_dir,
                 checkpoint_path=checkpoint_path,
-                eval_seed_base=eval_seed_base,
+                eval_seed=eval_seed,
                 eval_cfg=eval_cfg,
                 eval_residual_xi=float(eval_xi),
             )
@@ -562,8 +625,12 @@ def main() -> None:
                 stdout=running_log_fp,
                 stderr=subprocess.STDOUT,
             )
-            running_step = int(step)
-            running_seed_base = int(eval_seed_base)
+            running_eval_index = int(eval_index)
+            running_train_episode_id = int(train_episode_id) if train_episode_id is not None else None
+            running_train_env_step = int(train_env_step) if train_env_step is not None else None
+            running_checkpoint_step = int(checkpoint_step)
+            running_checkpoint_path = checkpoint_path
+            running_seed = int(eval_seed)
             running_eval_dir = eval_run_dir
             running_start_time = time.time()
             running_eval_xi = float(eval_xi)
@@ -573,9 +640,13 @@ def main() -> None:
             )
 
             logger.info(
-                "async eval started: step=%s seed_base=%s xi=%.6f xi_mode=%s schedule_step=%s pid=%s run_dir=%s",
-                step,
-                eval_seed_base,
+                "async eval started: eval_index=%s train_episode=%s train_env_step=%s "
+                "checkpoint_step=%s seed=%s xi=%.6f xi_mode=%s schedule_step=%s pid=%s run_dir=%s",
+                eval_index,
+                train_episode_id,
+                train_env_step,
+                checkpoint_step,
+                eval_seed,
                 float(eval_xi),
                 eval_xi_mode,
                 eval_xi_schedule_step,
@@ -587,7 +658,12 @@ def main() -> None:
         time.sleep(poll_sec)
 
     if running_proc is not None:
-        logger.info("terminating running async eval process (step=%s)...", running_step)
+        logger.info(
+            "terminating running async eval process (eval_index=%s train_episode=%s train_env_step=%s)...",
+            running_eval_index,
+            running_train_episode_id,
+            running_train_env_step,
+        )
         running_proc.terminate()
         try:
             running_proc.wait(timeout=10.0)
@@ -601,8 +677,16 @@ def main() -> None:
             summary_jsonl,
             {
                 "timestamp": _timestamp(),
-                "step": int(running_step) if running_step is not None else None,
-                "seed_base": int(running_seed_base) if running_seed_base is not None else None,
+                "eval_index": int(running_eval_index) if running_eval_index is not None else None,
+                "train_episode_id": (
+                    int(running_train_episode_id)
+                    if running_train_episode_id is not None
+                    else None
+                ),
+                "train_env_step": int(running_train_env_step) if running_train_env_step is not None else None,
+                "checkpoint_step": int(running_checkpoint_step) if running_checkpoint_step is not None else None,
+                "checkpoint_path": str(running_checkpoint_path) if running_checkpoint_path is not None else None,
+                "seed": int(running_seed) if running_seed is not None else None,
                 "eval_xi": float(running_eval_xi) if running_eval_xi is not None else None,
                 "eval_xi_mode": running_eval_xi_mode,
                 "eval_xi_schedule_step": (

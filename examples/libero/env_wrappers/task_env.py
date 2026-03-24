@@ -127,14 +127,14 @@ class LiberoTaskEnv:
     def action_dim(self) -> int:
         return int(self._action_dim)
 
-    def expert_precheck(self, seed: int, episode_id: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        del seed, episode_id
+    def expert_precheck(self, seed: int, init_episode_idx: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        del seed, init_episode_idx
         return True, None
 
     def reset(
         self,
         seed: int,
-        episode_id: int,
+        init_episode_idx: int,
         episode_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         del episode_info
@@ -142,8 +142,8 @@ class LiberoTaskEnv:
         if self.env_seed_mode == "fixed":
             applied_seed = int(self.fixed_env_seed)
         self.last_seed = int(applied_seed)
-        if self.init_state_index_mode == "episode_id" and int(episode_id) >= 0:
-            self.current_init_state_idx = int(episode_id) % len(self.initial_states)
+        if self.init_state_index_mode == "episode_id" and int(init_episode_idx) >= 0:
+            self.current_init_state_idx = int(init_episode_idx) % len(self.initial_states)
         else:
             self.current_init_state_idx = int(seed) % len(self.initial_states)
         self._take_action_cnt = 0
@@ -158,10 +158,9 @@ class LiberoTaskEnv:
         for _ in range(self.num_steps_wait):
             obs, _, _, _ = self.env.step(dummy_action.tolist())
         self.logger.info(
-            "LIBERO reset: suite=%s task_id=%s episode_id=%s init_state_idx=%s seed=%s",
+            "LIBERO reset: suite=%s task_id=%s init_state_idx=%s seed=%s",
             self.suite_name,
             self.task_id,
-            episode_id,
             self.current_init_state_idx,
             applied_seed,
         )

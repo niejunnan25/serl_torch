@@ -64,26 +64,14 @@ def _chunk_bootstrap_mask(*, chunk_steps: int, discount: float, done: bool) -> n
     return np.float32(float(discount) ** max(0, int(chunk_steps) - 1))
 
 
-def _remaining_online_budget_steps(
+def _remaining_train_budget_steps(
     *,
-    warmup_separate: bool,
-    max_online_env_steps: int,
-    global_env_step: int,
-    residual_env_step: int,
+    max_train_env_steps: int,
+    train_env_step: int,
 ) -> Optional[int]:
-    if max_online_env_steps <= 0:
+    if max_train_env_steps <= 0:
         return None
-    used_steps = residual_env_step if warmup_separate else global_env_step
-    return max(0, int(max_online_env_steps - used_steps))
-
-
-def _current_train_env_step(
-    *,
-    warmup_separate: bool,
-    global_env_step: int,
-    residual_env_step: int,
-) -> int:
-    return int(residual_env_step) if warmup_separate else int(global_env_step)
+    return max(0, int(max_train_env_steps - train_env_step))
 
 
 def _count_env_step_update_triggers(

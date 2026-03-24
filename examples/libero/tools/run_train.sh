@@ -308,6 +308,7 @@ echo "Starting training..." | tee -a "$LAUNCH_LOG"
 cd "$ROOT_DIR"
 CUDA_VISIBLE_DEVICES="$GPU_ID" \
 bash "$TOOLS_DIR/train.sh" \
+    --config-path "$CONFIG_DIR" \
     --config-name "$CONFIG_NAME" \
     env.remote.host="$ENV_HOST" \
     env.remote.port="$ENV_PORT" \

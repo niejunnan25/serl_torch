@@ -176,45 +176,31 @@ def main(cfg: DictConfig) -> None:
     total_success = 0
     total_env_steps = 0
     total_policy_steps = 0
-    skipped_seeds = 0
-    seed_attempts = 0
+    precheck_failed_episodes = 0
     total_probing_steps = 0
     obs_cache = LiberoObservationCache()
 
-    max_seed_attempts_cfg = cfg.eval.get("max_seed_attempts", None)
-    if max_seed_attempts_cfg is None:
-        max_seed_attempts = max(1000, int(cfg.eval.episodes) * 100)
-    else:
-        max_seed_attempts = int(max_seed_attempts_cfg)
-    fixed_seed_cfg = cfg.eval.get("fixed_seed", None)
-    fixed_seed = None if fixed_seed_cfg is None else int(fixed_seed_cfg)
-    if fixed_seed is not None:
-        logger.info("Evaluation fixed_seed enabled: all episodes use seed=%s", fixed_seed)
+    eval_seed = int(cfg.eval.get("seed", 7))
+    logger.info("Evaluation uses fixed seed=%s for all episodes", eval_seed)
 
     try:
         episode_id = 0
-        seed_cursor = int(cfg.task.seed_base)
         while episode_id < int(cfg.eval.episodes):
-            seed_attempts += 1
-            if seed_attempts > max_seed_attempts:
-                raise RuntimeError(
-                    "Exceeded max seed attempts during evaluation. "
-                    f"attempts={seed_attempts}, completed_episodes={episode_id}, skipped_seeds={skipped_seeds}"
-                )
-            if fixed_seed is None:
-                seed = int(seed_cursor)
-                seed_cursor += 1
-            else:
-                seed = int(fixed_seed)
+            seed = int(eval_seed)
 
             if bool(cfg.eval.get("expert_check", False)):
-                passed, _ = env.expert_precheck(seed=seed, episode_id=episode_id)
+                passed, _ = env.expert_precheck(seed=seed, init_episode_idx=episode_id)
                 if not passed:
-                    skipped_seeds += 1
-                    logger.warning("skip seed=%s: expert precheck failed", seed)
+                    precheck_failed_episodes += 1
+                    logger.warning(
+                        "expert precheck failed for eval episode=%s (seed=%s); counting as failed episode",
+                        episode_id,
+                        seed,
+                    )
+                    episode_id += 1
                     continue
 
-            obs_raw = env.reset(seed=seed, episode_id=episode_id)
+            obs_raw = env.reset(seed=seed, init_episode_idx=episode_id)
             obs_cache.clear()
             success = False
             episode_steps = 0
@@ -496,12 +482,8 @@ def main(cfg: DictConfig) -> None:
             "chunk_step_enabled": bool(chunk_step_enabled),
             "residual_xi": float(residual_xi),
             "expert_check": bool(cfg.eval.expert_check),
-            "skipped_seeds": int(skipped_seeds),
-            "seed_attempts": int(seed_attempts),
-            "max_seed_attempts": int(max_seed_attempts),
-            "seed_start": int(cfg.task.seed_base),
-            "seed_next": int(seed_cursor),
-            "fixed_seed": int(fixed_seed) if fixed_seed is not None else None,
+            "eval_seed": int(eval_seed),
+            "expert_precheck_failed_episodes": int(precheck_failed_episodes),
             "enable_base_probing": bool(cfg.eval.get("enable_base_probing", False)),
             "probing_alpha": (
                 float(cfg.eval.get("probing_alpha"))

@@ -146,9 +146,9 @@ def _emit_profiling_snapshot(
     profile_logger: Optional[JsonlLogger],
     tb_writer: Optional[SummaryWriter],
     logger: logging.Logger,
-    global_env_step: int,
-    global_policy_step: int,
-    episode_id: int,
+    train_env_step: int,
+    decision_step: int,
+    train_episode_id: int,
     learner_update_steps: int,
     replay_prefetch_queue_size: int,
 ) -> Optional[Dict[str, Any]]:
@@ -158,9 +158,9 @@ def _emit_profiling_snapshot(
     snapshot = profiler.snapshot()
     payload = {
         "type": "profiling",
-        "global_env_step": int(global_env_step),
-        "global_policy_step": int(global_policy_step),
-        "episode_id": int(episode_id),
+        "train_env_step": int(train_env_step),
+        "decision_step": int(decision_step),
+        "train_episode_id": int(train_episode_id),
         "learner_update_steps": int(learner_update_steps),
         "replay_prefetch_queue_size": int(replay_prefetch_queue_size),
         "metrics": snapshot,
@@ -174,34 +174,34 @@ def _emit_profiling_snapshot(
             tb_writer.add_scalar(
                 f"profiling/{metric_name}/mean_ms",
                 float(stats.get("mean_ms", 0.0)),
-                global_env_step,
+                train_env_step,
             )
             tb_writer.add_scalar(
                 f"profiling/{metric_name}/p95_ms",
                 float(stats.get("p95_ms", 0.0)),
-                global_env_step,
+                train_env_step,
             )
             tb_writer.add_scalar(
                 f"profiling/{metric_name}/max_ms",
                 float(stats.get("max_ms", 0.0)),
-                global_env_step,
+                train_env_step,
             )
         for name, stats in snapshot.get("values", {}).items():
             metric_name = _tb_safe_metric_name(name)
             tb_writer.add_scalar(
                 f"profiling/{metric_name}/mean",
                 float(stats.get("mean", 0.0)),
-                global_env_step,
+                train_env_step,
             )
             tb_writer.add_scalar(
                 f"profiling/{metric_name}/p95",
                 float(stats.get("p95", 0.0)),
-                global_env_step,
+                train_env_step,
             )
             tb_writer.add_scalar(
                 f"profiling/{metric_name}/max",
                 float(stats.get("max", 0.0)),
-                global_env_step,
+                train_env_step,
             )
 
     def _summary(name: str) -> str:
@@ -214,9 +214,9 @@ def _emit_profiling_snapshot(
         )
 
     logger.info(
-        "profiling step=%s policy_step=%s learner_updates=%s %s | %s | %s | %s | %s | %s",
-        global_env_step,
-        global_policy_step,
+        "profiling train_env_step=%s decision_step=%s learner_updates=%s %s | %s | %s | %s | %s | %s",
+        train_env_step,
+        decision_step,
         learner_update_steps,
         _summary("env_step"),
         _summary("build_residual_step_obs"),

@@ -38,17 +38,17 @@ env:
 # ---------------------------
 residual:
   image_keys: [image, wrist_image]
-  xi: 0.35
+  xi: 0.1
   action_dim: 7
   action_indices: null
-  action_limits: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.5]
+  action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   control_gripper: true
   clip_gripper: true
-  chunk_horizon: 10
+  chunk_horizon: 5
 
 chunk_step:
   enabled: true
-  sample_stride: 1
+  sample_stride: 2
   require_full_horizon: false
   pad_action_to_horizon: true
   scheduler_clock: env_step
@@ -102,8 +102,7 @@ sac:
 eval:
   episodes: 10
   expert_check: false
-  max_seed_attempts: 2000
-  fixed_seed: null
+  seed: 7
   max_env_steps_per_episode: null
   deterministic: true
   checkpoint_path: null

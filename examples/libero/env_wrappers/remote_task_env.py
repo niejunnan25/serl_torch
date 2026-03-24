@@ -206,13 +206,13 @@ class RemoteLiberoTaskEnv:
     def reset(
         self,
         seed: int,
-        episode_id: int,
+        init_episode_idx: int,
         episode_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         result = self._rpc(
             "reset",
             seed=int(seed),
-            episode_id=int(episode_id),
+            init_episode_idx=int(init_episode_idx),
             episode_info=episode_info,
         )
         if not isinstance(result, dict) or "obs" not in result:
@@ -220,11 +220,11 @@ class RemoteLiberoTaskEnv:
         self._apply_meta(result.get("meta", {}))
         return result["obs"]
 
-    def expert_precheck(self, seed: int, episode_id: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    def expert_precheck(self, seed: int, init_episode_idx: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
         result = self._rpc(
             "expert_precheck",
             seed=int(seed),
-            episode_id=int(episode_id),
+            init_episode_idx=int(init_episode_idx),
         )
         if not isinstance(result, dict):
             raise RuntimeError("remote expert_precheck returned invalid payload")
