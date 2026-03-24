@@ -35,18 +35,18 @@
 
 关键代码：
 
-- `examples/libero/utils/async_learning.py:315-318`  
+- `examples/libero/utils/async_learning.py:315-318`
   仅在 `len(online_buffer) >= training_starts` 时允许采样。
-- `examples/libero/utils/async_learning.py:328-342`  
+- `examples/libero/utils/async_learning.py:328-342`
   后台线程循环执行，采样到 batch 就继续更新。
-- `examples/libero/utils/async_learning.py:366-383`  
+- `examples/libero/utils/async_learning.py:366-383`
   每次 `update_high_utd` 后仅做 `update_steps += 1`，不和 env-step 建立配额关系。
-- `examples/libero/scripts/train_residual_sac.py:298` 与 `:545`  
+- `examples/libero/scripts/train_residual_sac.py:298` 与 `:545`
   `async_update_frequency` 传入 async learner；该参数只用于“多久同步一次 actor 权重”，不是 env-step 更新门控。
 
 ### 2) 与 probing 的关系
 
-该问题与 probing **无关**。  
+该问题与 probing **无关**。
 即使你关闭 probing，只要 `training.async.enabled=true`，异步 learner 仍会出现更新密度随机器速度漂移的问题。
 
 ### 3) 风险与影响
@@ -103,11 +103,11 @@ chunk 模式中，训练更新是在 chunk 结束后按本段 env-step 触发；
 
 关键代码：
 
-- `examples/libero/scripts/train_residual_sac.py:1334-1341`  
+- `examples/libero/scripts/train_residual_sac.py:1334-1341`
   按 chunk 跨度统计本段 env-step 的 update triggers。
-- `examples/libero/scripts/train_residual_sac.py:1345-1398`  
+- `examples/libero/scripts/train_residual_sac.py:1345-1398`
   先执行本段更新。
-- `examples/libero/scripts/train_residual_sac.py:1473-1485`  
+- `examples/libero/scripts/train_residual_sac.py:1473-1485`
   再按 period hits 写 checkpoint。
 
 ### 2) 风险与影响
@@ -142,9 +142,9 @@ chunk 模式中，训练更新是在 chunk 结束后按本段 env-step 触发；
 
 关键代码：
 
-- `examples/libero/scripts/train_residual_sac.py:1157-1177`  
+- `examples/libero/scripts/train_residual_sac.py:1157-1177`
   执行侧 chunk 会在 warmup/random 边界前截断。
-- `examples/libero/utils/step_chunk_replay.py:144-163`  
+- `examples/libero/utils/step_chunk_replay.py:144-163`
   起点合法性按 episode/transition 连续性判定。
 
 ### 2) 风险与影响

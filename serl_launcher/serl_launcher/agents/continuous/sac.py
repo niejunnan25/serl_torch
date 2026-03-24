@@ -40,7 +40,9 @@ def _split_batch(batch: Batch, utd_ratio: int):
     def _split(x):
         b = x.shape[0]
         if b % utd_ratio != 0:
-            raise ValueError(f"Batch size {b} must be divisible by utd_ratio {utd_ratio}")
+            raise ValueError(
+                f"Batch size {b} must be divisible by utd_ratio {utd_ratio}"
+            )
         mini_b = b // utd_ratio
         return x.reshape(utd_ratio, mini_b, *x.shape[1:])
 
@@ -72,7 +74,9 @@ class SACAgent:
             setattr(self, key, value)
         return self
 
-    def forward_critic(self, observations: Data, actions: torch.Tensor, train: bool = True):
+    def forward_critic(
+        self, observations: Data, actions: torch.Tensor, train: bool = True
+    ):
         critic = self.state.modules["critic"]
         return critic(observations, actions, train=train)
 
@@ -91,10 +95,14 @@ class SACAgent:
     @staticmethod
     def _extract_aux_tensor(observations: Data, key: str) -> torch.Tensor:
         if not isinstance(observations, dict) or key not in observations:
-            raise KeyError(f"Missing observation key required for action transform: {key}")
+            raise KeyError(
+                f"Missing observation key required for action transform: {key}"
+            )
         value = observations[key]
         if not isinstance(value, torch.Tensor):
-            raise TypeError(f"Observation key '{key}' must be a torch.Tensor, got {type(value)}")
+            raise TypeError(
+                f"Observation key '{key}' must be a torch.Tensor, got {type(value)}"
+            )
         if value.ndim >= 3 and value.shape[1] == 1:
             value = value[:, 0]
         return value
@@ -128,7 +136,10 @@ class SACAgent:
             return action_mask
 
         transform_cfg = self.config.get("action_transform", None)
-        if transform_cfg is None or transform_cfg.get("type", None) != "residual_combined":
+        if (
+            transform_cfg is None
+            or transform_cfg.get("type", None) != "residual_combined"
+        ):
             raise ValueError(
                 "action_mask dim does not match policy action dim and no residual action transform is configured: "
                 f"mask_dim={action_mask.shape[-1]} policy_dim={policy_action_dim}"
@@ -150,7 +161,9 @@ class SACAgent:
                     "Unexpected chunk critic action_mask dim: "
                     f"{action_mask.shape[-1]} != {expected_critic_dim}"
                 )
-            projected = action_mask.reshape(*action_mask.shape[:-1], chunk_horizon, full_action_dim)
+            projected = action_mask.reshape(
+                *action_mask.shape[:-1], chunk_horizon, full_action_dim
+            )
             projected = projected.index_select(dim=-1, index=control_indices)
             projected = projected.reshape(*projected.shape[:-2], -1)
         else:
@@ -177,7 +190,9 @@ class SACAgent:
         if policy_action_mask is None:
             return log_prob_per_dim.sum(dim=-1)
 
-        mask = policy_action_mask.to(device=log_prob_per_dim.device, dtype=log_prob_per_dim.dtype)
+        mask = policy_action_mask.to(
+            device=log_prob_per_dim.device, dtype=log_prob_per_dim.dtype
+        )
         if log_prob_per_dim.ndim == mask.ndim + 1:
             mask = mask.unsqueeze(1)
         elif log_prob_per_dim.ndim != mask.ndim:
@@ -203,7 +218,10 @@ class SACAgent:
         policy_actions: torch.Tensor,
     ) -> torch.Tensor:
         transform_cfg = self.config.get("action_transform", None)
-        if transform_cfg is None or transform_cfg.get("type", None) != "residual_combined":
+        if (
+            transform_cfg is None
+            or transform_cfg.get("type", None) != "residual_combined"
+        ):
             return policy_actions
 
         control_indices = torch.as_tensor(
@@ -245,26 +263,39 @@ class SACAgent:
             if clipped.ndim == 2:
                 delta = clipped * scale * limits.view(1, -1)
                 final_action = base_action.clone()
-                final_action[:, control_indices] = final_action[:, control_indices] + delta
+                final_action[:, control_indices] = (
+                    final_action[:, control_indices] + delta
+                )
             elif clipped.ndim == 3:
                 delta = clipped * scale.unsqueeze(1) * limits.view(1, 1, -1)
-                final_action = base_action.unsqueeze(1).expand(-1, clipped.shape[1], -1).clone()
-                final_action[:, :, control_indices] = final_action[:, :, control_indices] + delta
+                final_action = (
+                    base_action.unsqueeze(1).expand(-1, clipped.shape[1], -1).clone()
+                )
+                final_action[:, :, control_indices] = (
+                    final_action[:, :, control_indices] + delta
+                )
             else:
-                raise ValueError(f"Unsupported policy action rank for step transform: {clipped.shape}")
+                raise ValueError(
+                    f"Unsupported policy action rank for step transform: {clipped.shape}"
+                )
 
             if clip_gripper and final_action.shape[-1] > 0:
                 final_action = self._clip_gripper_last_dim(final_action)
             return final_action
 
-        base_chunk_key = str(transform_cfg.get("base_action_chunk_key", "base_action_chunk"))
+        base_chunk_key = str(
+            transform_cfg.get("base_action_chunk_key", "base_action_chunk")
+        )
         base_chunk = self._extract_aux_tensor(observations, base_chunk_key).to(
             device=policy_actions.device,
             dtype=policy_actions.dtype,
         )
         if base_chunk.ndim != 3:
             raise ValueError(f"Unexpected base action chunk shape: {base_chunk.shape}")
-        if base_chunk.shape[1] != chunk_horizon or base_chunk.shape[2] != full_action_dim:
+        if (
+            base_chunk.shape[1] != chunk_horizon
+            or base_chunk.shape[2] != full_action_dim
+        ):
             raise ValueError(
                 "Unexpected base action chunk dims: "
                 f"{tuple(base_chunk.shape)} vs (*, {chunk_horizon}, {full_action_dim})"
@@ -276,26 +307,44 @@ class SACAgent:
             residual_chunk = clipped.reshape(-1, chunk_horizon, residual_action_dim)
             delta = residual_chunk * scale.unsqueeze(1) * limits.view(1, 1, -1)
             final_chunk = base_chunk.clone()
-            final_chunk[:, :, control_indices] = final_chunk[:, :, control_indices] + delta
+            final_chunk[:, :, control_indices] = (
+                final_chunk[:, :, control_indices] + delta
+            )
             if clip_gripper and final_chunk.shape[-1] > 0:
                 final_chunk = self._clip_gripper_last_dim(final_chunk)
             return final_chunk.reshape(-1, chunk_horizon * full_action_dim)
 
         if clipped.ndim == 3:
-            residual_chunk = clipped.reshape(-1, clipped.shape[1], chunk_horizon, residual_action_dim)
-            delta = residual_chunk * scale.unsqueeze(1).unsqueeze(1) * limits.view(1, 1, 1, -1)
-            final_chunk = base_chunk.unsqueeze(1).expand(-1, clipped.shape[1], -1, -1).clone()
-            final_chunk[:, :, :, control_indices] = final_chunk[:, :, :, control_indices] + delta
+            residual_chunk = clipped.reshape(
+                -1, clipped.shape[1], chunk_horizon, residual_action_dim
+            )
+            delta = (
+                residual_chunk
+                * scale.unsqueeze(1).unsqueeze(1)
+                * limits.view(1, 1, 1, -1)
+            )
+            final_chunk = (
+                base_chunk.unsqueeze(1).expand(-1, clipped.shape[1], -1, -1).clone()
+            )
+            final_chunk[:, :, :, control_indices] = (
+                final_chunk[:, :, :, control_indices] + delta
+            )
             if clip_gripper and final_chunk.shape[-1] > 0:
                 final_chunk = self._clip_gripper_last_dim(final_chunk)
-            return final_chunk.reshape(-1, clipped.shape[1], chunk_horizon * full_action_dim)
+            return final_chunk.reshape(
+                -1, clipped.shape[1], chunk_horizon * full_action_dim
+            )
 
-        raise ValueError(f"Unsupported policy action rank for chunk transform: {clipped.shape}")
+        raise ValueError(
+            f"Unsupported policy action rank for chunk transform: {clipped.shape}"
+        )
 
     def temperature_lagrange_penalty(self, entropy: torch.Tensor):
         return self.state.modules["temperature"](
             lhs=entropy,
-            rhs=torch.as_tensor(self.config["target_entropy"], device=self.device, dtype=torch.float32),
+            rhs=torch.as_tensor(
+                self.config["target_entropy"], device=self.device, dtype=torch.float32
+            ),
         )
 
     def _sample_policy_actions_for_critic(
@@ -320,20 +369,27 @@ class SACAgent:
             else:
                 policy_actions = action_distributions.sample()
                 log_probs = None
-            critic_actions = self._transform_policy_actions_for_critic(observations, policy_actions)
+            critic_actions = self._transform_policy_actions_for_critic(
+                observations, policy_actions
+            )
             return critic_actions, log_probs
 
         action_list = []
         log_probs_list = []
         for _ in range(k):
             if with_log_prob:
-                sampled_actions, sampled_log_probs = action_distributions.sample_and_log_prob()
+                (
+                    sampled_actions,
+                    sampled_log_probs,
+                ) = action_distributions.sample_and_log_prob()
                 log_probs_list.append(sampled_log_probs)
             else:
                 sampled_actions = action_distributions.sample()
             action_list.append(sampled_actions)
         policy_actions = torch.stack(action_list, dim=1)
-        critic_actions = self._transform_policy_actions_for_critic(observations, policy_actions)
+        critic_actions = self._transform_policy_actions_for_critic(
+            observations, policy_actions
+        )
         if with_log_prob:
             return critic_actions, torch.stack(log_probs_list, dim=1)
         return critic_actions, None
@@ -347,18 +403,25 @@ class SACAgent:
         calql_temperature: Optional[float] = None,
     ):
         batch_size = batch["rewards"].shape[0]
-        action_mask = batch.get("action_mask", None) if isinstance(batch, dict) else None
+        action_mask = (
+            batch.get("action_mask", None) if isinstance(batch, dict) else None
+        )
 
         with torch.no_grad():
             otf_num_samples = max(1, int(self.config.get("otf_num_samples", 1)))
             if otf_num_samples == 1:
-                next_actions, next_actions_log_probs = self._sample_policy_actions_for_critic(
+                (
+                    next_actions,
+                    next_actions_log_probs,
+                ) = self._sample_policy_actions_for_critic(
                     batch["next_observations"],
                     num_samples=1,
                     train=True,
                     with_log_prob=True,
                 )
-                target_next_qs = self.forward_target_critic(batch["next_observations"], next_actions)
+                target_next_qs = self.forward_target_critic(
+                    batch["next_observations"], next_actions
+                )
                 if target_next_qs.ndim == 1:
                     target_next_qs = target_next_qs.unsqueeze(0)
 
@@ -375,7 +438,10 @@ class SACAgent:
                 target_next_min_q = target_next_qs.min(dim=0).values
             else:
                 # OTF: 对 next action 多次采样，使用最优 bootstrap Q 提升前期样本效率。
-                next_actions_k, next_actions_log_probs_k = self._sample_policy_actions_for_critic(
+                (
+                    next_actions_k,
+                    next_actions_log_probs_k,
+                ) = self._sample_policy_actions_for_critic(
                     batch["next_observations"],
                     num_samples=otf_num_samples,
                     train=True,
@@ -400,7 +466,9 @@ class SACAgent:
 
                 q_min_bk = target_next_qs.min(dim=0).values  # (B,K)
                 best_idx = torch.argmax(q_min_bk, dim=-1)  # (B,)
-                target_next_min_q = q_min_bk.gather(-1, best_idx.unsqueeze(-1)).squeeze(-1)
+                target_next_min_q = q_min_bk.gather(-1, best_idx.unsqueeze(-1)).squeeze(
+                    -1
+                )
                 next_actions_log_probs = next_actions_log_probs_k.gather(
                     -1,
                     best_idx.unsqueeze(-1),
@@ -408,11 +476,18 @@ class SACAgent:
 
             if self.config["backup_entropy"]:
                 temperature = self.forward_temperature().detach()
-                target_next_min_q = target_next_min_q - temperature * next_actions_log_probs
-            target_q = batch["rewards"] + self.config["discount"] * batch["masks"] * target_next_min_q
+                target_next_min_q = (
+                    target_next_min_q - temperature * next_actions_log_probs
+                )
+            target_q = (
+                batch["rewards"]
+                + self.config["discount"] * batch["masks"] * target_next_min_q
+            )
 
         critic_actions = self._apply_action_mask(batch["actions"], action_mask)
-        predicted_qs = self.forward_critic(batch["observations"], critic_actions, train=True)
+        predicted_qs = self.forward_critic(
+            batch["observations"], critic_actions, train=True
+        )
         if predicted_qs.ndim == 1:
             predicted_qs = predicted_qs.unsqueeze(0)
 
@@ -433,10 +508,16 @@ class SACAgent:
         if calql_alpha > 0.0:
             # Cal-QL/CQL-style conservative regularization:
             # 约束 Q(s, a_data) 不应明显低于采样动作集合上的 log-sum-exp 估计。
-            n_actions = int(calql_n_actions) if calql_n_actions is not None else int(self.config.get("cql_n_actions", 10))
+            n_actions = (
+                int(calql_n_actions)
+                if calql_n_actions is not None
+                else int(self.config.get("cql_n_actions", 10))
+            )
             n_actions = max(1, n_actions)
-            cql_temp = float(calql_temperature) if calql_temperature is not None else float(
-                self.config.get("cql_temperature", 1.0)
+            cql_temp = (
+                float(calql_temperature)
+                if calql_temperature is not None
+                else float(self.config.get("cql_temperature", 1.0))
             )
             cql_temp = max(cql_temp, 1e-6)
 
@@ -456,8 +537,12 @@ class SACAgent:
             )
             policy_actions = self._apply_action_mask(policy_actions, action_mask)
 
-            q_rand = self.forward_critic(batch["observations"], random_actions, train=True)  # (Q,B,N)
-            q_pi = self.forward_critic(batch["observations"], policy_actions, train=True)  # (Q,B,N)
+            q_rand = self.forward_critic(
+                batch["observations"], random_actions, train=True
+            )  # (Q,B,N)
+            q_pi = self.forward_critic(
+                batch["observations"], policy_actions, train=True
+            )  # (Q,B,N)
             q_cat = torch.cat([q_rand, q_pi], dim=-1)  # (Q,B,2N)
 
             lse_q = torch.logsumexp(q_cat / cql_temp, dim=-1) * cql_temp  # (Q,B)
@@ -484,18 +569,25 @@ class SACAgent:
     def policy_loss_fn(self, batch):
         temperature = self.forward_temperature().detach()
         action_distributions = self.forward_policy(batch["observations"], train=True)
-        policy_actions, log_prob_per_dim = action_distributions.sample_and_log_prob_per_dim()
+        (
+            policy_actions,
+            log_prob_per_dim,
+        ) = action_distributions.sample_and_log_prob_per_dim()
         actions = self._transform_policy_actions_for_critic(
             batch["observations"],
             policy_actions,
         )
-        action_mask = batch.get("action_mask", None) if isinstance(batch, dict) else None
+        action_mask = (
+            batch.get("action_mask", None) if isinstance(batch, dict) else None
+        )
         actions = self._apply_action_mask(actions, action_mask)
         policy_action_mask = self._project_critic_action_mask_to_policy_space(
             action_mask,
             policy_action_dim=int(policy_actions.shape[-1]),
         )
-        log_probs = self._reduce_log_prob_with_mask(log_prob_per_dim, policy_action_mask)
+        log_probs = self._reduce_log_prob_with_mask(
+            log_prob_per_dim, policy_action_mask
+        )
 
         predicted_qs = self.forward_critic(batch["observations"], actions, train=True)
         if predicted_qs.ndim == 1:
@@ -516,7 +608,11 @@ class SACAgent:
             "entropy": float((-log_probs.mean()).detach().cpu()),
             "log_prob": float(log_probs.mean().detach().cpu()),
             "policy_active_dims": float(
-                policy_action_mask.to(dtype=torch.float32).sum(dim=-1).mean().detach().cpu()
+                policy_action_mask.to(dtype=torch.float32)
+                .sum(dim=-1)
+                .mean()
+                .detach()
+                .cpu()
             )
             if policy_action_mask is not None
             else float(policy_actions.shape[-1]),
@@ -529,11 +625,16 @@ class SACAgent:
 
     def temperature_loss_fn(self, batch):
         with torch.no_grad():
-            action_distributions = self.forward_policy(batch["observations"], train=True)
-            policy_actions, log_prob_per_dim = (
-                action_distributions.sample_and_log_prob_per_dim()
+            action_distributions = self.forward_policy(
+                batch["observations"], train=True
             )
-            action_mask = batch.get("action_mask", None) if isinstance(batch, dict) else None
+            (
+                policy_actions,
+                log_prob_per_dim,
+            ) = action_distributions.sample_and_log_prob_per_dim()
+            action_mask = (
+                batch.get("action_mask", None) if isinstance(batch, dict) else None
+            )
             policy_action_mask = self._project_critic_action_mask_to_policy_space(
                 action_mask,
                 policy_action_dim=int(policy_actions.shape[-1]),
@@ -557,9 +658,15 @@ class SACAgent:
             "target_entropy": float(target_entropy.detach().cpu()),
             "target_entropy_abs": float(target_entropy_abs.detach().cpu()),
             "target_entropy_gap": float((entropy - target_entropy_abs).detach().cpu()),
-            "temperature_constraint_gap": float((entropy - target_entropy).detach().cpu()),
+            "temperature_constraint_gap": float(
+                (entropy - target_entropy).detach().cpu()
+            ),
             "temperature_policy_active_dims": float(
-                policy_action_mask.to(dtype=torch.float32).sum(dim=-1).mean().detach().cpu()
+                policy_action_mask.to(dtype=torch.float32)
+                .sum(dim=-1)
+                .mean()
+                .detach()
+                .cpu()
             )
             if policy_action_mask is not None
             else float(policy_actions.shape[-1]),
@@ -570,7 +677,9 @@ class SACAgent:
         batch: Batch,
         *,
         pmap_axis: str = None,
-        networks_to_update: FrozenSet[str] = frozenset({"actor", "critic", "temperature"}),
+        networks_to_update: FrozenSet[str] = frozenset(
+            {"actor", "critic", "temperature"}
+        ),
     ) -> Tuple["SACAgent", dict]:
         del pmap_axis
         batch = _to_torch(batch, self.device)
@@ -675,7 +784,9 @@ class SACAgent:
     ):
         del rng
         if entropy_per_dim:
-            raise NotImplementedError("entropy_per_dim is not supported in torch migration")
+            raise NotImplementedError(
+                "entropy_per_dim is not supported in torch migration"
+            )
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -685,7 +796,9 @@ class SACAgent:
 
         obs_t = _to_torch(observations, device)
         act_t = _to_torch(actions, device)
-        critic_act_t = _to_torch(critic_actions if critic_actions is not None else actions, device)
+        critic_act_t = _to_torch(
+            critic_actions if critic_actions is not None else actions, device
+        )
 
         with torch.no_grad():
             actor_def(obs_t, train=False)
@@ -693,10 +806,16 @@ class SACAgent:
             temperature_def()
 
         critic_param_ids = {id(p) for p in critic_def.parameters()}
-        actor_only_params = [p for p in actor_def.parameters() if id(p) not in critic_param_ids]
+        actor_only_params = [
+            p for p in actor_def.parameters() if id(p) not in critic_param_ids
+        ]
         actor_bundle = make_optimizer(actor_only_params, **actor_optimizer_kwargs)
-        critic_bundle = make_optimizer(critic_def.parameters(), **critic_optimizer_kwargs)
-        temp_bundle = make_optimizer(temperature_def.parameters(), **temperature_optimizer_kwargs)
+        critic_bundle = make_optimizer(
+            critic_def.parameters(), **critic_optimizer_kwargs
+        )
+        temp_bundle = make_optimizer(
+            temperature_def.parameters(), **temperature_optimizer_kwargs
+        )
 
         state = TorchRLTrainState(
             modules={
@@ -790,8 +909,12 @@ class SACAgent:
             **policy_kwargs,
         )
 
-        critic_ctor = lambda: Critic(encoder=critic_encoder, network=MLP(**critic_network_kwargs))
-        critic_def = CriticEnsemble(critic_ctor=critic_ctor, num_qs=critic_ensemble_size)
+        critic_ctor = lambda: Critic(
+            encoder=critic_encoder, network=MLP(**critic_network_kwargs)
+        )
+        critic_def = CriticEnsemble(
+            critic_ctor=critic_ctor, num_qs=critic_ensemble_size
+        )
 
         temperature_def = GeqLagrangeMultiplier(
             init_value=temperature_init,
@@ -844,7 +967,9 @@ class SACAgent:
         )
 
         critic_ctor = lambda: Critic(encoder=None, network=MLP(**critic_network_kwargs))
-        critic_def = CriticEnsemble(critic_ctor=critic_ctor, num_qs=critic_ensemble_size)
+        critic_def = CriticEnsemble(
+            critic_ctor=critic_ctor, num_qs=critic_ensemble_size
+        )
 
         temperature_def = GeqLagrangeMultiplier(
             init_value=temperature_init,
@@ -878,7 +1003,9 @@ class SACAgent:
         critic_infos = []
         for i in range(utd_ratio):
             minibatch = _index_batch(minibatches, i)
-            self, info = self.update(minibatch, networks_to_update=frozenset({"critic"}))
+            self, info = self.update(
+                minibatch, networks_to_update=frozenset({"critic"})
+            )
             critic_infos.append(info)
 
         _, actor_temp_info = self.update(

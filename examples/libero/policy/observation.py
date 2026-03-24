@@ -23,7 +23,9 @@ def _lru_get(cache: "OrderedDict[Hashable, Any]", key: Hashable) -> Any:
     return value
 
 
-def _lru_set(cache: "OrderedDict[Hashable, Any]", key: Hashable, value: Any, *, limit: int) -> Any:
+def _lru_set(
+    cache: "OrderedDict[Hashable, Any]", key: Hashable, value: Any, *, limit: int
+) -> Any:
     if key in cache:
         cache.pop(key)
     cache[key] = value
@@ -65,7 +67,9 @@ def _find_first_key(obs: Dict[str, Any], candidates: Tuple[str, ...]) -> Any:
     for key in candidates:
         if key in obs:
             return obs[key]
-    raise KeyError(f"Missing keys {candidates} in observation. Available keys: {list(obs.keys())}")
+    raise KeyError(
+        f"Missing keys {candidates} in observation. Available keys: {list(obs.keys())}"
+    )
 
 
 def _compute_libero_state(obs: Dict[str, Any]) -> np.ndarray:
@@ -85,7 +89,9 @@ def _compute_libero_state(obs: Dict[str, Any]) -> np.ndarray:
             ),
             np.asarray(eef_ori, dtype=np.float32),
             np.asarray(
-                _find_first_key(obs, ("robot0_gripper_qpos", "gripper_states", "gripper_qpos")),
+                _find_first_key(
+                    obs, ("robot0_gripper_qpos", "gripper_states", "gripper_qpos")
+                ),
                 dtype=np.float32,
             ),
         ),
@@ -101,12 +107,19 @@ def _preprocess_rgb(rgb: np.ndarray) -> np.ndarray:
 def _compute_residual_images(obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
     return {
         "image": _preprocess_rgb(
-            _find_first_key(obs, ("agentview_image", "agentview_rgb", "image", "front_rgb"))
+            _find_first_key(
+                obs, ("agentview_image", "agentview_rgb", "image", "front_rgb")
+            )
         ),
         "wrist_image": _preprocess_rgb(
             _find_first_key(
                 obs,
-                ("robot0_eye_in_hand_image", "eye_in_hand_rgb", "wrist_image", "hand_rgb"),
+                (
+                    "robot0_eye_in_hand_image",
+                    "eye_in_hand_rgb",
+                    "wrist_image",
+                    "hand_rgb",
+                ),
             )
         ),
     }
@@ -150,7 +163,9 @@ def _build_fused_residual_state(
 
     if base_action_chunk is not None:
         fused_parts.append(
-            _normalize_action_chunk(base_action_chunk, normalizer=normalizer).reshape(-1)
+            _normalize_action_chunk(base_action_chunk, normalizer=normalizer).reshape(
+                -1
+            )
         )
 
     fused_parts.append(np.asarray([float(xi)], dtype=np.float32))
@@ -183,7 +198,9 @@ def build_residual_step_core(
             f"Unsupported image key(s): {missing_keys}. "
             f"Available keys: {list(images_all.keys())}"
         )
-    payload: Dict[str, np.ndarray] = {"state_core": np.asarray(state_core, dtype=np.float32)}
+    payload: Dict[str, np.ndarray] = {
+        "state_core": np.asarray(state_core, dtype=np.float32)
+    }
     for key in image_keys:
         payload[key] = np.array(images_all[key], copy=True)
     return payload
@@ -202,7 +219,9 @@ def build_residual_step_obs_from_core(
         raise KeyError("core must include 'state_core'")
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
     base_action_chunk_arr = (
-        np.asarray(base_action_chunk, dtype=np.float32) if base_action_chunk is not None else None
+        np.asarray(base_action_chunk, dtype=np.float32)
+        if base_action_chunk is not None
+        else None
     )
     fused_state = _build_fused_residual_state(
         state=np.asarray(core["state_core"], dtype=np.float32).reshape(-1),
@@ -246,14 +265,22 @@ class _ObservationIdentityKey:
 class LiberoObservationCache:
     """Lightweight LRU cache for repeated LIBERO observation preprocessing."""
 
-    def __init__(self, *, max_obs_entries: int = 64, max_step_obs_entries: int = 256) -> None:
+    def __init__(
+        self, *, max_obs_entries: int = 64, max_step_obs_entries: int = 256
+    ) -> None:
         self.max_obs_entries = max(1, int(max_obs_entries))
         self.max_step_obs_entries = max(1, int(max_step_obs_entries))
         self._lock = threading.RLock()
-        self._image_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = OrderedDict()
+        self._image_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = (
+            OrderedDict()
+        )
         self._state_cache: "OrderedDict[Hashable, np.ndarray]" = OrderedDict()
-        self._normalized_state_cache: "OrderedDict[Hashable, np.ndarray]" = OrderedDict()
-        self._step_obs_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = OrderedDict()
+        self._normalized_state_cache: "OrderedDict[Hashable, np.ndarray]" = (
+            OrderedDict()
+        )
+        self._step_obs_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = (
+            OrderedDict()
+        )
 
     def clear(self) -> None:
         with self._lock:
@@ -262,7 +289,9 @@ class LiberoObservationCache:
             self._normalized_state_cache.clear()
             self._step_obs_cache.clear()
 
-    def _resolve_key(self, obs: Dict[str, Any], cache_key: Optional[Hashable]) -> Hashable:
+    def _resolve_key(
+        self, obs: Dict[str, Any], cache_key: Optional[Hashable]
+    ) -> Hashable:
         if cache_key is not None:
             return cache_key
         return _ObservationIdentityKey(obs)
@@ -279,7 +308,9 @@ class LiberoObservationCache:
             if cached is not None:
                 return cached
             images = _compute_residual_images(obs)
-            return _lru_set(self._image_cache, obs_key, images, limit=self.max_obs_entries)
+            return _lru_set(
+                self._image_cache, obs_key, images, limit=self.max_obs_entries
+            )
 
     def get_state(
         self,
@@ -296,7 +327,9 @@ class LiberoObservationCache:
                 if cached is not None:
                     return cached
                 state = _compute_libero_state(obs)
-                return _lru_set(self._state_cache, obs_key, state, limit=self.max_obs_entries)
+                return _lru_set(
+                    self._state_cache, obs_key, state, limit=self.max_obs_entries
+                )
 
             cache_token = (obs_key, norm_key)
             cached = _lru_get(self._normalized_state_cache, cache_token)
@@ -328,7 +361,9 @@ class LiberoObservationCache:
         with self._lock:
             image_keys = tuple(image_keys)
             if stack_horizon != 1:
-                raise ValueError(f"Only stack_horizon=1 is currently supported, got {stack_horizon}")
+                raise ValueError(
+                    f"Only stack_horizon=1 is currently supported, got {stack_horizon}"
+                )
 
             obs_key = self._resolve_key(obs, cache_key)
             base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
@@ -338,7 +373,9 @@ class LiberoObservationCache:
             fused_key = (
                 obs_key,
                 base_action_arr.tobytes(),
-                None if base_action_chunk_arr is None else base_action_chunk_arr.tobytes(),
+                None
+                if base_action_chunk_arr is None
+                else base_action_chunk_arr.tobytes(),
                 float(xi),
                 image_keys,
                 int(stack_horizon),
@@ -370,13 +407,24 @@ class LiberoObservationCache:
                     f"Available keys: {list(images_all.keys())}"
                 )
 
-            stacked = {key: np.expand_dims(images_all[key], axis=0) for key in image_keys}
+            stacked = {
+                key: np.expand_dims(images_all[key], axis=0) for key in image_keys
+            }
             stacked["state"] = np.expand_dims(fused_state, axis=0)
-            stacked["base_action"] = np.expand_dims(base_action_arr.astype(np.float32), axis=0)
+            stacked["base_action"] = np.expand_dims(
+                base_action_arr.astype(np.float32), axis=0
+            )
             stacked["xi"] = np.asarray([[float(xi)]], dtype=np.float32)
             if base_action_chunk_arr is not None:
-                stacked["base_action_chunk"] = np.expand_dims(base_action_chunk_arr.astype(np.float32), axis=0)
-            return _lru_set(self._step_obs_cache, fused_key, stacked, limit=self.max_step_obs_entries)
+                stacked["base_action_chunk"] = np.expand_dims(
+                    base_action_chunk_arr.astype(np.float32), axis=0
+                )
+            return _lru_set(
+                self._step_obs_cache,
+                fused_key,
+                stacked,
+                limit=self.max_step_obs_entries,
+            )
 
 
 def build_libero_state(
@@ -438,7 +486,9 @@ def build_residual_step_obs(
             f"Unexpected base action shape: {base_action.shape}, expected ({int(action_dim)},)"
         )
     base_action_chunk_arr = (
-        np.asarray(base_action_chunk, dtype=np.float32) if base_action_chunk is not None else None
+        np.asarray(base_action_chunk, dtype=np.float32)
+        if base_action_chunk is not None
+        else None
     )
     fused_state = _build_fused_residual_state(
         state=state,
@@ -455,7 +505,9 @@ def build_residual_step_obs(
             f"Available keys: {list(images_all.keys())}"
         )
     if stack_horizon != 1:
-        raise ValueError(f"Only stack_horizon=1 is currently supported, got {stack_horizon}")
+        raise ValueError(
+            f"Only stack_horizon=1 is currently supported, got {stack_horizon}"
+        )
 
     stacked = {key: np.expand_dims(images_all[key], axis=0) for key in image_keys}
     stacked["state"] = np.expand_dims(fused_state, axis=0)

@@ -15,7 +15,11 @@ from ..policy import (
     select_action_chunk_window,
 )
 from ..utils.obs_utils import _clone_obs_dict, _zero_obs_like
-from ..utils.profiling import _RuntimeProfiler, _build_residual_step_obs_profiled, _profile_call
+from ..utils.profiling import (
+    _RuntimeProfiler,
+    _build_residual_step_obs_profiled,
+    _profile_call,
+)
 
 if TYPE_CHECKING:
     from serl_launcher.data.replay_buffer import ReplayBuffer
@@ -57,12 +61,20 @@ def _bootstrap_offline_with_base_success(
     stats["enabled"] = 1
     target_success_episodes = int(bootstrap_cfg.get("success_episodes", 0))
     if target_success_episodes <= 0:
-        logger.warning("offline.bootstrap_base.enabled=true but success_episodes<=0, skip bootstrap")
+        logger.warning(
+            "offline.bootstrap_base.enabled=true but success_episodes<=0, skip bootstrap"
+        )
         return stats
 
-    max_seed_attempts = int(bootstrap_cfg.get("max_seed_attempts", max(1000, target_success_episodes * 100)))
+    max_seed_attempts = int(
+        bootstrap_cfg.get("max_seed_attempts", max(1000, target_success_episodes * 100))
+    )
     seed_base_cfg = bootstrap_cfg.get("seed_base", None)
-    seed_cursor = int(cfg.task.seed_base) + 1_000_000 if seed_base_cfg is None else int(seed_base_cfg)
+    seed_cursor = (
+        int(cfg.task.seed_base) + 1_000_000
+        if seed_base_cfg is None
+        else int(seed_base_cfg)
+    )
     stats["seed_start"] = int(seed_cursor)
     max_ep_steps_override = bootstrap_cfg.get("max_env_steps_per_episode", None)
     only_success = bool(bootstrap_cfg.get("only_success", True))
@@ -74,13 +86,18 @@ def _bootstrap_offline_with_base_success(
             return action_arr.astype(np.float32)
         return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
 
-    while stats["attempts"] < max_seed_attempts and stats["success_episodes"] < target_success_episodes:
+    while (
+        stats["attempts"] < max_seed_attempts
+        and stats["success_episodes"] < target_success_episodes
+    ):
         seed = int(seed_cursor)
         seed_cursor += 1
         stats["attempts"] += 1
 
         obs_cache.clear()
-        obs_raw = _profile_call(profiler, "env_reset", env.reset, seed=seed, episode_id=-1)
+        obs_raw = _profile_call(
+            profiler, "env_reset", env.reset, seed=seed, episode_id=-1
+        )
         max_episode_steps = int(env.step_limit)
         if max_ep_steps_override is not None:
             max_episode_steps = min(max_episode_steps, int(max_ep_steps_override))
@@ -108,8 +125,12 @@ def _bootstrap_offline_with_base_success(
                 cached_base_chunk = None
 
             if chunk_step_enabled:
-                execute_horizon = int(min(chunk_horizon, max_episode_steps - episode_steps))
-                executed_base_chunk = np.asarray(base_chunk[:execute_horizon], dtype=np.float32)
+                execute_horizon = int(
+                    min(chunk_horizon, max_episode_steps - episode_steps)
+                )
+                executed_base_chunk = np.asarray(
+                    base_chunk[:execute_horizon], dtype=np.float32
+                )
 
                 chunk_result = _profile_call(
                     profiler,
@@ -125,7 +146,9 @@ def _bootstrap_offline_with_base_success(
 
                 actual_chunk_steps = int(len(chunk_rewards))
                 if actual_chunk_steps <= 0:
-                    raise RuntimeError("env.step_chunk returned zero executed steps during offline bootstrap")
+                    raise RuntimeError(
+                        "env.step_chunk returned zero executed steps during offline bootstrap"
+                    )
                 executed_base_chunk = executed_base_chunk[:actual_chunk_steps]
 
                 done = False
@@ -146,9 +169,15 @@ def _bootstrap_offline_with_base_success(
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                             ),
-                            "base_action": np.asarray(executed_base_chunk[step_idx], dtype=np.float32),
-                            "base_action_norm": _normalize_step_action(executed_base_chunk[step_idx]),
-                            "actions": np.asarray(executed_base_chunk[step_idx], dtype=np.float32),
+                            "base_action": np.asarray(
+                                executed_base_chunk[step_idx], dtype=np.float32
+                            ),
+                            "base_action_norm": _normalize_step_action(
+                                executed_base_chunk[step_idx]
+                            ),
+                            "actions": np.asarray(
+                                executed_base_chunk[step_idx], dtype=np.float32
+                            ),
                             "rewards": float(reward),
                             "dones": bool(done),
                             "xi": float(residual_xi),
@@ -246,7 +275,9 @@ def _bootstrap_offline_with_base_success(
                 episode_transitions.append(
                     {
                         "observations": _clone_obs_dict(obs_input),
-                        "actions": np.asarray(base_chunk[chunk_step], dtype=np.float32).reshape(action_dim),
+                        "actions": np.asarray(
+                            base_chunk[chunk_step], dtype=np.float32
+                        ).reshape(action_dim),
                         "next_observations": _clone_obs_dict(next_obs_input),
                         "rewards": np.float32(reward),
                         "masks": np.float32(mask),

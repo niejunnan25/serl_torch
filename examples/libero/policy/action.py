@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+
 def select_action_chunk_window(
     action_chunk: np.ndarray,
     horizon: int,
@@ -14,7 +15,9 @@ def select_action_chunk_window(
     chunk = np.asarray(action_chunk, dtype=np.float32)
     if chunk.ndim != 2:
         raise ValueError(f"Unexpected action chunk shape: {chunk.shape}")
-    expected_action_dim = int(action_dim) if action_dim is not None else int(chunk.shape[1])
+    expected_action_dim = (
+        int(action_dim) if action_dim is not None else int(chunk.shape[1])
+    )
     if expected_action_dim <= 0:
         raise ValueError(f"action_dim must be positive, got {expected_action_dim}")
     if chunk.shape[1] != expected_action_dim:
@@ -32,7 +35,9 @@ def select_action_chunk_window(
     return np.concatenate([chunk, tail], axis=0)
 
 
-def controlled_action_indices(control_gripper: bool, *, full_action_dim: int) -> np.ndarray:
+def controlled_action_indices(
+    control_gripper: bool, *, full_action_dim: int
+) -> np.ndarray:
     full_dim = int(full_action_dim)
     if full_dim <= 0:
         raise ValueError(f"full_action_dim must be positive, got {full_dim}")
@@ -43,7 +48,9 @@ def controlled_action_indices(control_gripper: bool, *, full_action_dim: int) ->
     return np.arange(full_dim - 1, dtype=np.int64)
 
 
-def default_control_indices_for_dim(action_dim: int, *, full_action_dim: int) -> np.ndarray:
+def default_control_indices_for_dim(
+    action_dim: int, *, full_action_dim: int
+) -> np.ndarray:
     dim = int(action_dim)
     full_dim = int(full_action_dim)
     if full_dim <= 0:
@@ -59,7 +66,9 @@ def default_control_indices_for_dim(action_dim: int, *, full_action_dim: int) ->
     )
 
 
-def _normalize_control_indices(indices: List[int], *, full_action_dim: int) -> np.ndarray:
+def _normalize_control_indices(
+    indices: List[int], *, full_action_dim: int
+) -> np.ndarray:
     full_dim = int(full_action_dim)
     if full_dim <= 0:
         raise ValueError(f"full_action_dim must be positive, got {full_dim}")
@@ -83,7 +92,9 @@ def resolve_control_indices(
     control_gripper: Optional[bool] = None,
 ) -> np.ndarray:
     if action_indices is not None:
-        resolved = _normalize_control_indices(action_indices, full_action_dim=full_action_dim)
+        resolved = _normalize_control_indices(
+            action_indices, full_action_dim=full_action_dim
+        )
         if action_dim is not None and resolved.size != int(action_dim):
             raise ValueError(
                 "residual.action_dim does not match residual.action_indices length: "
@@ -92,11 +103,15 @@ def resolve_control_indices(
         return resolved
 
     if action_dim is not None:
-        return default_control_indices_for_dim(int(action_dim), full_action_dim=full_action_dim)
+        return default_control_indices_for_dim(
+            int(action_dim), full_action_dim=full_action_dim
+        )
 
     if control_gripper is None:
         control_gripper = True
-    return controlled_action_indices(bool(control_gripper), full_action_dim=full_action_dim)
+    return controlled_action_indices(
+        bool(control_gripper), full_action_dim=full_action_dim
+    )
 
 
 def build_residual_limits(
@@ -125,7 +140,9 @@ def build_residual_limits(
         return arr
 
     if action_limits is not None:
-        cfg_limits = _validate_limits(np.asarray(action_limits, dtype=np.float32), source="residual.action_limits")
+        cfg_limits = _validate_limits(
+            np.asarray(action_limits, dtype=np.float32), source="residual.action_limits"
+        )
         if cfg_limits.size == full_dim:
             return cfg_limits[idx]
         if cfg_limits.size == idx.size:
@@ -145,11 +162,15 @@ def build_residual_limits(
 def as_numpy_action(action: np.ndarray, action_dim: int) -> np.ndarray:
     action = np.asarray(action, dtype=np.float32).reshape(-1)
     if action.shape[0] != action_dim:
-        raise ValueError(f"Residual action dim mismatch: got {action.shape[0]} expected {action_dim}")
+        raise ValueError(
+            f"Residual action dim mismatch: got {action.shape[0]} expected {action_dim}"
+        )
     return action
 
 
-def as_numpy_action_chunk(action: np.ndarray, *, action_dim: int, chunk_horizon: int) -> np.ndarray:
+def as_numpy_action_chunk(
+    action: np.ndarray, *, action_dim: int, chunk_horizon: int
+) -> np.ndarray:
     flat = as_numpy_action(action, action_dim * chunk_horizon)
     return flat.reshape(chunk_horizon, action_dim)
 
@@ -196,7 +217,10 @@ def compose_residual_action_chunk(
         raise ValueError(
             f"Unexpected base_chunk shape: {base_chunk_arr.shape}, expected 2-D chunk"
         )
-    if residual_chunk_arr.ndim != 2 or residual_chunk_arr.shape[0] != base_chunk_arr.shape[0]:
+    if (
+        residual_chunk_arr.ndim != 2
+        or residual_chunk_arr.shape[0] != base_chunk_arr.shape[0]
+    ):
         raise ValueError(
             "Residual chunk must be 2D and share the same horizon as base_chunk: "
             f"{residual_chunk_arr.shape} vs {base_chunk_arr.shape}"

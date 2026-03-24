@@ -74,7 +74,9 @@ class _RuntimeProfiler:
             return bool(self._duration_windows or self._value_windows)
 
     @staticmethod
-    def _summarize(values: List[float], *, total_count: int, total_sum: float, suffix: str) -> Dict[str, Any]:
+    def _summarize(
+        values: List[float], *, total_count: int, total_sum: float, suffix: str
+    ) -> Dict[str, Any]:
         arr = np.asarray(values, dtype=np.float64)
         return {
             "count_window": int(arr.size),
@@ -133,7 +135,9 @@ def _build_residual_step_obs_profiled(
     *args,
     **kwargs,
 ) -> Dict[str, np.ndarray]:
-    return _profile_call(profiler, "build_residual_step_obs", build_residual_step_obs, *args, **kwargs)
+    return _profile_call(
+        profiler, "build_residual_step_obs", build_residual_step_obs, *args, **kwargs
+    )
 
 
 def _tb_safe_metric_name(name: str) -> str:

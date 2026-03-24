@@ -110,7 +110,9 @@ class LiberoTaskEnv:
         if self.env_seed_mode not in {"per_episode", "fixed"}:
             raise ValueError(f"Unsupported env_seed_mode: {env_seed_mode}")
         if self.init_state_index_mode not in {"seed", "episode_id"}:
-            raise ValueError(f"Unsupported init_state_index_mode: {init_state_index_mode}")
+            raise ValueError(
+                f"Unsupported init_state_index_mode: {init_state_index_mode}"
+            )
         self.libero_root = resolve_libero_root(libero_root, openpi_root=openpi_root)
         self.libero_config_dir = resolve_libero_config_dir(libero_config_dir)
         self.libero_datasets_root = resolve_libero_datasets_root(
@@ -133,15 +135,23 @@ class LiberoTaskEnv:
         self._current_instruction = str(self.task.language)
         self._task_description = str(self.task.language)
 
-        task_bddl_file = Path(get_libero_path("bddl_files")) / self.task.problem_folder / self.task.bddl_file
+        task_bddl_file = (
+            Path(get_libero_path("bddl_files"))
+            / self.task.problem_folder
+            / self.task.bddl_file
+        )
         env_args = {
             "bddl_file_name": task_bddl_file,
             "camera_heights": self.resolution,
             "camera_widths": self.resolution,
         }
         self.env = OffScreenRenderEnv(**env_args)
-        runtime_action_dim, runtime_action_dim_source = _infer_runtime_action_dim(self.env)
-        requested_action_dim = int(action_dim) if action_dim is not None else runtime_action_dim
+        runtime_action_dim, runtime_action_dim_source = _infer_runtime_action_dim(
+            self.env
+        )
+        requested_action_dim = (
+            int(action_dim) if action_dim is not None else runtime_action_dim
+        )
         if requested_action_dim <= 0:
             raise ValueError(f"action_dim must be positive, got {requested_action_dim}")
         if requested_action_dim != runtime_action_dim:
@@ -157,11 +167,15 @@ class LiberoTaskEnv:
         )
         if self.env_seed_mode == "fixed":
             if self.fixed_env_seed is None:
-                raise ValueError("fixed_env_seed must be provided when env_seed_mode='fixed'")
+                raise ValueError(
+                    "fixed_env_seed must be provided when env_seed_mode='fixed'"
+                )
             self.env.seed(self.fixed_env_seed)
 
         self._step_limit = int(
-            max_episode_steps if max_episode_steps is not None else resolve_max_episode_steps(self.suite_name)
+            max_episode_steps
+            if max_episode_steps is not None
+            else resolve_max_episode_steps(self.suite_name)
         )
         self._take_action_cnt = 0
         self.last_seed: Optional[int] = None
@@ -187,7 +201,9 @@ class LiberoTaskEnv:
     def action_dim(self) -> int:
         return int(self._action_dim)
 
-    def expert_precheck(self, seed: int, init_episode_idx: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    def expert_precheck(
+        self, seed: int, init_episode_idx: int
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         del seed, init_episode_idx
         return True, None
 
@@ -203,7 +219,9 @@ class LiberoTaskEnv:
             applied_seed = int(self.fixed_env_seed)
         self.last_seed = int(applied_seed)
         if self.init_state_index_mode == "episode_id" and int(init_episode_idx) >= 0:
-            self.current_init_state_idx = int(init_episode_idx) % len(self.initial_states)
+            self.current_init_state_idx = int(init_episode_idx) % len(
+                self.initial_states
+            )
         else:
             self.current_init_state_idx = int(seed) % len(self.initial_states)
         self._take_action_cnt = 0
@@ -226,8 +244,12 @@ class LiberoTaskEnv:
         )
         return obs
 
-    def step(self, action: np.ndarray) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
-        obs, reward, done, info = self.env.step(np.asarray(action, dtype=np.float32).tolist())
+    def step(
+        self, action: np.ndarray
+    ) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
+        obs, reward, done, info = self.env.step(
+            np.asarray(action, dtype=np.float32).tolist()
+        )
         self._take_action_cnt += 1
         success = bool(done)
         info_dict = dict(info) if isinstance(info, dict) else {}

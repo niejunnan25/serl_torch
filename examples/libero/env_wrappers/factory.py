@@ -18,7 +18,9 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
         resolution=int(cfg.task.resolution),
         num_steps_wait=int(cfg.task.num_steps_wait),
         max_episode_steps=(
-            int(cfg.task.max_episode_steps) if cfg.task.max_episode_steps is not None else None
+            int(cfg.task.max_episode_steps)
+            if cfg.task.max_episode_steps is not None
+            else None
         ),
         libero_root=cfg.get("libero_root", None),
         openpi_root=cfg.get("openpi_root", None),

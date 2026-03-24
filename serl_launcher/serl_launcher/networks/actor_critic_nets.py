@@ -89,7 +89,12 @@ class DiagGaussianDistribution:
 
 
 class ValueCritic(nn.Module):
-    def __init__(self, encoder: Optional[nn.Module], network: nn.Module, init_final: Optional[float] = None):
+    def __init__(
+        self,
+        encoder: Optional[nn.Module],
+        network: nn.Module,
+        init_final: Optional[float] = None,
+    ):
         super().__init__()
         self.encoder = encoder
         self.network = network
@@ -98,7 +103,11 @@ class ValueCritic(nn.Module):
         self._head_initialized = False
 
     def forward(self, observations, train: bool = False):
-        obs = observations if self.encoder is None else self.encoder(observations, train=train)
+        obs = (
+            observations
+            if self.encoder is None
+            else self.encoder(observations, train=train)
+        )
         outputs = self.network(obs, train=train)
         value = self.value_head(outputs)
         if self.init_final is not None and not self._head_initialized:
@@ -109,7 +118,12 @@ class ValueCritic(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, encoder: Optional[nn.Module], network: nn.Module, init_final: Optional[float] = None):
+    def __init__(
+        self,
+        encoder: Optional[nn.Module],
+        network: nn.Module,
+        init_final: Optional[float] = None,
+    ):
         super().__init__()
         self.encoder = encoder
         self.network = network
@@ -122,7 +136,9 @@ class Critic(nn.Module):
             return observations
         return self.encoder(observations, train=train)
 
-    def _forward_single(self, obs_enc: torch.Tensor, actions: torch.Tensor, train: bool = False):
+    def _forward_single(
+        self, obs_enc: torch.Tensor, actions: torch.Tensor, train: bool = False
+    ):
         inputs = torch.cat([obs_enc, actions], dim=-1)
         outputs = self.network(inputs, train=train)
         q = self.q_head(outputs)
@@ -138,7 +154,11 @@ class Critic(nn.Module):
         if actions.ndim == 3:
             bsz, num_actions, act_dim = actions.shape
             flat_actions = actions.reshape(bsz * num_actions, act_dim)
-            flat_obs = obs_enc.unsqueeze(1).expand(-1, num_actions, -1).reshape(bsz * num_actions, -1)
+            flat_obs = (
+                obs_enc.unsqueeze(1)
+                .expand(-1, num_actions, -1)
+                .reshape(bsz * num_actions, -1)
+            )
             q_values = self._forward_single(flat_obs, flat_actions, train=train)
             return q_values.reshape(bsz, num_actions)
 
@@ -166,7 +186,11 @@ class DistributionalCritic(nn.Module):
         self._head_initialized = False
 
     def forward(self, observations, actions: torch.Tensor, train: bool = False):
-        obs_enc = observations if self.encoder is None else self.encoder(observations, train=train)
+        obs_enc = (
+            observations
+            if self.encoder is None
+            else self.encoder(observations, train=train)
+        )
         x = torch.cat([obs_enc, actions], dim=-1)
         logits = self.logit_head(self.network(x, train=train))
         if self.init_final is not None and not self._head_initialized:
@@ -307,11 +331,15 @@ class Policy(nn.Module):
             elif self.std_parameterization == "uniform":
                 stds = torch.exp(self.log_stds).expand_as(means)
             else:
-                raise ValueError(f"Invalid std_parameterization: {self.std_parameterization}")
+                raise ValueError(
+                    f"Invalid std_parameterization: {self.std_parameterization}"
+                )
         else:
             if self.std_parameterization != "fixed":
                 raise ValueError("fixed_std requires std_parameterization='fixed'")
-            stds = torch.as_tensor(self.fixed_std, device=means.device, dtype=means.dtype)
+            stds = torch.as_tensor(
+                self.fixed_std, device=means.device, dtype=means.dtype
+            )
             if stds.ndim == 1:
                 stds = stds.expand_as(means)
 
@@ -320,7 +348,7 @@ class Policy(nn.Module):
             stds = torch.clamp(stds, min=self.std_min, max=self.std_max)
 
         # 6) 温度缩放：temperature 越大，策略采样噪声越大（探索更强）
-        stds = stds * (temperature ** 0.5)
+        stds = stds * (temperature**0.5)
 
         # 7) 返回对角高斯分布对象；后续由上层选择 sample()/mode()
         #    tanh_squash=True 时会将动作压到 (-1, 1) 区间
@@ -353,7 +381,9 @@ def ensemblize(cls_or_ctor, num_qs, out_axes=0):
         def __init__(self, *args, **kwargs):
             super().__init__()
             kwargs.pop("name", None)
-            self.models = nn.ModuleList([cls_or_ctor(*args, **kwargs) for _ in range(num_qs)])
+            self.models = nn.ModuleList(
+                [cls_or_ctor(*args, **kwargs) for _ in range(num_qs)]
+            )
             self.out_axes = out_axes
 
         def forward(self, *args, **kwargs):

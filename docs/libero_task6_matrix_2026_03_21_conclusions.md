@@ -30,19 +30,19 @@ Date: 2026-03-23
 
 本结论使用的证据主要来自下面几类文件：
 
-1. 配置文件  
+1. 配置文件
    `.../.hydra/config.yaml`
 
-2. 异步评估结果  
+2. 异步评估结果
    `.../async_eval_results.jsonl`
 
-3. 训练在线 episode 统计  
+3. 训练在线 episode 统计
    `.../episode_logs.jsonl`
 
-4. 当前 step 进度  
+4. 当前 step 进度
    `.../step_logs.jsonl`
 
-5. 异步评估失败日志  
+5. 异步评估失败日志
    `.../async_eval/step_*/eval_runner.log`
 
 代表性路径示例：

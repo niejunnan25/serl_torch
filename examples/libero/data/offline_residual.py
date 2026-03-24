@@ -71,11 +71,17 @@ def _resolve_offline_paths(dataset_paths: Any, base_dir: Path) -> List[Path]:
 
 def _build_offline_frame_obs(payload: Dict[str, Any], frame_idx: int) -> Dict[str, Any]:
     return {
-        "agentview_rgb": np.asarray(payload["agentview_rgb"][frame_idx], dtype=np.uint8),
-        "eye_in_hand_rgb": np.asarray(payload["eye_in_hand_rgb"][frame_idx], dtype=np.uint8),
+        "agentview_rgb": np.asarray(
+            payload["agentview_rgb"][frame_idx], dtype=np.uint8
+        ),
+        "eye_in_hand_rgb": np.asarray(
+            payload["eye_in_hand_rgb"][frame_idx], dtype=np.uint8
+        ),
         "ee_pos": np.asarray(payload["ee_pos"][frame_idx], dtype=np.float32),
         "ee_ori": np.asarray(payload["ee_ori"][frame_idx], dtype=np.float32),
-        "gripper_states": np.asarray(payload["gripper_states"][frame_idx], dtype=np.float32),
+        "gripper_states": np.asarray(
+            payload["gripper_states"][frame_idx], dtype=np.float32
+        ),
     }
 
 
@@ -105,13 +111,17 @@ def _project_expert_action(
 ) -> Tuple[np.ndarray, int]:
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
     expert_action_arr = np.asarray(expert_action, dtype=np.float32).reshape(-1)
-    raw_residual = (expert_action_arr[control_indices] - base_action_arr[control_indices]) / denom
+    raw_residual = (
+        expert_action_arr[control_indices] - base_action_arr[control_indices]
+    ) / denom
     clipped_count = int(np.count_nonzero((raw_residual < -1.0) | (raw_residual > 1.0)))
     if clip_residual_to_unit:
         raw_residual = np.clip(raw_residual, -1.0, 1.0)
 
     projected = np.asarray(base_action_arr, dtype=np.float32).copy()
-    projected[control_indices] = base_action_arr[control_indices] + (raw_residual * denom)
+    projected[control_indices] = base_action_arr[control_indices] + (
+        raw_residual * denom
+    )
     return projected.astype(np.float32), clipped_count
 
 
@@ -197,15 +207,23 @@ def _load_offline_residual_buffer(
         logger.warning("offline.enabled=true but offline.dataset_paths is empty")
         return stats
 
-    max_transitions = int(cfg.offline.max_transitions) if cfg.offline.max_transitions is not None else None
-    expert_reference_scale = max(float(cfg.offline.get("expert_reference_scale", 1.0)), 1e-6)
+    max_transitions = (
+        int(cfg.offline.max_transitions)
+        if cfg.offline.max_transitions is not None
+        else None
+    )
+    expert_reference_scale = max(
+        float(cfg.offline.get("expert_reference_scale", 1.0)), 1e-6
+    )
     xi = max(float(residual_xi), 1e-6)
     denom = residual_limits * xi * expert_reference_scale
     clip_residual_to_unit = bool(cfg.offline.get("clip_residual_to_unit", True))
     fallback_prompt = str(getattr(cfg.task, "prompt", ""))
     obs_cache = LiberoObservationCache(max_obs_entries=256, max_step_obs_entries=512)
 
-    logger.info("offline dataset_paths resolved: %d episode PKL files found", len(offline_paths))
+    logger.info(
+        "offline dataset_paths resolved: %d episode PKL files found", len(offline_paths)
+    )
     for path in offline_paths:
         if max_transitions is not None and stats["inserted"] >= max_transitions:
             break
@@ -223,17 +241,26 @@ def _load_offline_residual_buffer(
             logger.warning("failed to load offline dataset %s: %s", path, exc)
             continue
 
-        if not isinstance(payload, dict) or payload.get("format") != "libero_offline_episode_v1":
+        if (
+            not isinstance(payload, dict)
+            or payload.get("format") != "libero_offline_episode_v1"
+        ):
             stats["skipped"] += 1
             logger.warning("unsupported offline payload format: %s", path)
             continue
 
         actions = np.asarray(payload.get("actions", []), dtype=np.float32)
-        rewards = np.asarray(payload.get("rewards", np.zeros((actions.shape[0],))), dtype=np.float32).reshape(-1)
-        dones = np.asarray(payload.get("dones", np.zeros((actions.shape[0],))), dtype=bool).reshape(-1)
+        rewards = np.asarray(
+            payload.get("rewards", np.zeros((actions.shape[0],))), dtype=np.float32
+        ).reshape(-1)
+        dones = np.asarray(
+            payload.get("dones", np.zeros((actions.shape[0],))), dtype=bool
+        ).reshape(-1)
         if actions.ndim != 2 or actions.shape[0] == 0:
             stats["skipped"] += 1
-            logger.warning("invalid action array in offline payload %s: %s", path, actions.shape)
+            logger.warning(
+                "invalid action array in offline payload %s: %s", path, actions.shape
+            )
             continue
         if actions.shape[1] != int(full_action_dim):
             raise ValueError(
@@ -277,7 +304,11 @@ def _load_offline_residual_buffer(
                 expert_action = expert_chunk[step_in_chunk]
                 is_last_step = bool(step_idx >= (actions.shape[0] - 1))
                 done = bool(dones[step_idx]) or is_last_step
-                reward = float(rewards[step_idx]) if step_idx < rewards.shape[0] else float(done)
+                reward = (
+                    float(rewards[step_idx])
+                    if step_idx < rewards.shape[0]
+                    else float(done)
+                )
                 projected_expert_action, clipped_count = _project_expert_action(
                     expert_action=expert_action,
                     base_action=base_action,
@@ -329,7 +360,9 @@ def _load_offline_residual_buffer(
                     else:
                         next_obs_cache_key = (frame_cache_prefix, int(step_idx + 1))
                         next_obs_raw = _build_offline_frame_obs(payload, step_idx + 1)
-                        next_chunk_start = int(((step_idx + 1) // chunk_horizon) * chunk_horizon)
+                        next_chunk_start = int(
+                            ((step_idx + 1) // chunk_horizon) * chunk_horizon
+                        )
                         next_step_in_chunk = int((step_idx + 1) - next_chunk_start)
                         if next_chunk_start == chunk_start:
                             next_base_chunk = base_chunk
@@ -343,7 +376,10 @@ def _load_offline_residual_buffer(
                                 openpi_client=openpi_client,
                                 cache=base_chunk_cache,
                                 obs_cache=obs_cache,
-                                obs_cache_key=(frame_cache_prefix, int(next_chunk_start)),
+                                obs_cache_key=(
+                                    frame_cache_prefix,
+                                    int(next_chunk_start),
+                                ),
                             )
                         next_obs_input = _build_residual_step_obs_profiled(
                             profiler,
@@ -372,6 +408,8 @@ def _load_offline_residual_buffer(
             except Exception as exc:  # noqa: BLE001
                 stats["errors"] += 1
                 stats["skipped"] += 1
-                logger.warning("offline conversion failed file=%s step=%s: %s", path, step_idx, exc)
+                logger.warning(
+                    "offline conversion failed file=%s step=%s: %s", path, step_idx, exc
+                )
                 continue
     return stats

@@ -38,6 +38,7 @@ import numpy as np
 import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+
 try:
     from tqdm.auto import tqdm
 except Exception:  # noqa: BLE001
@@ -48,8 +49,12 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.libero.data import StateActionNormalizer, load_normalizer
-from serl_torch.examples.libero.data.offline_bootstrap import _bootstrap_offline_with_base_success
-from serl_torch.examples.libero.data.offline_residual import _load_offline_residual_buffer
+from serl_torch.examples.libero.data.offline_bootstrap import (
+    _bootstrap_offline_with_base_success,
+)
+from serl_torch.examples.libero.data.offline_residual import (
+    _load_offline_residual_buffer,
+)
 from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
@@ -66,7 +71,9 @@ from serl_torch.examples.libero.policy import (
     compose_residual_action_chunk,
     select_action_chunk_window,
 )
-from serl_torch.examples.libero.policy.openpi_prefetch import _AsyncOpenPIChunkPrefetcher
+from serl_torch.examples.libero.policy.openpi_prefetch import (
+    _AsyncOpenPIChunkPrefetcher,
+)
 from serl_torch.examples.libero.utils.async_eval import (
     _append_async_eval_request,
     _init_async_eval_tb_sync_state,
@@ -80,7 +87,10 @@ from serl_torch.examples.libero.utils.async_learning import (
     _sample_mixed_batch,
     _sync_agent_modules_inplace,
 )
-from serl_torch.examples.libero.utils import JsonlLogger, ensure_serl_launcher_importable
+from serl_torch.examples.libero.utils import (
+    JsonlLogger,
+    ensure_serl_launcher_importable,
+)
 from serl_torch.examples.libero.utils.checkpoint import (
     _AsyncCheckpointWriter,
     _CheckpointTask,
@@ -133,12 +143,15 @@ from torch.utils.tensorboard import SummaryWriter
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
 
+
 @hydra.main(version_base=None, config_path="../conf", config_name="train_residual_sac")
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
+    )
     logger = logging.getLogger("libero_train_residual_sac")
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
@@ -161,7 +174,9 @@ def main(cfg: DictConfig) -> None:
     norm_cfg = cfg.get("normalization", None)
     if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
         task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
-        normalizer = load_normalizer(task_key, stats_dir=norm_cfg.get("stats_dir", None))
+        normalizer = load_normalizer(
+            task_key, stats_dir=norm_cfg.get("stats_dir", None)
+        )
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
 
@@ -183,17 +198,31 @@ def main(cfg: DictConfig) -> None:
     if env_action_dim <= 0:
         raise ValueError(f"env.action_dim must be positive, got {env_action_dim}")
 
-    control_indices = resolve_control_indices_from_cfg(cfg, full_action_dim=env_action_dim)
+    control_indices = resolve_control_indices_from_cfg(
+        cfg, full_action_dim=env_action_dim
+    )
     step_action_dim = int(len(control_indices))
     chunk_horizon = int(cfg.residual.chunk_horizon)
     residual_xi = float(cfg.residual.get("xi", 1.0))
     chunk_step_cfg = cfg.get("chunk_step", None)
-    chunk_step_enabled = bool(chunk_step_cfg.get("enabled", False)) if chunk_step_cfg is not None else False
-    chunk_step_sample_stride = int(chunk_step_cfg.get("sample_stride", 1)) if chunk_step_cfg is not None else 1
-    chunk_step_require_full_horizon = (
-        bool(chunk_step_cfg.get("require_full_horizon", False)) if chunk_step_cfg is not None else False
+    chunk_step_enabled = (
+        bool(chunk_step_cfg.get("enabled", False))
+        if chunk_step_cfg is not None
+        else False
     )
-    chunk_step_pad_action = bool(chunk_step_cfg.get("pad_action_to_horizon", True)) if chunk_step_cfg is not None else True
+    chunk_step_sample_stride = (
+        int(chunk_step_cfg.get("sample_stride", 1)) if chunk_step_cfg is not None else 1
+    )
+    chunk_step_require_full_horizon = (
+        bool(chunk_step_cfg.get("require_full_horizon", False))
+        if chunk_step_cfg is not None
+        else False
+    )
+    chunk_step_pad_action = (
+        bool(chunk_step_cfg.get("pad_action_to_horizon", True))
+        if chunk_step_cfg is not None
+        else True
+    )
     chunk_step_scheduler_clock = (
         str(chunk_step_cfg.get("scheduler_clock", "env_step")).lower()
         if chunk_step_cfg is not None
@@ -209,8 +238,16 @@ def main(cfg: DictConfig) -> None:
             "chunk_step step-window replay is enabled; sample_stride is interpreted in env-step "
             "units over the step stream, matching RLT-style chunk subsampling."
         )
-    agent_action_dim = int(step_action_dim * chunk_horizon) if chunk_step_enabled else int(step_action_dim)
-    critic_action_dim = int(env_action_dim * chunk_horizon) if chunk_step_enabled else int(env_action_dim)
+    agent_action_dim = (
+        int(step_action_dim * chunk_horizon)
+        if chunk_step_enabled
+        else int(step_action_dim)
+    )
+    critic_action_dim = (
+        int(env_action_dim * chunk_horizon)
+        if chunk_step_enabled
+        else int(env_action_dim)
+    )
     residual_action_limits_cfg = cfg.residual.get("action_limits", None)
     residual_limits = build_residual_limits(
         control_indices,
@@ -247,34 +284,62 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"offline.ratio must be in [0,1], got {offline_ratio}")
     symmetric_replay = bool(cfg.offline.get("symmetric_replay", False))
     async_cfg = cfg.training.get("async", None)
-    async_enabled = bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
-    async_update_frequency = int(async_cfg.get("update_frequency", 1)) if async_cfg is not None else 1
-    async_idle_sleep_sec = float(async_cfg.get("idle_sleep_sec", 0.002)) if async_cfg is not None else 0.002
+    async_enabled = (
+        bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
+    )
+    async_update_frequency = (
+        int(async_cfg.get("update_frequency", 1)) if async_cfg is not None else 1
+    )
+    async_idle_sleep_sec = (
+        float(async_cfg.get("idle_sleep_sec", 0.002))
+        if async_cfg is not None
+        else 0.002
+    )
     replay_prefetch_cfg = cfg.training.get("replay_prefetch", None)
     replay_prefetch_enabled = (
-        bool(replay_prefetch_cfg.get("enabled", True)) if replay_prefetch_cfg is not None else True
+        bool(replay_prefetch_cfg.get("enabled", True))
+        if replay_prefetch_cfg is not None
+        else True
     )
     replay_prefetch_queue_size = (
-        int(replay_prefetch_cfg.get("queue_size", 2)) if replay_prefetch_cfg is not None else 2
+        int(replay_prefetch_cfg.get("queue_size", 2))
+        if replay_prefetch_cfg is not None
+        else 2
     )
     replay_prefetch_pin_memory = (
-        bool(replay_prefetch_cfg.get("pin_memory", True)) if replay_prefetch_cfg is not None else True
+        bool(replay_prefetch_cfg.get("pin_memory", True))
+        if replay_prefetch_cfg is not None
+        else True
     )
     replay_prefetch_to_device = (
-        bool(replay_prefetch_cfg.get("to_device", True)) if replay_prefetch_cfg is not None else True
+        bool(replay_prefetch_cfg.get("to_device", True))
+        if replay_prefetch_cfg is not None
+        else True
     )
     profiling_cfg = cfg.training.get("profiling", None)
-    profiling_enabled = bool(profiling_cfg.get("enabled", False)) if profiling_cfg is not None else False
-    profiling_window_size = int(profiling_cfg.get("window_size", 2048)) if profiling_cfg is not None else 2048
+    profiling_enabled = (
+        bool(profiling_cfg.get("enabled", False))
+        if profiling_cfg is not None
+        else False
+    )
+    profiling_window_size = (
+        int(profiling_cfg.get("window_size", 2048))
+        if profiling_cfg is not None
+        else 2048
+    )
     profiling_log_period_steps = (
-        int(profiling_cfg.get("log_period_steps", 500)) if profiling_cfg is not None else 500
+        int(profiling_cfg.get("log_period_steps", 500))
+        if profiling_cfg is not None
+        else 500
     )
     profiling_log_file = (
         str(profiling_cfg.get("log_file", "profiling_logs.jsonl"))
         if profiling_cfg is not None
         else "profiling_logs.jsonl"
     )
-    if async_enabled and any((not bool(phase.get("train", True))) for phase in cfg.training.phases):
+    if async_enabled and any(
+        (not bool(phase.get("train", True))) for phase in cfg.training.phases
+    ):
         logger.warning(
             "Detected non-train phase in training.phases; disable async mode to preserve phase semantics."
         )
@@ -300,7 +365,9 @@ def main(cfg: DictConfig) -> None:
         profiling_log_file,
     )
 
-    action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(critic_action_dim,), dtype=np.float32)
+    action_space = gym.spaces.Box(
+        low=-1.0, high=1.0, shape=(critic_action_dim,), dtype=np.float32
+    )
     agent = None
     learner_agent = None
     async_learner: Optional[_AsyncLearner] = None
@@ -334,9 +401,15 @@ def main(cfg: DictConfig) -> None:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     async_eval_cfg = cfg.training.get("async_eval", None)
-    async_eval_enabled = bool(async_eval_cfg.get("enabled", False)) if async_eval_cfg is not None else False
+    async_eval_enabled = (
+        bool(async_eval_cfg.get("enabled", False))
+        if async_eval_cfg is not None
+        else False
+    )
     async_eval_every_episodes = (
-        int(async_eval_cfg.get("every_episodes", 0)) if async_eval_cfg is not None else 0
+        int(async_eval_cfg.get("every_episodes", 0))
+        if async_eval_cfg is not None
+        else 0
     )
     if async_eval_enabled and async_eval_every_episodes <= 0:
         raise ValueError(
@@ -364,7 +437,9 @@ def main(cfg: DictConfig) -> None:
     async_eval_summary_path: Optional[Path] = None
     async_eval_watcher_return_code: Optional[int] = None
     async_eval_dead_reported = False
-    profiler = _RuntimeProfiler(enabled=profiling_enabled, window_size=profiling_window_size)
+    profiler = _RuntimeProfiler(
+        enabled=profiling_enabled, window_size=profiling_window_size
+    )
     checkpoint_writer = _AsyncCheckpointWriter(profiler=profiler)
     profiling_logger: Optional[JsonlLogger] = None
     profiling_last_flush_step = -1
@@ -400,7 +475,9 @@ def main(cfg: DictConfig) -> None:
     progress_enabled = bool(cfg.logging.get("progress_bar", True))
     progress_mininterval_sec = float(cfg.logging.get("progress_mininterval_sec", 1.0))
     if progress_enabled and tqdm is None:
-        logger.warning("progress_bar=true but tqdm is unavailable; progress bars are disabled")
+        logger.warning(
+            "progress_bar=true but tqdm is unavailable; progress bars are disabled"
+        )
         progress_enabled = False
     step_metric_window = _new_tb_step_window()
     async_eval_tb_sync_state = _init_async_eval_tb_sync_state(async_eval_summary_path)
@@ -545,7 +622,9 @@ def main(cfg: DictConfig) -> None:
             profiler=profiler,
         )
         offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
-        has_offline_dataset_paths = bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
+        has_offline_dataset_paths = (
+            bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
+        )
         if has_offline_dataset_paths:
             offline_stats = _load_offline_residual_buffer(
                 cfg,
@@ -592,7 +671,9 @@ def main(cfg: DictConfig) -> None:
         )
 
     warmup_cfg = cfg.training.get("warmup", None)
-    warmup_episodes_cfg = int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
+    warmup_episodes_cfg = (
+        int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
+    )
     need_warmup_first = warmup_episodes_cfg > 0
 
     if not need_warmup_first and async_enabled:
@@ -632,7 +713,9 @@ def main(cfg: DictConfig) -> None:
             assert replay_buffer is not None
             assert sync_replay_lock is not None
             with sync_replay_lock:
-                if _replay_progress_size(replay_buffer) < int(cfg.training.training_starts):
+                if _replay_progress_size(replay_buffer) < int(
+                    cfg.training.training_starts
+                ):
                     return None
                 return _sample_mixed_batch(
                     replay_buffer,
@@ -676,7 +759,9 @@ def main(cfg: DictConfig) -> None:
     phase_progress: Optional[Any] = None
     train_progress_last_step = 0
 
-    def _new_progress(*, desc: str, total: Optional[int], position: int, leave: bool) -> Optional[Any]:
+    def _new_progress(
+        *, desc: str, total: Optional[int], position: int, leave: bool
+    ) -> Optional[Any]:
         if (not progress_enabled) or tqdm is None:
             return None
         return tqdm(
@@ -814,8 +899,12 @@ def main(cfg: DictConfig) -> None:
 
                     if chunk_step_enabled:
                         xi_step = 0.0
-                        execute_horizon = int(min(chunk_horizon, max_episode_steps - episode_steps))
-                        executed_base_chunk = np.asarray(base_chunk[:execute_horizon], dtype=np.float32)
+                        execute_horizon = int(
+                            min(chunk_horizon, max_episode_steps - episode_steps)
+                        )
+                        executed_base_chunk = np.asarray(
+                            base_chunk[:execute_horizon], dtype=np.float32
+                        )
                         chunk_result = _profile_call(
                             profiler,
                             "env_step_chunk",
@@ -829,7 +918,9 @@ def main(cfg: DictConfig) -> None:
                         chunk_dones = [bool(v) for v in chunk_result["dones"]]
                         actual_chunk_steps = int(len(chunk_rewards))
                         if actual_chunk_steps <= 0:
-                            raise RuntimeError("Warmup chunk execution returned zero steps")
+                            raise RuntimeError(
+                                "Warmup chunk execution returned zero steps"
+                            )
                         executed_base_chunk = executed_base_chunk[:actual_chunk_steps]
 
                         done = False
@@ -852,7 +943,11 @@ def main(cfg: DictConfig) -> None:
                                     "phase_episode_idx": current_warmup_episode_id,
                                     "phase": "warmup_base_only",
                                     "episode_step": episode_steps,
-                                    "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                    "seed": int(
+                                        env.last_seed
+                                        if env.last_seed is not None
+                                        else seed
+                                    ),
                                     "init_state_idx": (
                                         int(env.current_init_state_idx)
                                         if env.current_init_state_idx is not None
@@ -863,12 +958,22 @@ def main(cfg: DictConfig) -> None:
                                     "replan_point": bool(chunk_step == 0),
                                     "chunk_step": int(chunk_step),
                                     "chunk_horizon": int(actual_chunk_steps),
-                                    "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                                    "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                                    "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                                    "infer_e2e_ms": infer_info.get("e2e_ms")
+                                    if chunk_step == 0
+                                    else None,
+                                    "infer_policy_ms": infer_info.get("policy_ms")
+                                    if chunk_step == 0
+                                    else None,
+                                    "infer_server_ms": infer_info.get("server_ms")
+                                    if chunk_step == 0
+                                    else None,
                                     "a_base": executed_base_chunk[chunk_step].tolist(),
-                                    "a_res_policy": np.zeros((step_action_dim,), dtype=np.float32).tolist(),
-                                    "a_res": np.zeros((env_action_dim,), dtype=np.float32).tolist(),
+                                    "a_res_policy": np.zeros(
+                                        (step_action_dim,), dtype=np.float32
+                                    ).tolist(),
+                                    "a_res": np.zeros(
+                                        (env_action_dim,), dtype=np.float32
+                                    ).tolist(),
                                     "a_final": executed_base_chunk[chunk_step].tolist(),
                                     "xi": 0.0,
                                     "xi_obs": float(xi_step),
@@ -900,7 +1005,10 @@ def main(cfg: DictConfig) -> None:
                                 break
 
                         if not done:
-                            next_openpi_chunk, next_infer_info = openpi_client.infer_chunk(
+                            (
+                                next_openpi_chunk,
+                                next_infer_info,
+                            ) = openpi_client.infer_chunk(
                                 next_obs_raw,
                                 env.current_instruction,
                                 obs_cache=obs_cache,
@@ -931,7 +1039,9 @@ def main(cfg: DictConfig) -> None:
                             obs_cache=obs_cache,
                             xi=float(xi_step),
                         )
-                        residual_step_action = np.zeros((step_action_dim,), dtype=np.float32)
+                        residual_step_action = np.zeros(
+                            (step_action_dim,), dtype=np.float32
+                        )
                         final_action = base_chunk[chunk_step].copy()
                         next_obs_raw, reward, env_done, _, info = _profile_call(
                             profiler,
@@ -973,9 +1083,15 @@ def main(cfg: DictConfig) -> None:
                             mask = 1.0
                         else:
                             if next_chunk_future is not None:
-                                next_openpi_chunk, next_infer_info = next_chunk_future.result()
+                                (
+                                    next_openpi_chunk,
+                                    next_infer_info,
+                                ) = next_chunk_future.result()
                             else:
-                                next_openpi_chunk, next_infer_info = openpi_client.infer_chunk(
+                                (
+                                    next_openpi_chunk,
+                                    next_infer_info,
+                                ) = openpi_client.infer_chunk(
                                     next_obs_raw,
                                     env.current_instruction,
                                     obs_cache=obs_cache,
@@ -1024,7 +1140,9 @@ def main(cfg: DictConfig) -> None:
                                 "phase_episode_idx": current_warmup_episode_id,
                                 "phase": "warmup_base_only",
                                 "episode_step": episode_steps,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
                                 "init_state_idx": (
                                     int(env.current_init_state_idx)
                                     if env.current_init_state_idx is not None
@@ -1035,12 +1153,20 @@ def main(cfg: DictConfig) -> None:
                                 "replan_point": bool(chunk_step == 0),
                                 "chunk_step": int(chunk_step),
                                 "chunk_horizon": int(chunk_horizon),
-                                "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                                "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                                "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                                "infer_e2e_ms": infer_info.get("e2e_ms")
+                                if chunk_step == 0
+                                else None,
+                                "infer_policy_ms": infer_info.get("policy_ms")
+                                if chunk_step == 0
+                                else None,
+                                "infer_server_ms": infer_info.get("server_ms")
+                                if chunk_step == 0
+                                else None,
                                 "a_base": base_chunk[chunk_step].tolist(),
                                 "a_res_policy": residual_step_action.tolist(),
-                                "a_res": np.zeros_like(base_chunk[chunk_step], dtype=np.float32).tolist(),
+                                "a_res": np.zeros_like(
+                                    base_chunk[chunk_step], dtype=np.float32
+                                ).tolist(),
                                 "a_final": final_action.tolist(),
                                 "xi": 0.0,
                                 "xi_obs": float(xi_step),
@@ -1057,17 +1183,21 @@ def main(cfg: DictConfig) -> None:
 
                 warmup_total_success += int(episode_success)
                 warmup_recent_successes.append(int(episode_success))
-                warmup_running_success_rate = float(warmup_total_success) / float(current_warmup_episode_id)
-                warmup_recent_success_rate = float(sum(warmup_recent_successes)) / float(
-                    len(warmup_recent_successes)
+                warmup_running_success_rate = float(warmup_total_success) / float(
+                    current_warmup_episode_id
                 )
+                warmup_recent_success_rate = float(
+                    sum(warmup_recent_successes)
+                ) / float(len(warmup_recent_successes))
                 episode_logger.write(
                     {
                         "phase": "warmup_base_only",
                         "warmup_episode_id": current_warmup_episode_id,
                         "train_episode_id": None,
                         "phase_episode_idx": current_warmup_episode_id,
-                        "seed": int(env.last_seed if env.last_seed is not None else seed),
+                        "seed": int(
+                            env.last_seed if env.last_seed is not None else seed
+                        ),
                         "init_state_idx": (
                             int(env.current_init_state_idx)
                             if env.current_init_state_idx is not None
@@ -1083,9 +1213,21 @@ def main(cfg: DictConfig) -> None:
                         "is_warmup": True,
                     }
                 )
-                tb_writer.add_scalar("warmup/episode/success", int(episode_success), current_warmup_episode_id)
-                tb_writer.add_scalar("warmup/episode/return", float(episode_return), current_warmup_episode_id)
-                tb_writer.add_scalar("warmup/episode/length", int(episode_steps), current_warmup_episode_id)
+                tb_writer.add_scalar(
+                    "warmup/episode/success",
+                    int(episode_success),
+                    current_warmup_episode_id,
+                )
+                tb_writer.add_scalar(
+                    "warmup/episode/return",
+                    float(episode_return),
+                    current_warmup_episode_id,
+                )
+                tb_writer.add_scalar(
+                    "warmup/episode/length",
+                    int(episode_steps),
+                    current_warmup_episode_id,
+                )
                 tb_writer.add_scalar(
                     "warmup/episode/running_success_rate",
                     warmup_running_success_rate,
@@ -1166,7 +1308,9 @@ def main(cfg: DictConfig) -> None:
                     assert replay_buffer is not None
                     assert sync_replay_lock is not None
                     with sync_replay_lock:
-                        if _replay_progress_size(replay_buffer) < int(cfg.training.training_starts):
+                        if _replay_progress_size(replay_buffer) < int(
+                            cfg.training.training_starts
+                        ):
                             return None
                         return _sample_mixed_batch(
                             replay_buffer,
@@ -1210,21 +1354,32 @@ def main(cfg: DictConfig) -> None:
             )
             try:
                 while phase_episode_count < phase_episodes:
-                    if max_train_env_steps > 0 and train_env_step >= max_train_env_steps:
+                    if (
+                        max_train_env_steps > 0
+                        and train_env_step >= max_train_env_steps
+                    ):
                         stopped_by_env_budget = True
                         break
 
                     seed = int(seed_cursor)
                     seed_cursor += 1
                     current_phase_episode_idx = int(phase_episode_count + 1)
-                    current_train_episode_id = int(train_episode_id + 1) if phase_train else None
+                    current_train_episode_id = (
+                        int(train_episode_id + 1) if phase_train else None
+                    )
                     current_init_episode_idx = int(init_episode_idx)
 
                     if bool(cfg.training.get("expert_check", False)):
-                        passed, _ = env.expert_precheck(seed=seed, init_episode_idx=current_init_episode_idx)
+                        passed, _ = env.expert_precheck(
+                            seed=seed, init_episode_idx=current_init_episode_idx
+                        )
                         if not passed:
                             skipped_seeds += 1
-                            logger.warning("skip seed=%s in phase=%s: expert precheck failed", seed, phase_name)
+                            logger.warning(
+                                "skip seed=%s in phase=%s: expert precheck failed",
+                                seed,
+                                phase_name,
+                            )
                             continue
 
                     init_episode_idx += 1
@@ -1238,7 +1393,10 @@ def main(cfg: DictConfig) -> None:
                     )
                     max_episode_steps = int(env.step_limit)
                     if cfg.training.max_env_steps_per_episode is not None:
-                        max_episode_steps = min(max_episode_steps, int(cfg.training.max_env_steps_per_episode))
+                        max_episode_steps = min(
+                            max_episode_steps,
+                            int(cfg.training.max_env_steps_per_episode),
+                        )
 
                     episode_success = False
                     episode_return = 0.0
@@ -1247,11 +1405,19 @@ def main(cfg: DictConfig) -> None:
                     cached_base_chunk = None
                     cached_infer_info = None
 
-                    probing_steps_target = sample_probing_steps(cfg.training, episode_horizon=max_episode_steps)
+                    probing_steps_target = sample_probing_steps(
+                        cfg.training, episode_horizon=max_episode_steps
+                    )
                     if probing_steps_target > 0:
-                        probing_remaining = int(min(probing_steps_target, max_episode_steps - episode_steps))
-                        probe_future: Optional[Future[Tuple[np.ndarray, Dict[str, Optional[float]]]]] = None
-                        while probing_remaining > 0 and episode_steps < max_episode_steps:
+                        probing_remaining = int(
+                            min(probing_steps_target, max_episode_steps - episode_steps)
+                        )
+                        probe_future: Optional[
+                            Future[Tuple[np.ndarray, Dict[str, Optional[float]]]]
+                        ] = None
+                        while (
+                            probing_remaining > 0 and episode_steps < max_episode_steps
+                        ):
                             if probe_future is not None:
                                 probe_chunk, probe_info = probe_future.result()
                                 probe_future = None
@@ -1267,7 +1433,10 @@ def main(cfg: DictConfig) -> None:
                                 action_dim=env_action_dim,
                             )
                             for probe_step in range(chunk_horizon):
-                                if probing_remaining <= 0 or episode_steps >= max_episode_steps:
+                                if (
+                                    probing_remaining <= 0
+                                    or episode_steps >= max_episode_steps
+                                ):
                                     break
                                 base_action = probe_base_chunk[probe_step]
                                 next_obs_raw, reward, env_done, _, info = _profile_call(
@@ -1303,14 +1472,22 @@ def main(cfg: DictConfig) -> None:
                                     )
                                 step_logger.write(
                                     {
-                                        "train_env_step": int(train_env_step) if phase_train else None,
-                                        "decision_step": int(decision_step) if phase_train else None,
+                                        "train_env_step": int(train_env_step)
+                                        if phase_train
+                                        else None,
+                                        "decision_step": int(decision_step)
+                                        if phase_train
+                                        else None,
                                         "warmup_episode_id": None,
                                         "train_episode_id": current_train_episode_id,
                                         "phase_episode_idx": current_phase_episode_idx,
                                         "phase": phase_name,
                                         "episode_step": episode_steps,
-                                        "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                        "seed": int(
+                                            env.last_seed
+                                            if env.last_seed is not None
+                                            else seed
+                                        ),
                                         "init_state_idx": (
                                             int(env.current_init_state_idx)
                                             if env.current_init_state_idx is not None
@@ -1320,12 +1497,20 @@ def main(cfg: DictConfig) -> None:
                                         "replan_point": bool(probe_step == 0),
                                         "chunk_step": int(probe_step),
                                         "chunk_horizon": int(chunk_horizon),
-                                        "infer_e2e_ms": probe_info.get("e2e_ms") if probe_step == 0 else None,
-                                        "infer_policy_ms": probe_info.get("policy_ms") if probe_step == 0 else None,
-                                        "infer_server_ms": probe_info.get("server_ms") if probe_step == 0 else None,
+                                        "infer_e2e_ms": probe_info.get("e2e_ms")
+                                        if probe_step == 0
+                                        else None,
+                                        "infer_policy_ms": probe_info.get("policy_ms")
+                                        if probe_step == 0
+                                        else None,
+                                        "infer_server_ms": probe_info.get("server_ms")
+                                        if probe_step == 0
+                                        else None,
                                         "a_base": base_action.tolist(),
                                         "a_res_policy": [0.0] * step_action_dim,
-                                        "a_res": np.zeros_like(base_action, dtype=np.float32).tolist(),
+                                        "a_res": np.zeros_like(
+                                            base_action, dtype=np.float32
+                                        ).tolist(),
                                         "a_final": base_action.tolist(),
                                         "reward": float(reward),
                                         "done": bool(done),
@@ -1386,8 +1571,13 @@ def main(cfg: DictConfig) -> None:
                             )
 
                             if xi_step <= 0.0:
-                                residual_chunk = np.zeros((chunk_horizon, step_action_dim), dtype=np.float32)
-                            elif (not phase_train) or (train_env_step_before_chunk < int(cfg.training.random_steps)):
+                                residual_chunk = np.zeros(
+                                    (chunk_horizon, step_action_dim), dtype=np.float32
+                                )
+                            elif (not phase_train) or (
+                                train_env_step_before_chunk
+                                < int(cfg.training.random_steps)
+                            ):
                                 residual_chunk = np.random.uniform(
                                     -1.0,
                                     1.0,
@@ -1395,15 +1585,22 @@ def main(cfg: DictConfig) -> None:
                                 ).astype(np.float32)
                             else:
                                 if async_learner is not None:
-                                    sampled_chunk = async_learner.sample_actor_action(obs_input, agent_action_dim)
+                                    sampled_chunk = async_learner.sample_actor_action(
+                                        obs_input, agent_action_dim
+                                    )
                                 else:
                                     sample_actions_start = time.perf_counter()
-                                    sampled = agent.sample_actions(obs_input, deterministic=False)
+                                    sampled = agent.sample_actions(
+                                        obs_input, deterministic=False
+                                    )
                                     profiler.record_duration(
                                         "agent_sample_actions",
-                                        (time.perf_counter() - sample_actions_start) * 1000.0,
+                                        (time.perf_counter() - sample_actions_start)
+                                        * 1000.0,
                                     )
-                                    sampled_chunk = as_numpy_action(sampled, agent_action_dim)
+                                    sampled_chunk = as_numpy_action(
+                                        sampled, agent_action_dim
+                                    )
                                 residual_chunk = as_numpy_action_chunk(
                                     sampled_chunk,
                                     action_dim=step_action_dim,
@@ -1418,24 +1615,39 @@ def main(cfg: DictConfig) -> None:
                                 if phase_train
                                 else None
                             )
-                            execute_horizon = int(min(chunk_horizon, max_episode_steps - episode_steps))
+                            execute_horizon = int(
+                                min(chunk_horizon, max_episode_steps - episode_steps)
+                            )
                             if remaining_budget_steps is not None:
-                                execute_horizon = int(min(execute_horizon, remaining_budget_steps))
-                            if phase_train and train_env_step_before_chunk < int(cfg.training.random_steps):
+                                execute_horizon = int(
+                                    min(execute_horizon, remaining_budget_steps)
+                                )
+                            if phase_train and train_env_step_before_chunk < int(
+                                cfg.training.random_steps
+                            ):
                                 execute_horizon = int(
                                     min(
                                         execute_horizon,
-                                        int(cfg.training.random_steps) - train_env_step_before_chunk,
+                                        int(cfg.training.random_steps)
+                                        - train_env_step_before_chunk,
                                     )
                                 )
                             if execute_horizon <= 0:
                                 episode_done = True
                                 break
 
-                            current_decision_id = int(decision_step + 1) if phase_train else None
-                            replay_size_before = int(_replay_progress_size(replay_buffer))
-                            executed_base_chunk = np.asarray(base_chunk[:execute_horizon], dtype=np.float32)
-                            executed_residual_chunk = np.asarray(residual_chunk[:execute_horizon], dtype=np.float32)
+                            current_decision_id = (
+                                int(decision_step + 1) if phase_train else None
+                            )
+                            replay_size_before = int(
+                                _replay_progress_size(replay_buffer)
+                            )
+                            executed_base_chunk = np.asarray(
+                                base_chunk[:execute_horizon], dtype=np.float32
+                            )
+                            executed_residual_chunk = np.asarray(
+                                residual_chunk[:execute_horizon], dtype=np.float32
+                            )
                             delta_chunk, final_chunk = compose_residual_action_chunk(
                                 base_chunk=executed_base_chunk,
                                 residual_chunk=executed_residual_chunk,
@@ -1458,9 +1670,15 @@ def main(cfg: DictConfig) -> None:
                             next_obs_raw = chunk_result["obs"]
                             actual_chunk_steps = int(len(chunk_rewards))
                             if actual_chunk_steps <= 0:
-                                raise RuntimeError("env.step_chunk returned zero executed steps during training")
-                            executed_base_chunk = executed_base_chunk[:actual_chunk_steps]
-                            executed_residual_chunk = executed_residual_chunk[:actual_chunk_steps]
+                                raise RuntimeError(
+                                    "env.step_chunk returned zero executed steps during training"
+                                )
+                            executed_base_chunk = executed_base_chunk[
+                                :actual_chunk_steps
+                            ]
+                            executed_residual_chunk = executed_residual_chunk[
+                                :actual_chunk_steps
+                            ]
                             delta_chunk = delta_chunk[:actual_chunk_steps]
                             final_chunk = final_chunk[:actual_chunk_steps]
 
@@ -1476,7 +1694,9 @@ def main(cfg: DictConfig) -> None:
                                     train_env_step += 1
                                     _update_train_progress()
                                 episode_return += reward
-                                episode_success = bool(info.get("success", episode_success))
+                                episode_success = bool(
+                                    info.get("success", episode_success)
+                                )
 
                                 timeout = bool(episode_steps >= max_episode_steps)
                                 remaining_budget_steps = (
@@ -1488,20 +1708,31 @@ def main(cfg: DictConfig) -> None:
                                     else None
                                 )
                                 budget_exhausted = bool(
-                                    remaining_budget_steps is not None and remaining_budget_steps <= 0
+                                    remaining_budget_steps is not None
+                                    and remaining_budget_steps <= 0
                                 )
-                                done = bool(chunk_env_dones[chunk_step] or timeout or budget_exhausted)
+                                done = bool(
+                                    chunk_env_dones[chunk_step]
+                                    or timeout
+                                    or budget_exhausted
+                                )
 
                                 step_logger.write(
                                     {
-                                        "train_env_step": int(train_env_step) if phase_train else None,
+                                        "train_env_step": int(train_env_step)
+                                        if phase_train
+                                        else None,
                                         "decision_step": current_decision_id,
                                         "warmup_episode_id": None,
                                         "train_episode_id": current_train_episode_id,
                                         "phase_episode_idx": current_phase_episode_idx,
                                         "phase": phase_name,
                                         "episode_step": episode_steps,
-                                        "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                        "seed": int(
+                                            env.last_seed
+                                            if env.last_seed is not None
+                                            else seed
+                                        ),
                                         "init_state_idx": (
                                             int(env.current_init_state_idx)
                                             if env.current_init_state_idx is not None
@@ -1511,11 +1742,21 @@ def main(cfg: DictConfig) -> None:
                                         "replan_point": bool(chunk_step == 0),
                                         "chunk_step": int(chunk_step),
                                         "chunk_horizon": int(actual_chunk_steps),
-                                        "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                                        "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                                        "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
-                                        "a_base": executed_base_chunk[chunk_step].tolist(),
-                                        "a_res_policy": executed_residual_chunk[chunk_step].tolist(),
+                                        "infer_e2e_ms": infer_info.get("e2e_ms")
+                                        if chunk_step == 0
+                                        else None,
+                                        "infer_policy_ms": infer_info.get("policy_ms")
+                                        if chunk_step == 0
+                                        else None,
+                                        "infer_server_ms": infer_info.get("server_ms")
+                                        if chunk_step == 0
+                                        else None,
+                                        "a_base": executed_base_chunk[
+                                            chunk_step
+                                        ].tolist(),
+                                        "a_res_policy": executed_residual_chunk[
+                                            chunk_step
+                                        ].tolist(),
                                         "a_res": delta_chunk[chunk_step].tolist(),
                                         "a_final": final_chunk[chunk_step].tolist(),
                                         "xi": float(xi_step),
@@ -1553,18 +1794,25 @@ def main(cfg: DictConfig) -> None:
                                         step_window=step_metric_window,
                                         global_env_step=train_env_step,
                                         control_indices=control_indices,
-                                        histogram=bool(train_env_step % tb_histogram_period == 0),
+                                        histogram=bool(
+                                            train_env_step % tb_histogram_period == 0
+                                        ),
                                     )
 
                                 if chunk_step < (actual_chunk_steps - 1):
-                                    current_step_obs_raw = chunk_observations[chunk_step]
+                                    current_step_obs_raw = chunk_observations[
+                                        chunk_step
+                                    ]
                                 if done:
                                     episode_done = True
                                     break
 
                             train_env_step_after_chunk = int(train_env_step)
                             if not done:
-                                next_openpi_chunk, next_infer_info = openpi_client.infer_chunk(
+                                (
+                                    next_openpi_chunk,
+                                    next_infer_info,
+                                ) = openpi_client.infer_chunk(
                                     next_obs_raw,
                                     env.current_instruction,
                                     obs_cache=obs_cache,
@@ -1601,7 +1849,9 @@ def main(cfg: DictConfig) -> None:
                                         chunk_step_enabled=chunk_step_enabled,
                                     )
 
-                            replay_size_after = int(_replay_progress_size(replay_buffer))
+                            replay_size_after = int(
+                                _replay_progress_size(replay_buffer)
+                            )
                             if async_learner is None:
                                 if phase_train:
                                     trigger_count = _count_env_step_update_triggers(
@@ -1609,12 +1859,21 @@ def main(cfg: DictConfig) -> None:
                                         train_step_after=train_env_step_after_chunk,
                                         replay_size_before=replay_size_before,
                                         replay_size_after=replay_size_after,
-                                        training_starts=int(cfg.training.training_starts),
+                                        training_starts=int(
+                                            cfg.training.training_starts
+                                        ),
                                         update_every=int(cfg.training.update_every),
                                     )
-                                    for _ in range(int(trigger_count * int(cfg.training.updates_per_step))):
+                                    for _ in range(
+                                        int(
+                                            trigger_count
+                                            * int(cfg.training.updates_per_step)
+                                        )
+                                    ):
                                         if sync_replay_prefetcher is not None:
-                                            sampled_batch = sync_replay_prefetcher.get(timeout=async_idle_sleep_sec)
+                                            sampled_batch = sync_replay_prefetcher.get(
+                                                timeout=async_idle_sleep_sec
+                                            )
                                             if sampled_batch is None:
                                                 continue
                                             batch, online_bs, offline_bs = sampled_batch
@@ -1622,14 +1881,20 @@ def main(cfg: DictConfig) -> None:
                                             replay_sample_start = time.perf_counter()
                                             sampled = _sample_mixed_batch(
                                                 replay_buffer,
-                                                offline_buffer if offline_enabled else None,
+                                                offline_buffer
+                                                if offline_enabled
+                                                else None,
                                                 batch_size=int(cfg.replay.batch_size),
                                                 offline_ratio=offline_ratio,
                                                 symmetric_replay=symmetric_replay,
                                             )
                                             profiler.record_duration(
                                                 "replay_sample",
-                                                (time.perf_counter() - replay_sample_start) * 1000.0,
+                                                (
+                                                    time.perf_counter()
+                                                    - replay_sample_start
+                                                )
+                                                * 1000.0,
                                             )
                                             replay_prepare_start = time.perf_counter()
                                             prepared = _prepare_replay_batch(
@@ -1640,26 +1905,42 @@ def main(cfg: DictConfig) -> None:
                                                 profiler=profiler,
                                                 cuda_stream=None,
                                             )
-                                            batch, online_bs, offline_bs = _consume_prepared_replay_batch(
+                                            (
+                                                batch,
+                                                online_bs,
+                                                offline_bs,
+                                            ) = _consume_prepared_replay_batch(
                                                 prepared,
                                                 device=learner_agent.device,
                                                 profiler=profiler,
                                             )
                                             profiler.record_duration(
                                                 "replay_prepare",
-                                                (time.perf_counter() - replay_prepare_start) * 1000.0,
+                                                (
+                                                    time.perf_counter()
+                                                    - replay_prepare_start
+                                                )
+                                                * 1000.0,
                                             )
                                         update_start = time.perf_counter()
-                                        learner_agent, last_update_info = learner_agent.update_high_utd(
+                                        (
+                                            learner_agent,
+                                            last_update_info,
+                                        ) = learner_agent.update_high_utd(
                                             batch,
                                             utd_ratio=int(cfg.sac.utd_ratio),
                                         )
                                         profiler.record_duration(
                                             "agent_update_high_utd",
-                                            (time.perf_counter() - update_start) * 1000.0,
+                                            (time.perf_counter() - update_start)
+                                            * 1000.0,
                                         )
-                                        last_update_info["online_batch_size"] = int(online_bs)
-                                        last_update_info["offline_batch_size"] = int(offline_bs)
+                                        last_update_info["online_batch_size"] = int(
+                                            online_bs
+                                        )
+                                        last_update_info["offline_batch_size"] = int(
+                                            offline_bs
+                                        )
                                         last_update_info["offline_fraction"] = float(
                                             offline_bs / max(1, online_bs + offline_bs)
                                         )
@@ -1667,8 +1948,14 @@ def main(cfg: DictConfig) -> None:
                             else:
                                 last_update_info = async_learner.get_last_update_info()
 
-                            if phase_train and train_env_step % tb_step_period == 0 and last_update_info:
-                                _log_update_metrics(tb_writer, last_update_info, train_env_step)
+                            if (
+                                phase_train
+                                and train_env_step % tb_step_period == 0
+                                and last_update_info
+                            ):
+                                _log_update_metrics(
+                                    tb_writer, last_update_info, train_env_step
+                                )
                                 tb_writer.add_scalar(
                                     "system/online_buffer_size",
                                     int(len(replay_buffer)),
@@ -1682,7 +1969,11 @@ def main(cfg: DictConfig) -> None:
                                     )
                                 tb_writer.add_scalar(
                                     "system/decision_step",
-                                    float(current_decision_id if current_decision_id is not None else 0),
+                                    float(
+                                        current_decision_id
+                                        if current_decision_id is not None
+                                        else 0
+                                    ),
                                     train_env_step,
                                 )
                                 if async_learner is not None:
@@ -1710,7 +2001,8 @@ def main(cfg: DictConfig) -> None:
                                 profiling_enabled
                                 and profiling_log_period_steps > 0
                                 and train_env_step > 0
-                                and (train_env_step - profiling_last_flush_step) >= profiling_log_period_steps
+                                and (train_env_step - profiling_last_flush_step)
+                                >= profiling_log_period_steps
                             ):
                                 _emit_profiling_snapshot(
                                     profiler,
@@ -1721,12 +2013,16 @@ def main(cfg: DictConfig) -> None:
                                     decision_step=decision_step,
                                     train_episode_id=train_episode_id,
                                     learner_update_steps=(
-                                        int(async_learner.get_update_steps()) if async_learner is not None else 0
+                                        int(async_learner.get_update_steps())
+                                        if async_learner is not None
+                                        else 0
                                     ),
                                     replay_prefetch_queue_size=(
                                         int(async_learner.get_prefetch_queue_size())
                                         if async_learner is not None
-                                        else int(sync_replay_prefetcher.get_queue_size())
+                                        else int(
+                                            sync_replay_prefetcher.get_queue_size()
+                                        )
                                         if sync_replay_prefetcher is not None
                                         else 0
                                     ),
@@ -1770,25 +2066,37 @@ def main(cfg: DictConfig) -> None:
                                 )
 
                                 if xi_step <= 0.0:
-                                    residual_step_action = np.zeros((step_action_dim,), dtype=np.float32)
-                                elif (not phase_train) or (train_env_step_before_step < int(cfg.training.random_steps)):
+                                    residual_step_action = np.zeros(
+                                        (step_action_dim,), dtype=np.float32
+                                    )
+                                elif (not phase_train) or (
+                                    train_env_step_before_step
+                                    < int(cfg.training.random_steps)
+                                ):
                                     residual_step_action = np.random.uniform(
                                         -1.0, 1.0, size=(step_action_dim,)
                                     ).astype(np.float32)
                                 else:
                                     if async_learner is not None:
-                                        residual_step_action = async_learner.sample_actor_action(
-                                            obs_input,
-                                            step_action_dim,
+                                        residual_step_action = (
+                                            async_learner.sample_actor_action(
+                                                obs_input,
+                                                step_action_dim,
+                                            )
                                         )
                                     else:
                                         sample_actions_start = time.perf_counter()
-                                        sampled = agent.sample_actions(obs_input, deterministic=False)
+                                        sampled = agent.sample_actions(
+                                            obs_input, deterministic=False
+                                        )
                                         profiler.record_duration(
                                             "agent_sample_actions",
-                                            (time.perf_counter() - sample_actions_start) * 1000.0,
+                                            (time.perf_counter() - sample_actions_start)
+                                            * 1000.0,
                                         )
-                                        residual_step_action = as_numpy_action(sampled, step_action_dim)
+                                        residual_step_action = as_numpy_action(
+                                            sampled, step_action_dim
+                                        )
 
                                 delta_action, final_action = compose_residual_action(
                                     base_action=base_chunk[chunk_step],
@@ -1799,7 +2107,9 @@ def main(cfg: DictConfig) -> None:
                                     clip_gripper=bool(cfg.residual.clip_gripper),
                                 )
 
-                                current_decision_id = int(decision_step + 1) if phase_train else None
+                                current_decision_id = (
+                                    int(decision_step + 1) if phase_train else None
+                                )
                                 next_obs_raw, reward, env_done, _, info = _profile_call(
                                     profiler,
                                     "env_step",
@@ -1825,7 +2135,11 @@ def main(cfg: DictConfig) -> None:
                                     and train_env_step >= max_train_env_steps
                                 )
                                 done = bool(env_done or timeout or budget_exhausted)
-                                next_chunk_future: Optional[Future[Tuple[np.ndarray, Dict[str, Optional[float]]]]] = None
+                                next_chunk_future: Optional[
+                                    Future[
+                                        Tuple[np.ndarray, Dict[str, Optional[float]]]
+                                    ]
+                                ] = None
                                 if (
                                     (not done)
                                     and chunk_step == (chunk_horizon - 1)
@@ -1839,14 +2153,20 @@ def main(cfg: DictConfig) -> None:
 
                                 step_logger.write(
                                     {
-                                        "train_env_step": int(train_env_step) if phase_train else None,
+                                        "train_env_step": int(train_env_step)
+                                        if phase_train
+                                        else None,
                                         "decision_step": current_decision_id,
                                         "warmup_episode_id": None,
                                         "train_episode_id": current_train_episode_id,
                                         "phase_episode_idx": current_phase_episode_idx,
                                         "phase": phase_name,
                                         "episode_step": episode_steps,
-                                        "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                        "seed": int(
+                                            env.last_seed
+                                            if env.last_seed is not None
+                                            else seed
+                                        ),
                                         "init_state_idx": (
                                             int(env.current_init_state_idx)
                                             if env.current_init_state_idx is not None
@@ -1856,9 +2176,15 @@ def main(cfg: DictConfig) -> None:
                                         "replan_point": bool(chunk_step == 0),
                                         "chunk_step": int(chunk_step),
                                         "chunk_horizon": int(chunk_horizon),
-                                        "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                                        "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                                        "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                                        "infer_e2e_ms": infer_info.get("e2e_ms")
+                                        if chunk_step == 0
+                                        else None,
+                                        "infer_policy_ms": infer_info.get("policy_ms")
+                                        if chunk_step == 0
+                                        else None,
+                                        "infer_server_ms": infer_info.get("server_ms")
+                                        if chunk_step == 0
+                                        else None,
                                         "a_base": base_chunk[chunk_step].tolist(),
                                         "a_res_policy": residual_step_action.tolist(),
                                         "a_res": delta_action.tolist(),
@@ -1887,7 +2213,9 @@ def main(cfg: DictConfig) -> None:
                                         step_window=step_metric_window,
                                         global_env_step=train_env_step,
                                         control_indices=control_indices,
-                                        histogram=bool(train_env_step % tb_histogram_period == 0),
+                                        histogram=bool(
+                                            train_env_step % tb_histogram_period == 0
+                                        ),
                                     )
 
                                 if done:
@@ -1907,9 +2235,15 @@ def main(cfg: DictConfig) -> None:
                                     mask = 1.0
                                 else:
                                     if next_chunk_future is not None:
-                                        next_openpi_chunk, next_infer_info = next_chunk_future.result()
+                                        (
+                                            next_openpi_chunk,
+                                            next_infer_info,
+                                        ) = next_chunk_future.result()
                                     else:
-                                        next_openpi_chunk, next_infer_info = openpi_client.infer_chunk(
+                                        (
+                                            next_openpi_chunk,
+                                            next_infer_info,
+                                        ) = openpi_client.infer_chunk(
                                             next_obs_raw,
                                             env.current_instruction,
                                             obs_cache=obs_cache,
@@ -1936,7 +2270,9 @@ def main(cfg: DictConfig) -> None:
                                 transition_payload = {
                                     "observations": _clone_obs_dict(obs_input),
                                     "actions": final_action.astype(np.float32),
-                                    "next_observations": _clone_obs_dict(next_obs_input),
+                                    "next_observations": _clone_obs_dict(
+                                        next_obs_input
+                                    ),
                                     "rewards": np.float32(reward),
                                     "masks": np.float32(mask),
                                     "dones": bool(done),
@@ -1967,29 +2303,54 @@ def main(cfg: DictConfig) -> None:
                                 if async_learner is None:
                                     if (
                                         phase_train
-                                        and _replay_progress_size(replay_buffer) >= int(cfg.training.training_starts)
-                                        and train_env_step_before_step % int(cfg.training.update_every) == 0
+                                        and _replay_progress_size(replay_buffer)
+                                        >= int(cfg.training.training_starts)
+                                        and train_env_step_before_step
+                                        % int(cfg.training.update_every)
+                                        == 0
                                     ):
-                                        for _ in range(int(cfg.training.updates_per_step)):
+                                        for _ in range(
+                                            int(cfg.training.updates_per_step)
+                                        ):
                                             if sync_replay_prefetcher is not None:
-                                                sampled_batch = sync_replay_prefetcher.get(timeout=async_idle_sleep_sec)
+                                                sampled_batch = (
+                                                    sync_replay_prefetcher.get(
+                                                        timeout=async_idle_sleep_sec
+                                                    )
+                                                )
                                                 if sampled_batch is None:
                                                     continue
-                                                batch, online_bs, offline_bs = sampled_batch
+                                                (
+                                                    batch,
+                                                    online_bs,
+                                                    offline_bs,
+                                                ) = sampled_batch
                                             else:
-                                                replay_sample_start = time.perf_counter()
+                                                replay_sample_start = (
+                                                    time.perf_counter()
+                                                )
                                                 sampled = _sample_mixed_batch(
                                                     replay_buffer,
-                                                    offline_buffer if offline_enabled else None,
-                                                    batch_size=int(cfg.replay.batch_size),
+                                                    offline_buffer
+                                                    if offline_enabled
+                                                    else None,
+                                                    batch_size=int(
+                                                        cfg.replay.batch_size
+                                                    ),
                                                     offline_ratio=offline_ratio,
                                                     symmetric_replay=symmetric_replay,
                                                 )
                                                 profiler.record_duration(
                                                     "replay_sample",
-                                                    (time.perf_counter() - replay_sample_start) * 1000.0,
+                                                    (
+                                                        time.perf_counter()
+                                                        - replay_sample_start
+                                                    )
+                                                    * 1000.0,
                                                 )
-                                                replay_prepare_start = time.perf_counter()
+                                                replay_prepare_start = (
+                                                    time.perf_counter()
+                                                )
                                                 prepared = _prepare_replay_batch(
                                                     sampled,
                                                     device=learner_agent.device,
@@ -1998,35 +2359,62 @@ def main(cfg: DictConfig) -> None:
                                                     profiler=profiler,
                                                     cuda_stream=None,
                                                 )
-                                                batch, online_bs, offline_bs = _consume_prepared_replay_batch(
+                                                (
+                                                    batch,
+                                                    online_bs,
+                                                    offline_bs,
+                                                ) = _consume_prepared_replay_batch(
                                                     prepared,
                                                     device=learner_agent.device,
                                                     profiler=profiler,
                                                 )
                                                 profiler.record_duration(
                                                     "replay_prepare",
-                                                    (time.perf_counter() - replay_prepare_start) * 1000.0,
+                                                    (
+                                                        time.perf_counter()
+                                                        - replay_prepare_start
+                                                    )
+                                                    * 1000.0,
                                                 )
                                             update_start = time.perf_counter()
-                                            learner_agent, last_update_info = learner_agent.update_high_utd(
+                                            (
+                                                learner_agent,
+                                                last_update_info,
+                                            ) = learner_agent.update_high_utd(
                                                 batch,
                                                 utd_ratio=int(cfg.sac.utd_ratio),
                                             )
                                             profiler.record_duration(
                                                 "agent_update_high_utd",
-                                                (time.perf_counter() - update_start) * 1000.0,
+                                                (time.perf_counter() - update_start)
+                                                * 1000.0,
                                             )
-                                            last_update_info["online_batch_size"] = int(online_bs)
-                                            last_update_info["offline_batch_size"] = int(offline_bs)
-                                            last_update_info["offline_fraction"] = float(
-                                                offline_bs / max(1, online_bs + offline_bs)
+                                            last_update_info["online_batch_size"] = int(
+                                                online_bs
+                                            )
+                                            last_update_info[
+                                                "offline_batch_size"
+                                            ] = int(offline_bs)
+                                            last_update_info[
+                                                "offline_fraction"
+                                            ] = float(
+                                                offline_bs
+                                                / max(1, online_bs + offline_bs)
                                             )
                                         agent = learner_agent
                                 else:
-                                    last_update_info = async_learner.get_last_update_info()
+                                    last_update_info = (
+                                        async_learner.get_last_update_info()
+                                    )
 
-                                if phase_train and train_env_step % tb_step_period == 0 and last_update_info:
-                                    _log_update_metrics(tb_writer, last_update_info, train_env_step)
+                                if (
+                                    phase_train
+                                    and train_env_step % tb_step_period == 0
+                                    and last_update_info
+                                ):
+                                    _log_update_metrics(
+                                        tb_writer, last_update_info, train_env_step
+                                    )
                                     tb_writer.add_scalar(
                                         "system/online_buffer_size",
                                         int(len(replay_buffer)),
@@ -2040,7 +2428,11 @@ def main(cfg: DictConfig) -> None:
                                         )
                                     tb_writer.add_scalar(
                                         "system/decision_step",
-                                        float(current_decision_id if current_decision_id is not None else 0),
+                                        float(
+                                            current_decision_id
+                                            if current_decision_id is not None
+                                            else 0
+                                        ),
                                         train_env_step,
                                     )
                                     if async_learner is not None:
@@ -2051,13 +2443,17 @@ def main(cfg: DictConfig) -> None:
                                         )
                                         tb_writer.add_scalar(
                                             "system/replay_prefetch_queue_size",
-                                            int(async_learner.get_prefetch_queue_size()),
+                                            int(
+                                                async_learner.get_prefetch_queue_size()
+                                            ),
                                             train_env_step,
                                         )
                                     elif sync_replay_prefetcher is not None:
                                         tb_writer.add_scalar(
                                             "system/replay_prefetch_queue_size",
-                                            int(sync_replay_prefetcher.get_queue_size()),
+                                            int(
+                                                sync_replay_prefetcher.get_queue_size()
+                                            ),
                                             train_env_step,
                                         )
 
@@ -2068,7 +2464,8 @@ def main(cfg: DictConfig) -> None:
                                     profiling_enabled
                                     and profiling_log_period_steps > 0
                                     and train_env_step > 0
-                                    and (train_env_step - profiling_last_flush_step) >= profiling_log_period_steps
+                                    and (train_env_step - profiling_last_flush_step)
+                                    >= profiling_log_period_steps
                                 ):
                                     _emit_profiling_snapshot(
                                         profiler,
@@ -2079,20 +2476,32 @@ def main(cfg: DictConfig) -> None:
                                         decision_step=decision_step,
                                         train_episode_id=train_episode_id,
                                         learner_update_steps=(
-                                            int(async_learner.get_update_steps()) if async_learner is not None else 0
+                                            int(async_learner.get_update_steps())
+                                            if async_learner is not None
+                                            else 0
                                         ),
                                         replay_prefetch_queue_size=(
                                             int(async_learner.get_prefetch_queue_size())
                                             if async_learner is not None
-                                            else int(sync_replay_prefetcher.get_queue_size())
+                                            else int(
+                                                sync_replay_prefetcher.get_queue_size()
+                                            )
                                             if sync_replay_prefetcher is not None
                                             else 0
                                         ),
                                     )
                                     profiling_last_flush_step = int(train_env_step)
 
-                                if phase_train and checkpoint_every_steps > 0 and train_env_step_after_step % checkpoint_every_steps == 0:
-                                    _save_checkpoint_at_step(int(train_env_step_after_step))
+                                if (
+                                    phase_train
+                                    and checkpoint_every_steps > 0
+                                    and train_env_step_after_step
+                                    % checkpoint_every_steps
+                                    == 0
+                                ):
+                                    _save_checkpoint_at_step(
+                                        int(train_env_step_after_step)
+                                    )
 
                                 if done:
                                     episode_done = True
@@ -2107,21 +2516,30 @@ def main(cfg: DictConfig) -> None:
                         step_window=step_metric_window,
                         global_env_step=max(0, int(train_env_step)),
                         control_indices=control_indices,
-                        histogram=bool(train_env_step > 0 and train_env_step % tb_histogram_period == 0),
+                        histogram=bool(
+                            train_env_step > 0
+                            and train_env_step % tb_histogram_period == 0
+                        ),
                     )
 
                     if phase_train:
                         train_total_success += int(episode_success)
                         train_recent_successes.append(int(episode_success))
-                        running_success_rate = float(train_total_success) / float(current_train_episode_id)
-                        recent_success_rate = float(sum(train_recent_successes)) / float(len(train_recent_successes))
+                        running_success_rate = float(train_total_success) / float(
+                            current_train_episode_id
+                        )
+                        recent_success_rate = float(
+                            sum(train_recent_successes)
+                        ) / float(len(train_recent_successes))
                         episode_logger.write(
                             {
                                 "phase": phase_name,
                                 "warmup_episode_id": None,
                                 "train_episode_id": current_train_episode_id,
                                 "phase_episode_idx": current_phase_episode_idx,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
                                 "init_state_idx": (
                                     int(env.current_init_state_idx)
                                     if env.current_init_state_idx is not None
@@ -2136,9 +2554,21 @@ def main(cfg: DictConfig) -> None:
                                 "recent_success_rate": recent_success_rate,
                             }
                         )
-                        tb_writer.add_scalar("train_episode/success", int(episode_success), current_train_episode_id)
-                        tb_writer.add_scalar("train_episode/return", float(episode_return), current_train_episode_id)
-                        tb_writer.add_scalar("train_episode/length", int(episode_steps), current_train_episode_id)
+                        tb_writer.add_scalar(
+                            "train_episode/success",
+                            int(episode_success),
+                            current_train_episode_id,
+                        )
+                        tb_writer.add_scalar(
+                            "train_episode/return",
+                            float(episode_return),
+                            current_train_episode_id,
+                        )
+                        tb_writer.add_scalar(
+                            "train_episode/length",
+                            int(episode_steps),
+                            current_train_episode_id,
+                        )
                         tb_writer.add_scalar(
                             "train_episode/running_success_rate",
                             running_success_rate,
@@ -2149,10 +2579,20 @@ def main(cfg: DictConfig) -> None:
                             recent_success_rate,
                             current_train_episode_id,
                         )
-                        tb_writer.add_scalar("system/online_buffer_size", int(len(replay_buffer)), train_env_step)
+                        tb_writer.add_scalar(
+                            "system/online_buffer_size",
+                            int(len(replay_buffer)),
+                            train_env_step,
+                        )
                         if offline_buffer is not None:
-                            tb_writer.add_scalar("system/offline_buffer_size", int(len(offline_buffer)), train_env_step)
-                        tb_writer.add_scalar("system/decision_step", int(decision_step), train_env_step)
+                            tb_writer.add_scalar(
+                                "system/offline_buffer_size",
+                                int(len(offline_buffer)),
+                                train_env_step,
+                            )
+                        tb_writer.add_scalar(
+                            "system/decision_step", int(decision_step), train_env_step
+                        )
                         if async_learner is not None:
                             tb_writer.add_scalar(
                                 "system/learner_update_steps",
@@ -2185,8 +2625,14 @@ def main(cfg: DictConfig) -> None:
                         )
                         train_episode_id = int(current_train_episode_id)
 
-                        if async_eval_enabled and async_eval_queue_path is not None and train_episode_id % async_eval_every_episodes == 0:
-                            checkpoint_path = _save_checkpoint_at_step(int(train_env_step))
+                        if (
+                            async_eval_enabled
+                            and async_eval_queue_path is not None
+                            and train_episode_id % async_eval_every_episodes == 0
+                        ):
+                            checkpoint_path = _save_checkpoint_at_step(
+                                int(train_env_step)
+                            )
                             eval_index = int(eval_trigger_count)
                             _append_async_eval_request(
                                 async_eval_queue_path,
@@ -2206,7 +2652,9 @@ def main(cfg: DictConfig) -> None:
                                 "warmup_episode_id": None,
                                 "train_episode_id": None,
                                 "phase_episode_idx": current_phase_episode_idx,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
                                 "init_state_idx": (
                                     int(env.current_init_state_idx)
                                     if env.current_init_state_idx is not None
@@ -2275,7 +2723,9 @@ def main(cfg: DictConfig) -> None:
             train_env_step=train_env_step,
             decision_step=decision_step,
             train_episode_id=train_episode_id,
-            learner_update_steps=int(async_learner.get_update_steps()) if async_learner is not None else 0,
+            learner_update_steps=int(async_learner.get_update_steps())
+            if async_learner is not None
+            else 0,
             replay_prefetch_queue_size=(
                 int(async_learner.get_prefetch_queue_size())
                 if async_learner is not None
@@ -2291,9 +2741,13 @@ def main(cfg: DictConfig) -> None:
             "train_episode_id": int(train_episode_id),
             "warmup_episode_id": int(warmup_episode_id),
             "train_total_success": int(train_total_success),
-            "train_success_rate": float(train_total_success / max(1, int(train_episode_id))),
+            "train_success_rate": float(
+                train_total_success / max(1, int(train_episode_id))
+            ),
             "warmup_total_success": int(warmup_total_success),
-            "warmup_success_rate": float(warmup_total_success / max(1, int(warmup_episode_id))),
+            "warmup_success_rate": float(
+                warmup_total_success / max(1, int(warmup_episode_id))
+            ),
             "skipped_seeds": int(skipped_seeds),
             "seed_start": int(cfg.task.seed_base),
             "seed_next": int(seed_cursor),
@@ -2313,7 +2767,9 @@ def main(cfg: DictConfig) -> None:
             "offline_enabled": bool(offline_enabled),
             "offline_ratio": float(offline_ratio),
             "offline_symmetric_replay": bool(symmetric_replay),
-            "offline_buffer_size": int(len(offline_buffer) if offline_buffer is not None else 0),
+            "offline_buffer_size": int(
+                len(offline_buffer) if offline_buffer is not None else 0
+            ),
             "offline_stats": offline_stats,
             "bootstrap_stats": bootstrap_stats,
             "critic_pretrain": _to_jsonable(warmstart_info),
@@ -2323,7 +2779,9 @@ def main(cfg: DictConfig) -> None:
             "last_update_info": _to_jsonable(last_update_info),
             "async_enabled": bool(async_enabled),
             "async_update_frequency": int(async_update_frequency),
-            "learner_update_steps": int(async_learner.get_update_steps() if async_learner is not None else 0),
+            "learner_update_steps": int(
+                async_learner.get_update_steps() if async_learner is not None else 0
+            ),
             "replay_prefetch_enabled": bool(replay_prefetch_enabled),
             "replay_prefetch_queue_size": int(replay_prefetch_queue_size),
             "replay_prefetch_pin_memory": bool(replay_prefetch_pin_memory),
@@ -2332,7 +2790,9 @@ def main(cfg: DictConfig) -> None:
                 "enabled": bool(profiling_enabled),
                 "window_size": int(profiling_window_size),
                 "log_period_steps": int(profiling_log_period_steps),
-                "log_file": str(run_dir / profiling_log_file) if profiling_enabled else None,
+                "log_file": str(run_dir / profiling_log_file)
+                if profiling_enabled
+                else None,
                 "snapshot": (
                     _to_jsonable(final_profiling_payload.get("metrics", {}))
                     if final_profiling_payload is not None
@@ -2342,16 +2802,23 @@ def main(cfg: DictConfig) -> None:
             "async_eval": {
                 "enabled": bool(async_eval_enabled),
                 "every_episodes": int(async_eval_every_episodes),
-                "queue_path": str(async_eval_queue_path) if async_eval_queue_path is not None else None,
+                "queue_path": str(async_eval_queue_path)
+                if async_eval_queue_path is not None
+                else None,
                 "eval_trigger_count": int(eval_trigger_count),
                 "watcher_started": bool(async_eval_proc is not None),
-                "watcher_log_path": str(async_eval_log_path) if async_eval_log_path is not None else None,
+                "watcher_log_path": str(async_eval_log_path)
+                if async_eval_log_path is not None
+                else None,
                 "summary_jsonl_path": (
-                    str(async_eval_summary_path) if async_eval_summary_path is not None else None
+                    str(async_eval_summary_path)
+                    if async_eval_summary_path is not None
+                    else None
                 ),
                 "watcher_return_code": (
                     int(async_eval_proc.returncode)
-                    if async_eval_proc is not None and async_eval_proc.returncode is not None
+                    if async_eval_proc is not None
+                    and async_eval_proc.returncode is not None
                     else None
                 ),
             },

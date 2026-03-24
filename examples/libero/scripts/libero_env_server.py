@@ -159,7 +159,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=30000)
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
+    )
 
     # Keep request handling single-threaded to avoid MuJoCo / OpenGL context issues.
     # The trainer is expected to reuse one persistent connection to reduce per-step RPC churn.

@@ -53,11 +53,17 @@ class RemoteLiberoTaskEnv:
         self._action_dim = int(action_dim) if action_dim is not None else 0
         self.resolution = int(resolution)
         self.num_steps_wait = int(num_steps_wait)
-        self.max_episode_steps = None if max_episode_steps is None else int(max_episode_steps)
+        self.max_episode_steps = (
+            None if max_episode_steps is None else int(max_episode_steps)
+        )
         self.libero_root = None if libero_root is None else str(libero_root)
         self.openpi_root = None if openpi_root is None else str(openpi_root)
-        self.libero_config_dir = None if libero_config_dir is None else str(libero_config_dir)
-        self.libero_datasets_root = None if libero_datasets_root is None else str(libero_datasets_root)
+        self.libero_config_dir = (
+            None if libero_config_dir is None else str(libero_config_dir)
+        )
+        self.libero_datasets_root = (
+            None if libero_datasets_root is None else str(libero_datasets_root)
+        )
         self.env_seed_mode = str(env_seed_mode)
         self.fixed_env_seed = None if fixed_env_seed is None else int(fixed_env_seed)
         self.init_state_index_mode = str(init_state_index_mode)
@@ -159,7 +165,9 @@ class RemoteLiberoTaskEnv:
             )
         data = pickle.loads(resp_bytes)
         if not isinstance(data, dict):
-            raise RuntimeError(f"remote env rpc invalid response type for method={method}")
+            raise RuntimeError(
+                f"remote env rpc invalid response type for method={method}"
+            )
         if not bool(data.get("ok", False)):
             err = str(data.get("error", "unknown remote error"))
             raise RuntimeError(f"remote env rpc method={method} failed: {err}")
@@ -174,7 +182,12 @@ class RemoteLiberoTaskEnv:
         for attempt in range(2):
             try:
                 return self._rpc_once(method, payload)
-            except (OSError, EOFError, http.client.HTTPException, pickle.PickleError) as exc:
+            except (
+                OSError,
+                EOFError,
+                http.client.HTTPException,
+                pickle.PickleError,
+            ) as exc:
                 last_exc = exc
                 self._close_conn()
                 if attempt == 0:
@@ -188,18 +201,26 @@ class RemoteLiberoTaskEnv:
                 break
 
         assert last_exc is not None
-        raise RuntimeError(f"remote env rpc method={method} transport error: {last_exc}") from last_exc
+        raise RuntimeError(
+            f"remote env rpc method={method} transport error: {last_exc}"
+        ) from last_exc
 
     def _apply_meta(self, meta: Any) -> None:
         if not isinstance(meta, dict):
             return
-        self._current_instruction = str(meta.get("current_instruction", self._current_instruction))
-        self._task_description = str(meta.get("task_description", self._task_description))
+        self._current_instruction = str(
+            meta.get("current_instruction", self._current_instruction)
+        )
+        self._task_description = str(
+            meta.get("task_description", self._task_description)
+        )
         self._step_limit = int(meta.get("step_limit", self._step_limit))
         self._take_action_cnt = int(meta.get("take_action_cnt", self._take_action_cnt))
         if meta.get("action_dim", None) is not None:
             self._action_dim = int(meta.get("action_dim"))
-        self.current_init_state_idx = meta.get("current_init_state_idx", self.current_init_state_idx)
+        self.current_init_state_idx = meta.get(
+            "current_init_state_idx", self.current_init_state_idx
+        )
         last_seed = meta.get("last_seed", None)
         self.last_seed = int(last_seed) if last_seed is not None else None
 
@@ -220,7 +241,9 @@ class RemoteLiberoTaskEnv:
         self._apply_meta(result.get("meta", {}))
         return result["obs"]
 
-    def expert_precheck(self, seed: int, init_episode_idx: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    def expert_precheck(
+        self, seed: int, init_episode_idx: int
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         result = self._rpc(
             "expert_precheck",
             seed=int(seed),
@@ -235,7 +258,9 @@ class RemoteLiberoTaskEnv:
             episode_info = None
         return passed, episode_info
 
-    def step(self, action: np.ndarray) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
+    def step(
+        self, action: np.ndarray
+    ) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
         result = self._rpc("step", action=np.asarray(action, dtype=np.float32))
         if not isinstance(result, dict):
             raise RuntimeError("remote step returned invalid payload")

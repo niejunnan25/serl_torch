@@ -8,7 +8,11 @@ from typing import Any, Dict, Hashable, Optional, Tuple
 
 import numpy as np
 
-from .observation import LiberoObservationCache, build_libero_state, extract_residual_images
+from .observation import (
+    LiberoObservationCache,
+    build_libero_state,
+    extract_residual_images,
+)
 
 
 def encode_obs_for_openpi(
@@ -89,7 +93,9 @@ class OpenPIChunkClient:
             try:
                 close_fn()
             except Exception:
-                self._logger.debug("Ignored OpenPI client close error during reconnect", exc_info=True)
+                self._logger.debug(
+                    "Ignored OpenPI client close error during reconnect", exc_info=True
+                )
         self._client = self._make_client()
 
     def _is_retryable_connection_error(self, err: BaseException) -> bool:

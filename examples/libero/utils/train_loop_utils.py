@@ -28,7 +28,9 @@ def _insert_online_transition(
     )
 
 
-def _discounted_chunk_reward_sum(rewards: List[float], *, discount: float) -> np.float32:
+def _discounted_chunk_reward_sum(
+    rewards: List[float], *, discount: float
+) -> np.float32:
     total = 0.0
     for offset, reward in enumerate(rewards):
         total += (float(discount) ** int(offset)) * float(reward)
@@ -43,7 +45,9 @@ def _pack_chunk_actions(
 ) -> tuple[np.ndarray, np.ndarray, int]:
     action_chunk_arr = np.asarray(action_chunk, dtype=np.float32)
     if action_chunk_arr.ndim != 2:
-        raise ValueError(f"Expected 2-D chunk action array, got shape={action_chunk_arr.shape}")
+        raise ValueError(
+            f"Expected 2-D chunk action array, got shape={action_chunk_arr.shape}"
+        )
     if action_chunk_arr.shape[1] != int(action_dim):
         raise ValueError(
             f"Unexpected chunk action dim: {action_chunk_arr.shape[1]} != {int(action_dim)}"
@@ -58,7 +62,9 @@ def _pack_chunk_actions(
     return packed_actions.reshape(-1), action_mask.reshape(-1), int(max_steps)
 
 
-def _chunk_bootstrap_mask(*, chunk_steps: int, discount: float, done: bool) -> np.float32:
+def _chunk_bootstrap_mask(
+    *, chunk_steps: int, discount: float, done: bool
+) -> np.float32:
     if bool(done):
         return np.float32(0.0)
     return np.float32(float(discount) ** max(0, int(chunk_steps) - 1))
