@@ -228,4 +228,4 @@ normalization:
 
 hydra:
   run:
-    dir: outputs/libero/train_residual_sac_ablation_step_xi10_nowarmup/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: outputs/libero/ablation_stepchunk_vs_step_task8_xi_warmup/step_xi10_nowarmup/${now:%Y-%m-%d}/${now:%H-%M-%S}

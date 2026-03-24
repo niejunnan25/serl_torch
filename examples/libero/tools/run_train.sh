@@ -191,7 +191,8 @@ PY
 )"
 
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
-SUPPORT_DIR="$ROOT_DIR/outputs/libero/run_train_support/${STAMP}_${CONFIG_NAME}_gpu${GPU_ID}_$$"
+SUPPORT_ROOT="${RUN_TRAIN_SUPPORT_ROOT:-$ROOT_DIR/outputs/libero/run_train_support}"
+SUPPORT_DIR="$SUPPORT_ROOT/${STAMP}_${CONFIG_NAME}_gpu${GPU_ID}_$$"
 mkdir -p "$SUPPORT_DIR"
 
 ENV_LOG="$SUPPORT_DIR/env_server.log"
