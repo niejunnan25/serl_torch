@@ -33,7 +33,9 @@ def resolve_openpi_root(openpi_root: Optional[str]) -> Path:
     return root
 
 
-def resolve_libero_root(libero_root: Optional[str], openpi_root: Optional[str] = None) -> Path:
+def resolve_libero_root(
+    libero_root: Optional[str], openpi_root: Optional[str] = None
+) -> Path:
     candidates = []
     if libero_root:
         candidates.append(Path(libero_root).expanduser().resolve())
@@ -60,10 +62,14 @@ def resolve_libero_root(libero_root: Optional[str], openpi_root: Optional[str] =
 def resolve_libero_config_dir(config_dir: Optional[str]) -> Path:
     if config_dir:
         return Path(config_dir).expanduser().resolve()
-    return (_find_serl_repo_root() / ".libero").resolve()
+    return (
+        _find_serl_repo_root() / "examples" / "libero" / ".local" / "libero_config"
+    ).resolve()
 
 
-def resolve_libero_datasets_root(dataset_root: Optional[str], libero_root: Optional[Path] = None) -> Path:
+def resolve_libero_datasets_root(
+    dataset_root: Optional[str], libero_root: Optional[Path] = None
+) -> Path:
     if dataset_root:
         return Path(dataset_root).expanduser().resolve()
 
@@ -118,7 +124,9 @@ def setup_libero_pythonpath(
     config_dir: Path,
     datasets_root: Optional[Path] = None,
 ) -> Path:
-    config_path = write_libero_config(libero_root, config_dir, datasets_root=datasets_root)
+    config_path = write_libero_config(
+        libero_root, config_dir, datasets_root=datasets_root
+    )
     os.environ["LIBERO_CONFIG_PATH"] = str(config_dir)
     if str(libero_root) not in sys.path:
         sys.path.insert(0, str(libero_root))
