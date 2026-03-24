@@ -144,7 +144,7 @@ training:
   update_every: 1
   updates_per_step: 1
   async:
-    enabled: false
+    enabled: true
     update_frequency: 10
     idle_sleep_sec: 0.002
 
