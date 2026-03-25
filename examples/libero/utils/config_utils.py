@@ -158,10 +158,7 @@ def build_drq_agent(
             "bottleneck_dim": int(resnet_cfg.get("bottleneck_dim", 256)),
         }
 
-    return DrQAgent.create_drq(
-        int(cfg.seed),
-        sample_obs,
-        sample_action,
+    kwargs = dict(
         critic_actions=sample_critic_action,
         encoder_type=str(cfg.sac.encoder_type),
         shared_encoder=bool(cfg.sac.shared_encoder),
@@ -201,6 +198,18 @@ def build_drq_agent(
         ),
         temperature_init=float(cfg.sac.temperature_init),
         action_transform=action_transform,
+    )
+    # Optional SAC knobs (YAML-only ablations). When unset, SAC uses defaults
+    # (e.g. target_entropy = -policy_dim/2).
+    te = cfg.sac.get("target_entropy", None)
+    if te is not None:
+        kwargs["target_entropy"] = float(te)
+
+    return DrQAgent.create_drq(
+        int(cfg.seed),
+        sample_obs,
+        sample_action,
+        **kwargs,
     )
 
 
