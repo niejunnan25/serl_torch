@@ -21,11 +21,17 @@ def _new_tb_step_window() -> Dict[str, List[Any]]:
     return {
         "reward": [],
         "alpha": [],
+        "gate_prob": [],
+        "gate_on": [],
+        "gate_prob_decision": [],
+        "gate_on_decision": [],
         "delta_norm": [],
-        "policy_norm": [],
+        "policy_raw_norm": [],
+        "policy_applied_norm": [],
         "base_norm": [],
         "final_norm": [],
-        "residual_actions": [],
+        "residual_actions_raw": [],
+        "residual_actions_applied": [],
         "delta_actions": [],
         "infer_e2e_ms": [],
         "infer_policy_ms": [],
@@ -38,24 +44,39 @@ def _append_tb_step_window(
     *,
     reward: float,
     alpha: float,
-    residual_action: np.ndarray,
+    gate_prob: float,
+    gate_on: bool,
+    residual_action_raw: np.ndarray,
+    residual_action_applied: np.ndarray,
     delta_action: np.ndarray,
     base_action: np.ndarray,
     final_action: np.ndarray,
     infer_info: Dict[str, Any],
     replan_point: bool,
 ) -> None:
-    residual_action = np.asarray(residual_action, dtype=np.float32).reshape(-1)
+    residual_action_raw = np.asarray(residual_action_raw, dtype=np.float32).reshape(-1)
+    residual_action_applied = np.asarray(
+        residual_action_applied, dtype=np.float32
+    ).reshape(-1)
     delta_action = np.asarray(delta_action, dtype=np.float32).reshape(-1)
     base_action = np.asarray(base_action, dtype=np.float32).reshape(-1)
     final_action = np.asarray(final_action, dtype=np.float32).reshape(-1)
     step_window["reward"].append(float(reward))
     step_window["alpha"].append(float(alpha))
+    step_window["gate_prob"].append(float(gate_prob))
+    step_window["gate_on"].append(float(bool(gate_on)))
+    if replan_point:
+        step_window["gate_prob_decision"].append(float(gate_prob))
+        step_window["gate_on_decision"].append(float(bool(gate_on)))
     step_window["delta_norm"].append(float(np.linalg.norm(delta_action)))
-    step_window["policy_norm"].append(float(np.linalg.norm(residual_action)))
+    step_window["policy_raw_norm"].append(float(np.linalg.norm(residual_action_raw)))
+    step_window["policy_applied_norm"].append(
+        float(np.linalg.norm(residual_action_applied))
+    )
     step_window["base_norm"].append(float(np.linalg.norm(base_action)))
     step_window["final_norm"].append(float(np.linalg.norm(final_action)))
-    step_window["residual_actions"].append(residual_action.copy())
+    step_window["residual_actions_raw"].append(residual_action_raw.copy())
+    step_window["residual_actions_applied"].append(residual_action_applied.copy())
     step_window["delta_actions"].append(delta_action.copy())
 
     if replan_point:
@@ -84,8 +105,13 @@ def _flush_tb_step_window(
         ("step/reward", "reward"),
         ("step/reward_nonzero_rate", "reward"),
         ("step/alpha", "alpha"),
+        ("step/epsilon_gate_prob", "gate_prob"),
+        ("step/epsilon_gate_on_rate", "gate_on"),
+        ("step/epsilon_gate_prob_decision", "gate_prob_decision"),
+        ("step/epsilon_gate_on_decision_rate", "gate_on_decision"),
         ("step/residual_action_magnitude", "delta_norm"),
-        ("step/residual_policy_action_magnitude", "policy_norm"),
+        ("step/residual_policy_action_magnitude", "policy_raw_norm"),
+        ("step/residual_policy_action_applied_magnitude", "policy_applied_norm"),
         ("step/base_action_magnitude", "base_norm"),
         ("step/final_action_magnitude", "final_norm"),
         ("step/infer_e2e_ms", "infer_e2e_ms"),
@@ -102,10 +128,15 @@ def _flush_tb_step_window(
             metric_value = float(np.mean(np.asarray(values, dtype=np.float32)))
         tb_writer.add_scalar(tb_key, metric_value, global_env_step)
 
-    residual_actions = np.asarray(step_window["residual_actions"], dtype=np.float32)
+    residual_actions_raw = np.asarray(
+        step_window["residual_actions_raw"], dtype=np.float32
+    )
+    residual_actions_applied = np.asarray(
+        step_window["residual_actions_applied"], dtype=np.float32
+    )
     delta_actions = np.asarray(step_window["delta_actions"], dtype=np.float32)
-    if residual_actions.size > 0:
-        residual_abs = np.abs(residual_actions)
+    if residual_actions_raw.size > 0:
+        residual_abs = np.abs(residual_actions_raw)
         tb_writer.add_scalar(
             "step/residual_policy_action_abs_mean",
             float(np.mean(residual_abs)),
@@ -135,6 +166,24 @@ def _flush_tb_step_window(
                 float(np.mean(dim_abs >= 0.999)),
                 global_env_step,
             )
+
+    if residual_actions_applied.size > 0:
+        residual_applied_abs = np.abs(residual_actions_applied)
+        tb_writer.add_scalar(
+            "step/residual_policy_action_applied_abs_mean",
+            float(np.mean(residual_applied_abs)),
+            global_env_step,
+        )
+        tb_writer.add_scalar(
+            "step/residual_policy_action_applied_abs_p95",
+            float(np.percentile(residual_applied_abs, 95)),
+            global_env_step,
+        )
+        tb_writer.add_scalar(
+            "step/residual_policy_action_applied_saturation_frac",
+            float(np.mean(residual_applied_abs >= 0.999)),
+            global_env_step,
+        )
 
     if delta_actions.size > 0:
         controlled_delta = delta_actions[:, np.asarray(control_indices, dtype=np.int64)]
@@ -166,9 +215,17 @@ def _flush_tb_step_window(
             global_env_step,
         )
 
-    if histogram and residual_actions.size > 0:
+    if histogram and residual_actions_raw.size > 0:
         tb_writer.add_histogram(
-            "hist/residual_policy_action", residual_actions.reshape(-1), global_env_step
+            "hist/residual_policy_action",
+            residual_actions_raw.reshape(-1),
+            global_env_step,
+        )
+    if histogram and residual_actions_applied.size > 0:
+        tb_writer.add_histogram(
+            "hist/residual_policy_action_applied",
+            residual_actions_applied.reshape(-1),
+            global_env_step,
         )
     if histogram and delta_actions.size > 0:
         controlled_delta = delta_actions[:, np.asarray(control_indices, dtype=np.int64)]
