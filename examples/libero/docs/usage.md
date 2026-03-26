@@ -148,6 +148,14 @@ The PKL payload is a compact episode format:
 
 ## Training
 
+### Online warmup prefill
+
+See `online_prefill_usage.md` for how to pre-collect warmup episodes and load them into online replay (`tools/run_collect_online_prefill.sh`):
+
+```text
+examples/libero/docs/online_prefill_usage.md
+```
+
 ### Online only
 
 ```bash

@@ -180,12 +180,17 @@ def main() -> None:
         default=str(Path(__file__).resolve().parents[1] / "data" / "online_prefill"),
         help="Root output directory for online prefill manifests and episode PKLs",
     )
-    parser.add_argument(
-        "overrides",
-        nargs="*",
-        help="Optional Hydra-style overrides, e.g. openpi.port=30011 env.remote.port=30010",
-    )
-    args = parser.parse_args()
+    # NOTE:
+    # Python 3.8 argparse cannot reliably parse a trailing positional nargs='*'
+    # after optional arguments (e.g. "... --episodes 100 openpi.port=30011").
+    # We therefore parse known args first and treat remaining tokens as Hydra overrides.
+    args, unknown = parser.parse_known_args()
+    invalid_flags = [token for token in unknown if token.startswith("-")]
+    if invalid_flags:
+        parser.error(
+            "unrecognized arguments: " + " ".join(invalid_flags)
+        )
+    overrides = list(unknown)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -194,7 +199,7 @@ def main() -> None:
     logger = logging.getLogger("libero_collect_online_prefill")
 
     config_path = _resolve_config_path(args.config)
-    cfg = _compose_config(config_path, args.overrides)
+    cfg = _compose_config(config_path, overrides)
     set_global_seeds(int(cfg.seed))
 
     warmup_cfg = cfg.training.get("warmup", None)
@@ -416,7 +421,7 @@ def main() -> None:
         "chunk_horizon": int(chunk_horizon),
         "action_dim": int(action_dim),
         "config_path": str(config_path),
-        "overrides": list(args.overrides),
+        "overrides": list(overrides),
         "openpi_host": str(cfg.openpi.host),
         "openpi_port": int(cfg.openpi.port),
         "env_backend": str(cfg.env.backend),
