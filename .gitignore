@@ -181,6 +181,7 @@ pretrained_models/
 
 # Local LIBERO offline data cache
 examples/libero/data/offline/
+examples/libero/data/online_prefill/
 
 
 references/

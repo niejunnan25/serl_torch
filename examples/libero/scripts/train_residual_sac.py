@@ -52,6 +52,9 @@ from serl_torch.examples.libero.data import StateActionNormalizer, load_normaliz
 from serl_torch.examples.libero.data.offline_bootstrap import (
     _bootstrap_offline_with_base_success,
 )
+from serl_torch.examples.libero.data.online_prefill_dataset import (
+    _load_online_prefill_buffer,
+)
 from serl_torch.examples.libero.data.offline_residual import (
     _load_offline_residual_buffer,
 )
@@ -393,6 +396,22 @@ def main(cfg: DictConfig) -> None:
     }
     bootstrap_stats: Dict[str, Any] = {"enabled": 0, "inserted": 0}
     warmstart_info: Dict[str, Any] = {"enabled": 0, "steps": 0}
+    online_prefill_stats: Dict[str, Any] = {
+        "enabled": 0,
+        "mode": "stepchunk" if chunk_step_enabled else "step",
+        "files_total": 0,
+        "files_loaded": 0,
+        "files_missing": 0,
+        "episodes_loaded": 0,
+        "candidates": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "errors": 0,
+        "success_episodes": 0,
+        "episode_return_sum": 0.0,
+        "episode_step_sum": 0,
+        "recent_episode_successes": [],
+    }
 
     checkpoint_cfg = cfg.training.get("checkpoint", None)
     if checkpoint_cfg is None:
@@ -702,9 +721,78 @@ def main(cfg: DictConfig) -> None:
         )
 
     warmup_cfg = cfg.training.get("warmup", None)
-    warmup_episodes_cfg = (
+    configured_warmup_episodes = (
         int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
     )
+    online_prefill_cfg = cfg.training.get("online_prefill", None)
+    online_prefill_enabled = (
+        bool(online_prefill_cfg.get("enabled", False))
+        if online_prefill_cfg is not None
+        else False
+    )
+    online_prefill_loaded_episodes = 0
+    if online_prefill_enabled and configured_warmup_episodes > 0:
+        online_prefill_dataset_paths = online_prefill_cfg.get("dataset_paths", None)
+        if not online_prefill_dataset_paths:
+            raise ValueError(
+                "training.online_prefill.enabled=true requires "
+                "training.online_prefill.dataset_paths to be set when "
+                "training.warmup.episodes > 0"
+            )
+        online_prefill_stats = _load_online_prefill_buffer(
+            cfg,
+            replay_buffer=replay_buffer,
+            sample_obs_template=sample_obs,
+            action_dim=env_action_dim,
+            chunk_horizon=chunk_horizon,
+            image_keys=image_keys,
+            stack_horizon=stack_horizon,
+            chunk_step_enabled=chunk_step_enabled,
+            logger=logger,
+            normalizer=normalizer,
+            profiler=profiler,
+            max_episodes=configured_warmup_episodes,
+        )
+        online_prefill_loaded_episodes = int(
+            online_prefill_stats.get("episodes_loaded", 0)
+        )
+        if (
+            online_prefill_loaded_episodes <= 0
+            or int(online_prefill_stats.get("inserted", 0)) <= 0
+        ):
+            raise RuntimeError(
+                "training.online_prefill.enabled=true but no online prefill "
+                "episodes were loaded into the replay buffer"
+            )
+        logger.info(
+            "online prefill: episodes_loaded=%s/%s files_loaded=%s/%s inserted=%s "
+            "success_episodes=%s",
+            online_prefill_loaded_episodes,
+            configured_warmup_episodes,
+            online_prefill_stats.get("files_loaded", 0),
+            online_prefill_stats.get("files_total", 0),
+            online_prefill_stats.get("inserted", 0),
+            online_prefill_stats.get("success_episodes", 0),
+        )
+    elif online_prefill_enabled:
+        logger.info(
+            "training.online_prefill.enabled=true but training.warmup.episodes=%s; "
+            "skipping online prefill load",
+            configured_warmup_episodes,
+        )
+
+    warmup_episodes_cfg = max(
+        0,
+        int(configured_warmup_episodes) - int(online_prefill_loaded_episodes),
+    )
+    if online_prefill_loaded_episodes > 0 and warmup_episodes_cfg > 0:
+        logger.info(
+            "online prefill covered %s/%s warmup episodes; runtime warmup will "
+            "collect the remaining %s episodes",
+            online_prefill_loaded_episodes,
+            configured_warmup_episodes,
+            warmup_episodes_cfg,
+        )
     need_warmup_first = warmup_episodes_cfg > 0
 
     if not need_warmup_first and async_enabled:
@@ -771,15 +859,21 @@ def main(cfg: DictConfig) -> None:
     train_env_step = 0
     decision_step = 0
     train_episode_id = 0
-    warmup_episode_id = 0
-    init_episode_idx = 0
+    warmup_episode_id = int(online_prefill_loaded_episodes)
+    init_episode_idx = int(online_prefill_loaded_episodes)
     eval_trigger_count = 0
     train_total_success = 0
     train_recent_successes: deque[int] = deque(maxlen=20)
-    warmup_total_success = 0
-    warmup_recent_successes: deque[int] = deque(maxlen=20)
+    warmup_total_success = int(online_prefill_stats.get("success_episodes", 0))
+    warmup_recent_successes: deque[int] = deque(
+        [
+            int(v)
+            for v in online_prefill_stats.get("recent_episode_successes", [])
+        ],
+        maxlen=20,
+    )
     skipped_seeds = 0
-    seed_cursor = int(cfg.task.seed_base)
+    seed_cursor = int(cfg.task.seed_base) + int(online_prefill_loaded_episodes)
     stopped_by_env_budget = False
     last_update_info: Dict[str, Any] = {}
     saved_checkpoint_steps: set[int] = set()
@@ -869,10 +963,18 @@ def main(cfg: DictConfig) -> None:
 
     try:
         if need_warmup_first:
-            logger.info(
-                "Warmup phase: collecting %s base-only episodes, no actor/critic updates",
-                warmup_episodes_cfg,
-            )
+            if online_prefill_loaded_episodes > 0:
+                logger.info(
+                    "Warmup phase: collecting remaining %s/%s base-only episodes "
+                    "after loading online prefill, no actor/critic updates",
+                    warmup_episodes_cfg,
+                    configured_warmup_episodes,
+                )
+            else:
+                logger.info(
+                    "Warmup phase: collecting %s base-only episodes, no actor/critic updates",
+                    warmup_episodes_cfg,
+                )
             warmup_progress = _new_progress(
                 desc="warmup_episode",
                 total=int(warmup_episodes_cfg),
@@ -1277,7 +1379,7 @@ def main(cfg: DictConfig) -> None:
                 logger.info(
                     "warmup episode %s/%s success=%s steps=%s return=%.2f",
                     current_warmup_episode_id,
-                    warmup_episodes_cfg,
+                    configured_warmup_episodes,
                     episode_success,
                     episode_steps,
                     episode_return,
@@ -2770,7 +2872,18 @@ def main(cfg: DictConfig) -> None:
             "train_env_step": int(train_env_step),
             "decision_step": int(decision_step),
             "train_episode_id": int(train_episode_id),
+            "configured_warmup_episodes": int(configured_warmup_episodes),
             "warmup_episode_id": int(warmup_episode_id),
+            "warmup_source": (
+                "online_prefill"
+                if int(online_prefill_loaded_episodes) > 0
+                and int(warmup_episode_id) == int(online_prefill_loaded_episodes)
+                else "online_prefill+runtime"
+                if int(online_prefill_loaded_episodes) > 0
+                else "runtime"
+                if int(warmup_episode_id) > 0
+                else "disabled"
+            ),
             "train_total_success": int(train_total_success),
             "train_success_rate": float(
                 train_total_success / max(1, int(train_episode_id))
@@ -2803,6 +2916,7 @@ def main(cfg: DictConfig) -> None:
             ),
             "offline_stats": offline_stats,
             "bootstrap_stats": bootstrap_stats,
+            "online_prefill_stats": _to_jsonable(online_prefill_stats),
             "critic_pretrain": _to_jsonable(warmstart_info),
             "checkpoint_dir": str(checkpoint_dir),
             "checkpoint_every_steps": int(checkpoint_every_steps),

@@ -134,6 +134,9 @@ training:
 
   warmup:
     episodes: 0
+  online_prefill:
+    enabled: false
+    dataset_paths: []
   random_steps: 0
   enable_base_probing: false
   probing_alpha: null
