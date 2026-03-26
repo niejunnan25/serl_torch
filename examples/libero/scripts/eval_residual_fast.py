@@ -45,6 +45,7 @@ from serl_torch.examples.libero.utils.config_utils import (
     build_drq_agent,
     resolve_control_indices_from_cfg,
     resolve_image_keys,
+    resolve_residual_observation_state_mode,
     sample_probing_steps,
     set_global_seeds,
 )
@@ -131,6 +132,12 @@ def main(cfg: DictConfig) -> None:
         )
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
+    obs_state_mode = resolve_residual_observation_state_mode(cfg)
+    logger.info(
+        "Residual observation state_mode=%s normalization.enabled=%s",
+        obs_state_mode,
+        bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
+    )
 
     openpi_client = OpenPIChunkClient(
         host=str(cfg.openpi.host),
@@ -354,6 +361,7 @@ def main(cfg: DictConfig) -> None:
                         obs_cache=obs_cache,
                         base_action_chunk=(base_chunk if chunk_step_enabled else None),
                         alpha=float(residual_alpha),
+                        state_mode=obs_state_mode,
                     )
 
                     if checkpoint_path and agent is None:

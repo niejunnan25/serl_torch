@@ -105,6 +105,7 @@ from serl_torch.examples.libero.utils.config_utils import (
     build_drq_agent,
     resolve_control_indices_from_cfg,
     resolve_image_keys,
+    resolve_residual_observation_state_mode,
     sample_probing_steps,
     set_global_seeds,
 )
@@ -191,6 +192,12 @@ def main(cfg: DictConfig) -> None:
         )
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
+    obs_state_mode = resolve_residual_observation_state_mode(cfg)
+    logger.info(
+        "Residual observation state_mode=%s normalization.enabled=%s",
+        obs_state_mode,
+        bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
+    )
 
     openpi_client = OpenPIChunkClient(
         host=str(cfg.openpi.host),
@@ -600,6 +607,7 @@ def main(cfg: DictConfig) -> None:
         obs_cache=obs_cache,
         base_action_chunk=(sample_base_chunk if chunk_step_enabled else None),
         alpha=float(residual_alpha),
+        state_mode=obs_state_mode,
     )
     sample_state_core = build_residual_step_core(
         sample_obs_raw,
@@ -667,6 +675,7 @@ def main(cfg: DictConfig) -> None:
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
+            state_mode=obs_state_mode,
         )
     else:
         replay_buffer = ReplayBuffer(
@@ -686,6 +695,7 @@ def main(cfg: DictConfig) -> None:
                 sample_stride=chunk_step_sample_stride,
                 require_full_horizon=chunk_step_require_full_horizon,
                 pad_action_to_horizon=chunk_step_pad_action,
+                state_mode=obs_state_mode,
             )
         else:
             offline_buffer = ReplayBuffer(
@@ -712,6 +722,7 @@ def main(cfg: DictConfig) -> None:
             logger=logger,
             normalizer=normalizer,
             profiler=profiler,
+            state_mode=obs_state_mode,
         )
         offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
         has_offline_dataset_paths = (
@@ -735,6 +746,7 @@ def main(cfg: DictConfig) -> None:
                 logger=logger,
                 normalizer=normalizer,
                 profiler=profiler,
+                state_mode=obs_state_mode,
             )
         logger.info(
             "offline bootstrap: success_episodes=%s collected=%s inserted=%s attempts=%s",
@@ -794,6 +806,7 @@ def main(cfg: DictConfig) -> None:
             normalizer=normalizer,
             profiler=profiler,
             max_episodes=configured_warmup_episodes,
+            state_mode=obs_state_mode,
         )
         online_prefill_loaded_episodes = int(
             online_prefill_stats.get("episodes_loaded", 0)
@@ -1216,6 +1229,7 @@ def main(cfg: DictConfig) -> None:
                             normalizer=normalizer,
                             obs_cache=obs_cache,
                             alpha=float(alpha_step),
+                            state_mode=obs_state_mode,
                         )
                         residual_step_action = np.zeros(
                             (step_action_dim,), dtype=np.float32
@@ -1257,6 +1271,7 @@ def main(cfg: DictConfig) -> None:
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 alpha=float(next_alpha_step),
+                                state_mode=obs_state_mode,
                             )
                             mask = 1.0
                         else:
@@ -1288,6 +1303,7 @@ def main(cfg: DictConfig) -> None:
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 alpha=float(next_alpha_step),
+                                state_mode=obs_state_mode,
                             )
                             cached_base_chunk = next_base_chunk
                             cached_infer_info = next_infer_info
@@ -1752,6 +1768,7 @@ def main(cfg: DictConfig) -> None:
                                 obs_cache=obs_cache,
                                 base_action_chunk=base_chunk,
                                 alpha=float(alpha_step),
+                                state_mode=obs_state_mode,
                             )
                             gate_prob, gate_on = _resolve_train_gate(
                                 phase_train_flag=bool(phase_train),
@@ -2273,6 +2290,7 @@ def main(cfg: DictConfig) -> None:
                                     normalizer=normalizer,
                                     obs_cache=obs_cache,
                                     alpha=float(alpha_step),
+                                    state_mode=obs_state_mode,
                                 )
                                 gate_prob, gate_on = _resolve_train_gate(
                                     phase_train_flag=bool(phase_train),
@@ -2460,6 +2478,7 @@ def main(cfg: DictConfig) -> None:
                                         normalizer=normalizer,
                                         obs_cache=obs_cache,
                                         alpha=float(next_alpha_step),
+                                        state_mode=obs_state_mode,
                                     )
                                     mask = 1.0
                                 else:
@@ -2491,6 +2510,7 @@ def main(cfg: DictConfig) -> None:
                                         normalizer=normalizer,
                                         obs_cache=obs_cache,
                                         alpha=float(next_alpha_step),
+                                        state_mode=obs_state_mode,
                                     )
                                     cached_base_chunk = next_base_chunk
                                     cached_infer_info = next_infer_info

@@ -42,6 +42,7 @@ def _bootstrap_offline_with_base_success(
     logger: logging.Logger,
     normalizer: Optional[StateActionNormalizer] = None,
     profiler: Optional[_RuntimeProfiler] = None,
+    state_mode: str = "fused",
 ) -> Dict[str, int]:
     del sample_obs_template
     stats = {
@@ -221,6 +222,7 @@ def _bootstrap_offline_with_base_success(
                     normalizer=normalizer,
                     obs_cache=obs_cache,
                     alpha=float(residual_alpha),
+                    state_mode=state_mode,
                 )
                 next_obs_raw, reward, env_done, _, info = _profile_call(
                     profiler,
@@ -246,6 +248,7 @@ def _bootstrap_offline_with_base_success(
                         normalizer=normalizer,
                         obs_cache=obs_cache,
                         alpha=float(residual_alpha),
+                        state_mode=state_mode,
                     )
                     mask = 1.0
                 else:
@@ -268,6 +271,7 @@ def _bootstrap_offline_with_base_success(
                         normalizer=normalizer,
                         obs_cache=obs_cache,
                         alpha=float(residual_alpha),
+                        state_mode=state_mode,
                     )
                     cached_base_chunk = next_base_chunk
                     mask = 1.0

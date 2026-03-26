@@ -39,6 +39,8 @@ env:
 residual:
   image_keys: [image, wrist_image]
   alpha: 0.35
+  observation:
+    state_mode: fused
   epsilon_gating:
     enabled: false
     schedule: linear

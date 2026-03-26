@@ -14,6 +14,14 @@ from ..utils.alpha_utils import validate_alpha
 
 RESIDUAL_IMAGE_HEIGHT = 224
 RESIDUAL_IMAGE_WIDTH = 224
+_RESIDUAL_OBSERVATION_STATE_MODE_ALIASES = {
+    "fused": "fused",
+    "raw": "raw",
+    "raw_state": "raw",
+    "raw_proprio": "raw",
+    "obs_only": "raw",
+    "observation_only": "raw",
+}
 
 
 def _lru_get(cache: "OrderedDict[Hashable, Any]", key: Hashable) -> Any:
@@ -153,6 +161,18 @@ def _resolve_residual_scale(
     return validate_alpha(default, name="default alpha", allow_zero=True)
 
 
+def normalize_residual_observation_state_mode(state_mode: Optional[str]) -> str:
+    mode = str("fused" if state_mode is None else state_mode).strip().lower()
+    normalized = _RESIDUAL_OBSERVATION_STATE_MODE_ALIASES.get(mode, None)
+    if normalized is None:
+        raise ValueError(
+            "Unsupported residual.observation.state_mode: "
+            f"{state_mode!r}. Expected one of "
+            f"{sorted(_RESIDUAL_OBSERVATION_STATE_MODE_ALIASES)}"
+        )
+    return normalized
+
+
 def _build_fused_residual_state(
     *,
     state: np.ndarray,
@@ -182,6 +202,28 @@ def _build_fused_residual_state(
 
     fused_parts.append(np.asarray([float(residual_scale)], dtype=np.float32))
     return np.concatenate(fused_parts, axis=-1).astype(np.float32)
+
+
+def _build_policy_state(
+    *,
+    state: np.ndarray,
+    state_mode: Optional[str],
+    base_action: np.ndarray,
+    normalizer: Optional[StateActionNormalizer],
+    base_action_chunk: Optional[np.ndarray],
+    alpha: Optional[float] = None,
+) -> np.ndarray:
+    normalized_mode = normalize_residual_observation_state_mode(state_mode)
+    state_arr = np.asarray(state, dtype=np.float32).reshape(-1)
+    if normalized_mode == "raw":
+        return state_arr.astype(np.float32)
+    return _build_fused_residual_state(
+        state=state_arr,
+        base_action=base_action,
+        normalizer=normalizer,
+        base_action_chunk=base_action_chunk,
+        alpha=alpha,
+    )
 
 
 def build_residual_step_core(
@@ -225,6 +267,7 @@ def build_residual_step_obs_from_core(
     base_action_chunk: Optional[np.ndarray],
     alpha: Optional[float] = None,
     normalizer: Optional[StateActionNormalizer] = None,
+    state_mode: str = "fused",
 ) -> Dict[str, np.ndarray]:
     """Assemble a single unbatched residual observation from preprocessed components."""
     residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
@@ -236,15 +279,16 @@ def build_residual_step_obs_from_core(
         if base_action_chunk is not None
         else None
     )
-    fused_state = _build_fused_residual_state(
+    policy_state = _build_policy_state(
         state=np.asarray(core["state_core"], dtype=np.float32).reshape(-1),
+        state_mode=state_mode,
         base_action=base_action_arr,
         normalizer=normalizer,
         base_action_chunk=base_action_chunk_arr,
         alpha=float(residual_scale),
     )
     obs_out: Dict[str, np.ndarray] = {
-        "state": fused_state,
+        "state": policy_state,
         "base_action": base_action_arr.astype(np.float32),
         "alpha": np.asarray([float(residual_scale)], dtype=np.float32),
     }
@@ -370,10 +414,12 @@ class LiberoObservationCache:
         action_dim: Optional[int] = None,
         base_action_chunk: Optional[np.ndarray] = None,
         alpha: Optional[float] = None,
+        state_mode: str = "fused",
     ) -> Dict[str, np.ndarray]:
         with self._lock:
             residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
             image_keys = tuple(image_keys)
+            normalized_state_mode = normalize_residual_observation_state_mode(state_mode)
             if stack_horizon != 1:
                 raise ValueError(
                     f"Only stack_horizon=1 is currently supported, got {stack_horizon}"
@@ -393,6 +439,7 @@ class LiberoObservationCache:
                 float(residual_scale),
                 image_keys,
                 int(stack_horizon),
+                normalized_state_mode,
                 None if normalizer is None else id(normalizer),
                 None if action_dim is None else int(action_dim),
             )
@@ -406,8 +453,9 @@ class LiberoObservationCache:
                 )
 
             state = self.get_state(obs, normalizer=normalizer, cache_key=cache_key)
-            fused_state = _build_fused_residual_state(
+            policy_state = _build_policy_state(
                 state=state,
+                state_mode=normalized_state_mode,
                 base_action=base_action_arr,
                 normalizer=normalizer,
                 base_action_chunk=base_action_chunk_arr,
@@ -424,7 +472,7 @@ class LiberoObservationCache:
             stacked = {
                 key: np.expand_dims(images_all[key], axis=0) for key in image_keys
             }
-            stacked["state"] = np.expand_dims(fused_state, axis=0)
+            stacked["state"] = np.expand_dims(policy_state, axis=0)
             stacked["base_action"] = np.expand_dims(
                 base_action_arr.astype(np.float32), axis=0
             )
@@ -479,8 +527,10 @@ def build_residual_step_obs(
     action_dim: Optional[int] = None,
     base_action_chunk: Optional[np.ndarray] = None,
     alpha: Optional[float] = None,
+    state_mode: str = "fused",
 ) -> Dict[str, np.ndarray]:
     residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
+    normalized_state_mode = normalize_residual_observation_state_mode(state_mode)
     if obs_cache is not None:
         return obs_cache.build_residual_step_obs(
             obs,
@@ -492,6 +542,7 @@ def build_residual_step_obs(
             action_dim=action_dim,
             base_action_chunk=base_action_chunk,
             alpha=residual_scale,
+            state_mode=normalized_state_mode,
         )
 
     state = build_libero_state(obs, normalizer=normalizer)
@@ -505,8 +556,9 @@ def build_residual_step_obs(
         if base_action_chunk is not None
         else None
     )
-    fused_state = _build_fused_residual_state(
+    policy_state = _build_policy_state(
         state=state,
+        state_mode=normalized_state_mode,
         base_action=base_action,
         normalizer=normalizer,
         base_action_chunk=base_action_chunk_arr,
@@ -525,7 +577,7 @@ def build_residual_step_obs(
         )
 
     stacked = {key: np.expand_dims(images_all[key], axis=0) for key in image_keys}
-    stacked["state"] = np.expand_dims(fused_state, axis=0)
+    stacked["state"] = np.expand_dims(policy_state, axis=0)
     stacked["base_action"] = np.expand_dims(base_action.astype(np.float32), axis=0)
     stacked["alpha"] = np.asarray([[float(residual_scale)]], dtype=np.float32)
     if base_action_chunk_arr is not None:
