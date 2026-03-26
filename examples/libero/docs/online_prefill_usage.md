@@ -91,6 +91,18 @@ training:
     enabled: true
     dataset_paths:
       - /vla/users/niejunnan/codebase/serl_torch/examples/libero/data/online_prefill/libero_10_task_6/step
+
+推荐做法（避免命令行覆盖导致配置混乱）：
+- 复制一份专用配置，例如 `*_onlineprefill.yaml`。
+- 仅在该文件里把 `online_prefill.enabled` 设为 `true`，并写死 `dataset_paths`。
+- 训练时只传 YAML 路径，不再传 `training.online_prefill.*` 的 CLI override。
+
+示例（本次 task6 stepchunk）：
+
+```bash
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/conf/ablation_stepchunk_vs_step_task6_alpha_warmup_utd_sweep/train_residual_sac_ablation_stepchunk_alpha50_warmup100ep_utd4_onlineprefill.yaml \
+  --gpu_id 0
 ```
 
 `dataset_paths` 支持三种形式：
