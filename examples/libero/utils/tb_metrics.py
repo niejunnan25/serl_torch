@@ -20,7 +20,7 @@ def _log_info_scalars(
 def _new_tb_step_window() -> Dict[str, List[Any]]:
     return {
         "reward": [],
-        "xi": [],
+        "alpha": [],
         "delta_norm": [],
         "policy_norm": [],
         "base_norm": [],
@@ -37,7 +37,7 @@ def _append_tb_step_window(
     step_window: Dict[str, List[Any]],
     *,
     reward: float,
-    xi: float,
+    alpha: float,
     residual_action: np.ndarray,
     delta_action: np.ndarray,
     base_action: np.ndarray,
@@ -49,9 +49,8 @@ def _append_tb_step_window(
     delta_action = np.asarray(delta_action, dtype=np.float32).reshape(-1)
     base_action = np.asarray(base_action, dtype=np.float32).reshape(-1)
     final_action = np.asarray(final_action, dtype=np.float32).reshape(-1)
-
     step_window["reward"].append(float(reward))
-    step_window["xi"].append(float(xi))
+    step_window["alpha"].append(float(alpha))
     step_window["delta_norm"].append(float(np.linalg.norm(delta_action)))
     step_window["policy_norm"].append(float(np.linalg.norm(residual_action)))
     step_window["base_norm"].append(float(np.linalg.norm(base_action)))
@@ -84,7 +83,7 @@ def _flush_tb_step_window(
     scalar_lists = (
         ("step/reward", "reward"),
         ("step/reward_nonzero_rate", "reward"),
-        ("step/xi", "xi"),
+        ("step/alpha", "alpha"),
         ("step/residual_action_magnitude", "delta_norm"),
         ("step/residual_policy_action_magnitude", "policy_norm"),
         ("step/base_action_magnitude", "base_norm"),

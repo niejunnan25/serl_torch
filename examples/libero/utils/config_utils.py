@@ -113,7 +113,7 @@ def build_residual_action_transform(
         "clip_gripper": bool(clip_gripper),
         "base_action_key": "base_action",
         "base_action_chunk_key": "base_action_chunk",
-        "scale_key": "xi",
+        "scale_key": "alpha",
     }
 
 

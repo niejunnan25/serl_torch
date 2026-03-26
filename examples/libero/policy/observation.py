@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from ..data.normalizer import StateActionNormalizer
+from ..utils.alpha_utils import validate_alpha
 
 RESIDUAL_IMAGE_HEIGHT = 224
 RESIDUAL_IMAGE_WIDTH = 224
@@ -142,14 +143,25 @@ def _normalize_action_chunk(
     return normalized.reshape(action_chunk_arr.shape).astype(np.float32)
 
 
+def _resolve_residual_scale(
+    *,
+    alpha: Optional[float],
+    default: float = 1.0,
+) -> float:
+    if alpha is not None:
+        return validate_alpha(alpha, name="alpha", allow_zero=True)
+    return validate_alpha(default, name="default alpha", allow_zero=True)
+
+
 def _build_fused_residual_state(
     *,
     state: np.ndarray,
     base_action: np.ndarray,
     normalizer: Optional[StateActionNormalizer],
     base_action_chunk: Optional[np.ndarray],
-    xi: float,
+    alpha: Optional[float] = None,
 ) -> np.ndarray:
+    residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
     if normalizer is not None:
         base_action_norm = normalizer.normalize_action(base_action_arr)
@@ -168,7 +180,7 @@ def _build_fused_residual_state(
             )
         )
 
-    fused_parts.append(np.asarray([float(xi)], dtype=np.float32))
+    fused_parts.append(np.asarray([float(residual_scale)], dtype=np.float32))
     return np.concatenate(fused_parts, axis=-1).astype(np.float32)
 
 
@@ -211,10 +223,11 @@ def build_residual_step_obs_from_core(
     *,
     base_action: np.ndarray,
     base_action_chunk: Optional[np.ndarray],
-    xi: float,
+    alpha: Optional[float] = None,
     normalizer: Optional[StateActionNormalizer] = None,
 ) -> Dict[str, np.ndarray]:
     """Assemble a single unbatched residual observation from preprocessed components."""
+    residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
     if "state_core" not in core:
         raise KeyError("core must include 'state_core'")
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
@@ -228,12 +241,12 @@ def build_residual_step_obs_from_core(
         base_action=base_action_arr,
         normalizer=normalizer,
         base_action_chunk=base_action_chunk_arr,
-        xi=float(xi),
+        alpha=float(residual_scale),
     )
     obs_out: Dict[str, np.ndarray] = {
         "state": fused_state,
         "base_action": base_action_arr.astype(np.float32),
-        "xi": np.asarray([float(xi)], dtype=np.float32),
+        "alpha": np.asarray([float(residual_scale)], dtype=np.float32),
     }
     for key, value in core.items():
         if key == "state_core":
@@ -356,9 +369,10 @@ class LiberoObservationCache:
         cache_key: Optional[Hashable] = None,
         action_dim: Optional[int] = None,
         base_action_chunk: Optional[np.ndarray] = None,
-        xi: float = 1.0,
+        alpha: Optional[float] = None,
     ) -> Dict[str, np.ndarray]:
         with self._lock:
+            residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
             image_keys = tuple(image_keys)
             if stack_horizon != 1:
                 raise ValueError(
@@ -376,7 +390,7 @@ class LiberoObservationCache:
                 None
                 if base_action_chunk_arr is None
                 else base_action_chunk_arr.tobytes(),
-                float(xi),
+                float(residual_scale),
                 image_keys,
                 int(stack_horizon),
                 None if normalizer is None else id(normalizer),
@@ -397,7 +411,7 @@ class LiberoObservationCache:
                 base_action=base_action_arr,
                 normalizer=normalizer,
                 base_action_chunk=base_action_chunk_arr,
-                xi=float(xi),
+                alpha=float(residual_scale),
             )
             images_all = self.get_images(obs, cache_key=cache_key)
             missing_keys = [key for key in image_keys if key not in images_all]
@@ -414,7 +428,7 @@ class LiberoObservationCache:
             stacked["base_action"] = np.expand_dims(
                 base_action_arr.astype(np.float32), axis=0
             )
-            stacked["xi"] = np.asarray([[float(xi)]], dtype=np.float32)
+            stacked["alpha"] = np.asarray([[float(residual_scale)]], dtype=np.float32)
             if base_action_chunk_arr is not None:
                 stacked["base_action_chunk"] = np.expand_dims(
                     base_action_chunk_arr.astype(np.float32), axis=0
@@ -464,8 +478,9 @@ def build_residual_step_obs(
     cache_key: Optional[Hashable] = None,
     action_dim: Optional[int] = None,
     base_action_chunk: Optional[np.ndarray] = None,
-    xi: float = 1.0,
+    alpha: Optional[float] = None,
 ) -> Dict[str, np.ndarray]:
+    residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
     if obs_cache is not None:
         return obs_cache.build_residual_step_obs(
             obs,
@@ -476,7 +491,7 @@ def build_residual_step_obs(
             cache_key=cache_key,
             action_dim=action_dim,
             base_action_chunk=base_action_chunk,
-            xi=xi,
+            alpha=residual_scale,
         )
 
     state = build_libero_state(obs, normalizer=normalizer)
@@ -495,7 +510,7 @@ def build_residual_step_obs(
         base_action=base_action,
         normalizer=normalizer,
         base_action_chunk=base_action_chunk_arr,
-        xi=float(xi),
+        alpha=float(residual_scale),
     )
     images_all = extract_residual_images(obs)
     missing_keys = [key for key in image_keys if key not in images_all]
@@ -512,7 +527,7 @@ def build_residual_step_obs(
     stacked = {key: np.expand_dims(images_all[key], axis=0) for key in image_keys}
     stacked["state"] = np.expand_dims(fused_state, axis=0)
     stacked["base_action"] = np.expand_dims(base_action.astype(np.float32), axis=0)
-    stacked["xi"] = np.asarray([[float(xi)]], dtype=np.float32)
+    stacked["alpha"] = np.asarray([[float(residual_scale)]], dtype=np.float32)
     if base_action_chunk_arr is not None:
         stacked["base_action_chunk"] = np.expand_dims(
             base_action_chunk_arr,

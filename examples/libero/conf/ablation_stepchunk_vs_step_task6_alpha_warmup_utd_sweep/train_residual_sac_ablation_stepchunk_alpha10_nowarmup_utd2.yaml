@@ -15,7 +15,7 @@ libero_datasets_root: null
 # ---------------------------
 task:
   suite_name: libero_10
-  task_id: 8
+  task_id: 6
   seed_base: 7
   resolution: 256
   num_steps_wait: 10
@@ -26,14 +26,14 @@ task:
 
 openpi:
   host: localhost
-  port: 30001
+  port: 30141
 
 env:
   action_dim: 7
   backend: remote
   remote:
     host: 127.0.0.1
-    port: 30000
+    port: 30140
     timeout_sec: 180.0
 
 # ---------------------------
@@ -109,7 +109,7 @@ replay:
 offline:
   enabled: true
   dataset_paths:
-    - /vla/users/niejunnan/codebase/serl_torch/examples/libero/data/offline/libero_10_task_8
+    - /vla/users/niejunnan/codebase/serl_torch/examples/libero/data/offline/libero_10_task_6
   ratio: 0.5
   symmetric_replay: true
   capacity: 50000
@@ -133,7 +133,7 @@ training:
   expert_check: false
 
   warmup:
-    episodes: 5
+    episodes: 0
   random_steps: 0
   enable_base_probing: false
   probing_alpha: null
@@ -145,7 +145,7 @@ training:
   updates_per_step: 1
 
   async:
-    enabled: false
+    enabled: true
     update_frequency: 10
     idle_sleep_sec: 0.002
 
@@ -161,12 +161,12 @@ training:
     log_file: profiling_logs.jsonl
 
   checkpoint:
-    every_steps: 2500
+    every_steps: 5000
     keep: 0
     dir: checkpoints
 
   async_eval:
-    enabled: false
+    enabled: true
     every_episodes: 20
     episodes: 50
     seed: 7
@@ -177,7 +177,7 @@ training:
     probing_min_steps: 0
     probing_max_steps: 0
     env_host: 127.0.0.1
-    env_port: 31014
+    env_port: 31154
     env_timeout_sec: 180.0
     reuse_openpi_port: true
     openpi_host: null
@@ -227,4 +227,4 @@ normalization:
 
 hydra:
   run:
-    dir: outputs/libero/train_residual_sac_ablation_stepchunk/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: outputs/libero/ablation_stepchunk_vs_step_task6_alpha_warmup_utd_sweep/stepchunk_alpha10_nowarmup_utd2/${now:%Y-%m-%d}/${now:%H-%M-%S}

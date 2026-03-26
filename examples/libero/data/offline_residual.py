@@ -17,6 +17,7 @@ from ..policy import (
     select_action_chunk_window,
 )
 from .normalizer import StateActionNormalizer
+from ..utils.alpha_utils import validate_alpha
 from ..utils.obs_utils import _clone_obs_dict, _zero_obs_like
 from ..utils.profiling import _RuntimeProfiler, _build_residual_step_obs_profiled
 
@@ -180,7 +181,7 @@ def _load_offline_residual_buffer(
     chunk_horizon: int,
     control_indices: np.ndarray,
     residual_limits: np.ndarray,
-    residual_xi: float,
+    residual_alpha: float,
     openpi_client: OpenPIChunkClient,
     image_keys: Tuple[str, ...],
     stack_horizon: int,
@@ -215,8 +216,12 @@ def _load_offline_residual_buffer(
     expert_reference_scale = max(
         float(cfg.offline.get("expert_reference_scale", 1.0)), 1e-6
     )
-    xi = max(float(residual_xi), 1e-6)
-    denom = residual_limits * xi * expert_reference_scale
+    alpha = validate_alpha(
+        residual_alpha,
+        name="offline residual alpha",
+        allow_zero=False,
+    )
+    denom = residual_limits * alpha * expert_reference_scale
     clip_residual_to_unit = bool(cfg.offline.get("clip_residual_to_unit", True))
     fallback_prompt = str(getattr(cfg.task, "prompt", ""))
     obs_cache = LiberoObservationCache(max_obs_entries=256, max_step_obs_entries=512)
@@ -336,7 +341,7 @@ def _load_offline_residual_buffer(
                             "actions": projected_expert_action.reshape(full_action_dim),
                             "rewards": np.float32(reward),
                             "dones": bool(done),
-                            "xi": float(residual_xi),
+                            "alpha": float(residual_alpha),
                             "episode_id": int(stats["files_loaded"] - 1),
                             "episode_step": int(step_idx),
                         }
@@ -351,7 +356,7 @@ def _load_offline_residual_buffer(
                         normalizer=normalizer,
                         obs_cache=obs_cache,
                         cache_key=obs_cache_key,
-                        xi=float(residual_xi),
+                        alpha=float(residual_alpha),
                     )
 
                     if done:
@@ -390,7 +395,7 @@ def _load_offline_residual_buffer(
                             normalizer=normalizer,
                             obs_cache=obs_cache,
                             cache_key=next_obs_cache_key,
-                            xi=float(residual_xi),
+                            alpha=float(residual_alpha),
                         )
                         mask = 1.0
 

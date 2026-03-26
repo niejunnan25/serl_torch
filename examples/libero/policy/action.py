@@ -5,6 +5,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from ..utils.alpha_utils import validate_alpha
+
 
 def select_action_chunk_window(
     action_chunk: np.ndarray,
@@ -180,15 +182,15 @@ def compose_residual_action(
     residual_action: np.ndarray,
     indices: np.ndarray,
     limits: np.ndarray,
-    xi: float = 1.0,
+    alpha: float = 1.0,
     clip_gripper: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     base_action = np.asarray(base_action, dtype=np.float32)
     residual_action = np.asarray(residual_action, dtype=np.float32)
 
     clipped = np.clip(residual_action, -1.0, 1.0)
-    xi = float(max(0.0, xi))
-    bounded = np.clip(clipped * xi, -xi, xi)
+    residual_scale = validate_alpha(alpha, name="alpha", allow_zero=True)
+    bounded = np.clip(clipped * residual_scale, -residual_scale, residual_scale)
     applied_delta = bounded * limits
 
     delta_full = np.zeros_like(base_action, dtype=np.float32)
@@ -207,7 +209,7 @@ def compose_residual_action_chunk(
     residual_chunk: np.ndarray,
     indices: np.ndarray,
     limits: np.ndarray,
-    xi: float = 1.0,
+    alpha: float = 1.0,
     clip_gripper: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     base_chunk_arr = np.asarray(base_chunk, dtype=np.float32)
@@ -234,7 +236,7 @@ def compose_residual_action_chunk(
             residual_action=residual_chunk_arr[step_idx],
             indices=indices,
             limits=limits,
-            xi=xi,
+            alpha=alpha,
             clip_gripper=clip_gripper,
         )
         delta_chunk[step_idx] = delta_step
