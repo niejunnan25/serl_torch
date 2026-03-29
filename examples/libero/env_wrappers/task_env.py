@@ -228,13 +228,45 @@ class LiberoTaskEnv:
 
         if self.env_seed_mode != "fixed":
             self.env.seed(int(seed))
-        self.env.reset()
-        obs = self.env.set_init_state(self.initial_states[self.current_init_state_idx])
         dummy_action = np.zeros((self._action_dim,), dtype=np.float32)
         if self._action_dim > 0:
             dummy_action[-1] = -1.0
-        for _ in range(self.num_steps_wait):
-            obs, _, _, _ = self.env.step(dummy_action.tolist())
+
+        # Some init states can accidentally terminate during warmup dummy steps.
+        # Retry a few times; if it still happens, skip warmup for this reset so the
+        # first real training step does not hit "executing action in terminated episode".
+        warmup_terminated = False
+        obs = None
+        max_warmup_retries = 3
+        for warmup_retry in range(max_warmup_retries):
+            self.env.reset()
+            obs = self.env.set_init_state(self.initial_states[self.current_init_state_idx])
+            warmup_terminated = False
+            for wait_step in range(self.num_steps_wait):
+                obs, _, done, _ = self.env.step(dummy_action.tolist())
+                if bool(done):
+                    warmup_terminated = True
+                    self.logger.warning(
+                        "LIBERO warmup terminated early: init_state_idx=%s wait_step=%s/%s retry=%s/%s",
+                        self.current_init_state_idx,
+                        wait_step + 1,
+                        self.num_steps_wait,
+                        warmup_retry + 1,
+                        max_warmup_retries,
+                    )
+                    break
+            if not warmup_terminated:
+                break
+
+        if warmup_terminated:
+            self.logger.warning(
+                "LIBERO warmup keeps terminating for init_state_idx=%s; skip warmup this reset",
+                self.current_init_state_idx,
+            )
+            self.env.reset()
+            obs = self.env.set_init_state(self.initial_states[self.current_init_state_idx])
+
+        assert obs is not None
         self.logger.info(
             "LIBERO reset: suite=%s task_id=%s init_state_idx=%s seed=%s",
             self.suite_name,
