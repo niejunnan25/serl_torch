@@ -160,6 +160,7 @@ def _load_online_prefill_buffer(
     normalizer: Optional[Any] = None,
     profiler: Optional[_RuntimeProfiler] = None,
     max_episodes: Optional[int] = None,
+    state_mode: str = "fused",
 ) -> Dict[str, Any]:
     del sample_obs_template
     stats: Dict[str, Any] = {
@@ -352,6 +353,7 @@ def _load_online_prefill_buffer(
                     obs_cache=obs_cache,
                     cache_key=obs_cache_key,
                     alpha=0.0,
+                    state_mode=state_mode,
                 )
 
                 if done:
@@ -379,6 +381,7 @@ def _load_online_prefill_buffer(
                         obs_cache=obs_cache,
                         cache_key=next_obs_cache_key,
                         alpha=0.0,
+                        state_mode=state_mode,
                     )
                     mask = 1.0
 

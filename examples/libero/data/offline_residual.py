@@ -189,6 +189,7 @@ def _load_offline_residual_buffer(
     logger: logging.Logger,
     normalizer: Optional[StateActionNormalizer] = None,
     profiler: Optional[_RuntimeProfiler] = None,
+    state_mode: str = "fused",
 ) -> Dict[str, int]:
     del sample_obs_template
     stats = {
@@ -357,6 +358,7 @@ def _load_offline_residual_buffer(
                         obs_cache=obs_cache,
                         cache_key=obs_cache_key,
                         alpha=float(residual_alpha),
+                        state_mode=state_mode,
                     )
 
                     if done:
@@ -396,6 +398,7 @@ def _load_offline_residual_buffer(
                             obs_cache=obs_cache,
                             cache_key=next_obs_cache_key,
                             alpha=float(residual_alpha),
+                            state_mode=state_mode,
                         )
                         mask = 1.0
 

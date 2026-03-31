@@ -11,6 +11,7 @@ from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 
 from ..policy.action import resolve_control_indices
+from ..policy.observation import normalize_residual_observation_state_mode
 
 
 def set_global_seeds(seed: int) -> None:
@@ -64,6 +65,21 @@ def resolve_image_keys(cfg: DictConfig) -> Tuple[str, ...]:
     if not image_keys:
         raise ValueError("At least one residual image key is required")
     return image_keys
+
+
+def resolve_residual_observation_state_mode(cfg: DictConfig) -> str:
+    residual_cfg = cfg.get("residual", None)
+    observation_cfg = (
+        residual_cfg.get("observation", None)
+        if residual_cfg is not None
+        else None
+    )
+    state_mode = (
+        observation_cfg.get("state_mode", "fused")
+        if observation_cfg is not None
+        else "fused"
+    )
+    return normalize_residual_observation_state_mode(state_mode)
 
 
 def resolve_control_indices_from_cfg(

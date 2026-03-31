@@ -105,6 +105,7 @@ from serl_torch.examples.libero.utils.config_utils import (
     build_drq_agent,
     resolve_control_indices_from_cfg,
     resolve_image_keys,
+    resolve_residual_observation_state_mode,
     sample_probing_steps,
     set_global_seeds,
 )
@@ -128,7 +129,12 @@ from serl_torch.examples.libero.utils.replay_batch import (
     _consume_prepared_replay_batch,
     _prepare_replay_batch,
 )
-from serl_torch.examples.libero.utils.schedules import _scheduled_alpha
+from serl_torch.examples.libero.utils.schedules import (
+    _epsilon_gating_clock,
+    _epsilon_gating_enabled,
+    _scheduled_alpha,
+    _scheduled_epsilon_gating_probability,
+)
 from serl_torch.examples.libero.utils.serialization import _to_jsonable
 from serl_torch.examples.libero.utils.step_chunk_replay import ChunkReplayBuffer
 from serl_torch.examples.libero.utils.train_loop_utils import (
@@ -186,6 +192,12 @@ def main(cfg: DictConfig) -> None:
         )
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
+    obs_state_mode = resolve_residual_observation_state_mode(cfg)
+    logger.info(
+        "Residual observation state_mode=%s normalization.enabled=%s",
+        obs_state_mode,
+        bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
+    )
 
     openpi_client = OpenPIChunkClient(
         host=str(cfg.openpi.host),
@@ -261,6 +273,8 @@ def main(cfg: DictConfig) -> None:
         action_limits=residual_action_limits_cfg,
         full_action_dim=env_action_dim,
     )
+    epsilon_gating_enabled = _epsilon_gating_enabled(cfg)
+    epsilon_gating_clock = _epsilon_gating_clock(cfg)
     logger.info(
         "Residual config: image_keys=%s step_action_dim=%s agent_action_dim=%s "
         "action_indices=%s env_action_dim=%s chunk_horizon=%s alpha=%.4f "
@@ -284,6 +298,41 @@ def main(cfg: DictConfig) -> None:
         chunk_step_enabled=chunk_step_enabled,
         clip_gripper=bool(cfg.residual.clip_gripper),
     )
+    if epsilon_gating_enabled:
+        epsilon_gating_cfg = cfg.residual.get("epsilon_gating", {})
+        logger.info(
+            "epsilon-gating enabled: schedule=%s clock=%s min_prob=%.4f max_prob=%.4f "
+            "warmup_steps=%s ramp_steps=%s",
+            str(epsilon_gating_cfg.get("schedule", "linear")),
+            epsilon_gating_clock,
+            float(epsilon_gating_cfg.get("min_prob", 0.0)),
+            float(epsilon_gating_cfg.get("max_prob", 1.0)),
+            int(epsilon_gating_cfg.get("warmup_steps", 0)),
+            int(epsilon_gating_cfg.get("ramp_steps", 1)),
+        )
+
+    def _resolve_train_gate(
+        *,
+        phase_train_flag: bool,
+        alpha_value: float,
+        env_step_value: int,
+        decision_step_value: int,
+    ) -> tuple[float, bool]:
+        if (not phase_train_flag) or (not epsilon_gating_enabled):
+            return 1.0, bool(alpha_value > 0.0)
+
+        schedule_step = (
+            int(env_step_value)
+            if epsilon_gating_clock == "env_step"
+            else int(decision_step_value)
+        )
+        gate_prob = _scheduled_epsilon_gating_probability(
+            cfg, schedule_step=schedule_step
+        )
+        if alpha_value <= 0.0:
+            return float(gate_prob), False
+        gate_on = bool(np.random.random() < float(gate_prob))
+        return float(gate_prob), gate_on
 
     offline_enabled = bool(cfg.offline.enabled)
     offline_ratio = float(cfg.offline.ratio)
@@ -558,6 +607,7 @@ def main(cfg: DictConfig) -> None:
         obs_cache=obs_cache,
         base_action_chunk=(sample_base_chunk if chunk_step_enabled else None),
         alpha=float(residual_alpha),
+        state_mode=obs_state_mode,
     )
     sample_state_core = build_residual_step_core(
         sample_obs_raw,
@@ -625,6 +675,7 @@ def main(cfg: DictConfig) -> None:
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
+            state_mode=obs_state_mode,
         )
     else:
         replay_buffer = ReplayBuffer(
@@ -644,6 +695,7 @@ def main(cfg: DictConfig) -> None:
                 sample_stride=chunk_step_sample_stride,
                 require_full_horizon=chunk_step_require_full_horizon,
                 pad_action_to_horizon=chunk_step_pad_action,
+                state_mode=obs_state_mode,
             )
         else:
             offline_buffer = ReplayBuffer(
@@ -670,6 +722,7 @@ def main(cfg: DictConfig) -> None:
             logger=logger,
             normalizer=normalizer,
             profiler=profiler,
+            state_mode=obs_state_mode,
         )
         offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
         has_offline_dataset_paths = (
@@ -693,6 +746,7 @@ def main(cfg: DictConfig) -> None:
                 logger=logger,
                 normalizer=normalizer,
                 profiler=profiler,
+                state_mode=obs_state_mode,
             )
         logger.info(
             "offline bootstrap: success_episodes=%s collected=%s inserted=%s attempts=%s",
@@ -752,6 +806,7 @@ def main(cfg: DictConfig) -> None:
             normalizer=normalizer,
             profiler=profiler,
             max_episodes=configured_warmup_episodes,
+            state_mode=obs_state_mode,
         )
         online_prefill_loaded_episodes = int(
             online_prefill_stats.get("episodes_loaded", 0)
@@ -1104,6 +1159,9 @@ def main(cfg: DictConfig) -> None:
                                     "a_res_policy": np.zeros(
                                         (step_action_dim,), dtype=np.float32
                                     ).tolist(),
+                                    "a_res_policy_applied": np.zeros(
+                                        (step_action_dim,), dtype=np.float32
+                                    ).tolist(),
                                     "a_res": np.zeros(
                                         (env_action_dim,), dtype=np.float32
                                     ).tolist(),
@@ -1171,6 +1229,7 @@ def main(cfg: DictConfig) -> None:
                             normalizer=normalizer,
                             obs_cache=obs_cache,
                             alpha=float(alpha_step),
+                            state_mode=obs_state_mode,
                         )
                         residual_step_action = np.zeros(
                             (step_action_dim,), dtype=np.float32
@@ -1212,6 +1271,7 @@ def main(cfg: DictConfig) -> None:
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 alpha=float(next_alpha_step),
+                                state_mode=obs_state_mode,
                             )
                             mask = 1.0
                         else:
@@ -1243,6 +1303,7 @@ def main(cfg: DictConfig) -> None:
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 alpha=float(next_alpha_step),
+                                state_mode=obs_state_mode,
                             )
                             cached_base_chunk = next_base_chunk
                             cached_infer_info = next_infer_info
@@ -1297,6 +1358,9 @@ def main(cfg: DictConfig) -> None:
                                 else None,
                                 "a_base": base_chunk[chunk_step].tolist(),
                                 "a_res_policy": residual_step_action.tolist(),
+                                "a_res_policy_applied": np.zeros(
+                                    (step_action_dim,), dtype=np.float32
+                                ).tolist(),
                                 "a_res": np.zeros_like(
                                     base_chunk[chunk_step], dtype=np.float32
                                 ).tolist(),
@@ -1641,6 +1705,9 @@ def main(cfg: DictConfig) -> None:
                                         else None,
                                         "a_base": base_action.tolist(),
                                         "a_res_policy": [0.0] * step_action_dim,
+                                        "a_res_policy_applied": [
+                                            0.0
+                                        ] * step_action_dim,
                                         "a_res": np.zeros_like(
                                             base_action, dtype=np.float32
                                         ).tolist(),
@@ -1701,6 +1768,13 @@ def main(cfg: DictConfig) -> None:
                                 obs_cache=obs_cache,
                                 base_action_chunk=base_chunk,
                                 alpha=float(alpha_step),
+                                state_mode=obs_state_mode,
+                            )
+                            gate_prob, gate_on = _resolve_train_gate(
+                                phase_train_flag=bool(phase_train),
+                                alpha_value=float(alpha_step),
+                                env_step_value=int(train_env_step_before_chunk),
+                                decision_step_value=int(decision_step),
                             )
 
                             if alpha_step <= 0.0:
@@ -1739,6 +1813,11 @@ def main(cfg: DictConfig) -> None:
                                     action_dim=step_action_dim,
                                     chunk_horizon=chunk_horizon,
                                 )
+                            policy_residual_chunk = np.asarray(
+                                residual_chunk, dtype=np.float32
+                            ).copy()
+                            if not gate_on:
+                                residual_chunk = np.zeros_like(residual_chunk)
 
                             remaining_budget_steps = (
                                 _remaining_train_budget_steps(
@@ -1777,6 +1856,9 @@ def main(cfg: DictConfig) -> None:
                             )
                             executed_base_chunk = np.asarray(
                                 base_chunk[:execute_horizon], dtype=np.float32
+                            )
+                            executed_policy_residual_chunk = np.asarray(
+                                policy_residual_chunk[:execute_horizon], dtype=np.float32
                             )
                             executed_residual_chunk = np.asarray(
                                 residual_chunk[:execute_horizon], dtype=np.float32
@@ -1887,12 +1969,17 @@ def main(cfg: DictConfig) -> None:
                                         "a_base": executed_base_chunk[
                                             chunk_step
                                         ].tolist(),
-                                        "a_res_policy": executed_residual_chunk[
+                                        "a_res_policy": executed_policy_residual_chunk[
+                                            chunk_step
+                                        ].tolist(),
+                                        "a_res_policy_applied": executed_residual_chunk[
                                             chunk_step
                                         ].tolist(),
                                         "a_res": delta_chunk[chunk_step].tolist(),
                                         "a_final": final_chunk[chunk_step].tolist(),
                                         "alpha": float(alpha_step),
+                                        "epsilon_gate_prob": float(gate_prob),
+                                        "epsilon_gate_on": bool(gate_on),
                                         "reward": float(reward),
                                         "done": bool(done),
                                         "success": bool(episode_success),
@@ -1914,7 +2001,14 @@ def main(cfg: DictConfig) -> None:
                                     step_metric_window,
                                     reward=float(reward),
                                     alpha=float(alpha_step),
-                                    residual_action=executed_residual_chunk[chunk_step],
+                                    gate_prob=float(gate_prob),
+                                    gate_on=bool(gate_on),
+                                    residual_action_raw=executed_policy_residual_chunk[
+                                        chunk_step
+                                    ],
+                                    residual_action_applied=executed_residual_chunk[
+                                        chunk_step
+                                    ],
                                     delta_action=delta_chunk[chunk_step],
                                     base_action=executed_base_chunk[chunk_step],
                                     final_action=final_chunk[chunk_step],
@@ -2196,6 +2290,13 @@ def main(cfg: DictConfig) -> None:
                                     normalizer=normalizer,
                                     obs_cache=obs_cache,
                                     alpha=float(alpha_step),
+                                    state_mode=obs_state_mode,
+                                )
+                                gate_prob, gate_on = _resolve_train_gate(
+                                    phase_train_flag=bool(phase_train),
+                                    alpha_value=float(alpha_step),
+                                    env_step_value=int(train_env_step_before_step),
+                                    decision_step_value=int(decision_step),
                                 )
 
                                 if alpha_step <= 0.0:
@@ -2230,6 +2331,13 @@ def main(cfg: DictConfig) -> None:
                                         residual_step_action = as_numpy_action(
                                             sampled, step_action_dim
                                         )
+                                policy_residual_step_action = np.asarray(
+                                    residual_step_action, dtype=np.float32
+                                ).copy()
+                                if not gate_on:
+                                    residual_step_action = np.zeros_like(
+                                        residual_step_action
+                                    )
 
                                 delta_action, final_action = compose_residual_action(
                                     base_action=base_chunk[chunk_step],
@@ -2319,10 +2427,13 @@ def main(cfg: DictConfig) -> None:
                                         if chunk_step == 0
                                         else None,
                                         "a_base": base_chunk[chunk_step].tolist(),
-                                        "a_res_policy": residual_step_action.tolist(),
+                                        "a_res_policy": policy_residual_step_action.tolist(),
+                                        "a_res_policy_applied": residual_step_action.tolist(),
                                         "a_res": delta_action.tolist(),
                                         "a_final": final_action.tolist(),
                                         "alpha": float(alpha_step),
+                                        "epsilon_gate_prob": float(gate_prob),
+                                        "epsilon_gate_on": bool(gate_on),
                                         "reward": float(reward),
                                         "done": bool(done),
                                         "success": bool(episode_success),
@@ -2333,7 +2444,10 @@ def main(cfg: DictConfig) -> None:
                                     step_metric_window,
                                     reward=float(reward),
                                     alpha=float(alpha_step),
-                                    residual_action=residual_step_action,
+                                    gate_prob=float(gate_prob),
+                                    gate_on=bool(gate_on),
+                                    residual_action_raw=policy_residual_step_action,
+                                    residual_action_applied=residual_step_action,
                                     delta_action=delta_action,
                                     base_action=base_chunk[chunk_step],
                                     final_action=final_action,
@@ -2364,6 +2478,7 @@ def main(cfg: DictConfig) -> None:
                                         normalizer=normalizer,
                                         obs_cache=obs_cache,
                                         alpha=float(next_alpha_step),
+                                        state_mode=obs_state_mode,
                                     )
                                     mask = 1.0
                                 else:
@@ -2395,6 +2510,7 @@ def main(cfg: DictConfig) -> None:
                                         normalizer=normalizer,
                                         obs_cache=obs_cache,
                                         alpha=float(next_alpha_step),
+                                        state_mode=obs_state_mode,
                                     )
                                     cached_base_chunk = next_base_chunk
                                     cached_infer_info = next_infer_info

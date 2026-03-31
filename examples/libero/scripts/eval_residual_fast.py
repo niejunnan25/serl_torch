@@ -45,8 +45,14 @@ from serl_torch.examples.libero.utils.config_utils import (
     build_drq_agent,
     resolve_control_indices_from_cfg,
     resolve_image_keys,
+    resolve_residual_observation_state_mode,
     sample_probing_steps,
     set_global_seeds,
+)
+from serl_torch.examples.libero.utils.schedules import (
+    _epsilon_gating_enabled,
+    _epsilon_gating_eval_force_on,
+    _scheduled_epsilon_gating_probability,
 )
 
 ensure_serl_launcher_importable()
@@ -126,6 +132,12 @@ def main(cfg: DictConfig) -> None:
         )
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
+    obs_state_mode = resolve_residual_observation_state_mode(cfg)
+    logger.info(
+        "Residual observation state_mode=%s normalization.enabled=%s",
+        obs_state_mode,
+        bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
+    )
 
     openpi_client = OpenPIChunkClient(
         host=str(cfg.openpi.host),
@@ -151,6 +163,8 @@ def main(cfg: DictConfig) -> None:
     step_action_dim = int(len(control_indices))
     chunk_horizon = int(cfg.residual.chunk_horizon)
     residual_alpha = require_residual_alpha(cfg.get("residual", None))
+    epsilon_gating_enabled = _epsilon_gating_enabled(cfg)
+    epsilon_gating_eval_force_on = _epsilon_gating_eval_force_on(cfg)
     chunk_step_cfg = cfg.get("chunk_step", None)
     chunk_step_enabled = (
         bool(chunk_step_cfg.get("enabled", False))
@@ -181,6 +195,19 @@ def main(cfg: DictConfig) -> None:
         chunk_step_enabled=chunk_step_enabled,
         clip_gripper=bool(cfg.residual.clip_gripper),
     )
+
+    def _resolve_eval_gate(alpha_value: float) -> tuple[float, bool]:
+        if alpha_value <= 0.0:
+            return 1.0, False
+        if not epsilon_gating_enabled:
+            return 1.0, True
+        if epsilon_gating_eval_force_on:
+            return 1.0, True
+        gate_prob = _scheduled_epsilon_gating_probability(
+            cfg, schedule_step=int(10**12)
+        )
+        gate_on = bool(np.random.random() < float(gate_prob))
+        return float(gate_prob), gate_on
 
     checkpoint_path = str(cfg.eval.checkpoint_path) if cfg.eval.checkpoint_path else ""
     if checkpoint_path and checkpoint_path.lower() != "null":
@@ -334,6 +361,7 @@ def main(cfg: DictConfig) -> None:
                         obs_cache=obs_cache,
                         base_action_chunk=(base_chunk if chunk_step_enabled else None),
                         alpha=float(residual_alpha),
+                        state_mode=obs_state_mode,
                     )
 
                     if checkpoint_path and agent is None:
@@ -352,6 +380,7 @@ def main(cfg: DictConfig) -> None:
                         )
 
                     if chunk_step_enabled:
+                        gate_prob, gate_on = _resolve_eval_gate(float(residual_alpha))
                         if checkpoint_loaded and agent is not None:
                             sampled = agent.sample_actions(
                                 obs_input,
@@ -366,6 +395,8 @@ def main(cfg: DictConfig) -> None:
                             residual_chunk = np.zeros(
                                 (chunk_horizon, step_action_dim), dtype=np.float32
                             )
+                        if not gate_on:
+                            residual_chunk = np.zeros_like(residual_chunk)
 
                         execute_horizon = int(
                             min(chunk_horizon, max_episode_steps - episode_steps)
@@ -426,6 +457,8 @@ def main(cfg: DictConfig) -> None:
                                     ].tolist(),
                                     "a_res": delta_chunk[executed_step].tolist(),
                                     "a_final": final_chunk[executed_step].tolist(),
+                                    "epsilon_gate_prob": float(gate_prob),
+                                    "epsilon_gate_on": bool(gate_on),
                                     "reward": float(reward),
                                     "done": bool(done),
                                     "success": bool(success),
@@ -436,6 +469,7 @@ def main(cfg: DictConfig) -> None:
                                 break
                         break
                     else:
+                        gate_prob, gate_on = _resolve_eval_gate(float(residual_alpha))
                         if checkpoint_loaded and agent is not None:
                             sampled = agent.sample_actions(
                                 obs_input,
@@ -448,6 +482,8 @@ def main(cfg: DictConfig) -> None:
                             residual_step_action = np.zeros(
                                 (step_action_dim,), dtype=np.float32
                             )
+                        if not gate_on:
+                            residual_step_action = np.zeros_like(residual_step_action)
 
                         delta_action, final_action = compose_residual_action(
                             base_action=base_chunk[chunk_step],
@@ -492,6 +528,8 @@ def main(cfg: DictConfig) -> None:
                                 "a_base": base_chunk[chunk_step].tolist(),
                                 "a_res": delta_action.tolist(),
                                 "a_final": final_action.tolist(),
+                                "epsilon_gate_prob": float(gate_prob),
+                                "epsilon_gate_on": bool(gate_on),
                                 "reward": float(reward),
                                 "done": bool(done),
                                 "success": bool(success),
