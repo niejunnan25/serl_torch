@@ -183,6 +183,8 @@ pretrained_models/
 examples/libero/data/offline/
 examples/libero/data/online_prefill/
 
+# Local third_party workspace content
+third_party/
 
 references/
 reference/
