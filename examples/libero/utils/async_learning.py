@@ -27,6 +27,13 @@ if TYPE_CHECKING:
     from serl_launcher.data.replay_buffer import ReplayBuffer
 
 
+def _is_transient_replay_unavailable(exc: BaseException) -> bool:
+    message = str(exc).strip().lower()
+    if not message:
+        return False
+    return "no eligible chunk starts" in message
+
+
 @torch.no_grad()
 def _sync_agent_modules_inplace(target_agent: Any, source_agent: Any) -> None:
     for name, source_module in source_agent.state.modules.items():
@@ -347,13 +354,21 @@ class _AsyncLearner:
         with self.replay_lock:
             if _replay_progress_size(self.online_buffer) < self.training_starts:
                 return None
-            batch, online_bs, offline_bs = _sample_mixed_batch(
-                self.online_buffer,
-                self.offline_buffer,
-                batch_size=self.batch_size,
-                offline_ratio=self.offline_ratio,
-                symmetric_replay=self.symmetric_replay,
-            )
+            try:
+                batch, online_bs, offline_bs = _sample_mixed_batch(
+                    self.online_buffer,
+                    self.offline_buffer,
+                    batch_size=self.batch_size,
+                    offline_ratio=self.offline_ratio,
+                    symmetric_replay=self.symmetric_replay,
+                )
+            except (RuntimeError, ValueError) as exc:
+                # StepChunk replay can temporarily have inserted steps but still lack a
+                # valid chunk start. Treat this as "not ready yet" so the async learner
+                # keeps waiting instead of killing the prefetch thread.
+                if _is_transient_replay_unavailable(exc):
+                    return None
+                raise
         return batch, online_bs, offline_bs
 
     def _run(self) -> None:
