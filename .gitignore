@@ -182,9 +182,13 @@ pretrained_models/
 # Local LIBERO offline data cache
 examples/libero/data/offline/
 examples/libero/data/online_prefill/
+examples/libero/training_logs/
 
 # Local third_party workspace content
 third_party/
+
+# NFS temporary files
+.nfs*
 
 references/
 reference/
