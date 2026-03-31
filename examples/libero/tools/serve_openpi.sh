@@ -84,7 +84,7 @@ fi
 # conda activate openpi-modified
 
 export CUDA_VISIBLE_DEVICES="$GPU_ID"
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.3
 export PYTHONPATH="${OPENPI_ROOT}/src:${PYTHONPATH:-}"
 cd "$OPENPI_ROOT"
 

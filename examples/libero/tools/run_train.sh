@@ -56,12 +56,27 @@ fi
 usage() {
     cat <<'EOF'
 Usage:
-  bash tools/run_train.sh <yaml_file_name.yaml|/abs/path/to/config.yaml> [--gpu_id N] [extra hydra overrides...]
+  bash tools/run_train.sh <yaml_file_name.yaml|/abs/path/to/config.yaml> [--gpu_id N] [--output-dir DIR] [extra hydra overrides...]
 
 Examples:
   bash tools/run_train.sh train_residual_sac.yaml --gpu_id 0
   bash tools/run_train.sh train_pld_residual_sac.yaml --gpu_id 1
+  bash tools/run_train.sh conf/foo.yaml --gpu_id 0 --output-dir outputs/exp0
 EOF
+}
+
+format_cmd() {
+    local formatted=""
+    local token=""
+    local escaped=""
+    for token in "$@"; do
+        printf -v escaped "%q" "$token"
+        if [[ -n "$formatted" ]]; then
+            formatted+=" "
+        fi
+        formatted+="$escaped"
+    done
+    printf "%s" "$formatted"
 }
 
 require_arg() {
@@ -116,7 +131,10 @@ wait_for_port() {
 
 CONFIG_ARG=""
 GPU_ID="0"
+OUTPUT_DIR_ARG=""
 EXTRA_ARGS=()
+ORIGINAL_ARGS=("$@")
+LAUNCH_CMD_OVERRIDE="${RUN_TRAIN_LAUNCH_CMD:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -128,6 +146,15 @@ while [[ $# -gt 0 ]]; do
             require_arg "$1" "${2:-}"
             GPU_ID="$2"
             shift 2
+            ;;
+        --output-dir|--output_dir)
+            require_arg "$1" "${2:-}"
+            OUTPUT_DIR_ARG="$2"
+            shift 2
+            ;;
+        --output-dir=*|--output_dir=*)
+            OUTPUT_DIR_ARG="${1#*=}"
+            shift
             ;;
         *)
             if [[ -z "$CONFIG_ARG" ]]; then
@@ -165,6 +192,22 @@ CONFIG_DIR="$(cd "$(dirname "$CONFIG_PATH")" && pwd)"
 CONFIG_BASENAME="$(basename "$CONFIG_PATH")"
 CONFIG_NAME="${CONFIG_BASENAME%.yaml}"
 
+OUTPUT_DIR=""
+if [[ -n "$OUTPUT_DIR_ARG" ]]; then
+    OUTPUT_DIR="$("$PYTHON_BIN" - "$ROOT_DIR" "$OUTPUT_DIR_ARG" <<'PY'
+from pathlib import Path
+import sys
+
+base = Path(sys.argv[1]).expanduser().resolve()
+raw = Path(sys.argv[2]).expanduser()
+if raw.is_absolute():
+    print(raw.resolve())
+else:
+    print((base / raw).resolve())
+PY
+)"
+fi
+
 IFS=$'\t' read -r ENV_HOST ENV_PORT OPENPI_HOST OPENPI_PORT ASYNC_EVAL_ENABLED ASYNC_EVAL_ENV_HOST ASYNC_EVAL_ENV_PORT <<<"$("$PYTHON_BIN" - "$CONFIG_DIR" "$CONFIG_NAME" "${EXTRA_ARGS[@]}" <<'PY'
 from hydra import compose, initialize_config_dir
 import sys
@@ -191,9 +234,27 @@ PY
 )"
 
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
-SUPPORT_ROOT="${RUN_TRAIN_SUPPORT_ROOT:-$ROOT_DIR/outputs/libero/run_train_support}"
-SUPPORT_DIR="$SUPPORT_ROOT/${STAMP}_${CONFIG_NAME}_gpu${GPU_ID}_$$"
-mkdir -p "$SUPPORT_DIR"
+RUN_DIR=""
+HYDRA_RUN_OVERRIDE=""
+if [[ -n "$OUTPUT_DIR" ]]; then
+    RUN_PARENT_DIR="$OUTPUT_DIR/$CONFIG_NAME"
+    mkdir -p "$RUN_PARENT_DIR"
+    RUN_DIR="$RUN_PARENT_DIR/$STAMP"
+    if [[ -e "$RUN_DIR" ]]; then
+        suffix=2
+        while [[ -e "${RUN_DIR}_$suffix" ]]; do
+            suffix=$((suffix + 1))
+        done
+        RUN_DIR="${RUN_DIR}_$suffix"
+    fi
+    mkdir -p "$RUN_DIR"
+    SUPPORT_DIR="$RUN_DIR"
+    HYDRA_RUN_OVERRIDE="hydra.run.dir=$RUN_DIR"
+else
+    SUPPORT_ROOT="${RUN_TRAIN_SUPPORT_ROOT:-$ROOT_DIR/outputs/libero/run_train_support}"
+    SUPPORT_DIR="$SUPPORT_ROOT/${STAMP}_${CONFIG_NAME}_gpu${GPU_ID}_$$"
+    mkdir -p "$SUPPORT_DIR"
+fi
 
 ENV_LOG="$SUPPORT_DIR/env_server.log"
 OPENPI_LOG="$SUPPORT_DIR/openpi_server.log"
@@ -250,6 +311,11 @@ trap cleanup EXIT INT TERM
     echo "  LIBERO run_train.sh"
     echo "=========================================="
     echo "  Root        : $ROOT_DIR"
+    if [[ -n "$LAUNCH_CMD_OVERRIDE" ]]; then
+        echo "  Launch cmd  : $LAUNCH_CMD_OVERRIDE"
+    else
+        echo "  Launch cmd  : $(format_cmd bash "$TOOLS_DIR/run_train.sh" "${ORIGINAL_ARGS[@]}")"
+    fi
     echo "  Config file : $CONFIG_PATH"
     echo "  Config name : $CONFIG_NAME"
     echo "  GPU         : $GPU_ID"
@@ -260,6 +326,10 @@ trap cleanup EXIT INT TERM
         echo "  Eval env    : ${ASYNC_EVAL_ENV_HOST}:${ASYNC_EVAL_ENV_PORT}"
     else
         echo "  Async eval  : disabled"
+    fi
+    if [[ -n "$OUTPUT_DIR" ]]; then
+        echo "  Output root : $OUTPUT_DIR"
+        echo "  Run dir     : $RUN_DIR"
     fi
     echo "  Support dir : $SUPPORT_DIR"
     echo "  Extra args  : ${EXTRA_ARGS[*]:-<none>}"
@@ -306,12 +376,21 @@ wait_for_port "OpenPI server" "$OPENPI_HOST" "$OPENPI_PORT" 300 | tee -a "$LAUNC
 
 echo "Starting training..." | tee -a "$LAUNCH_LOG"
 cd "$ROOT_DIR"
-CUDA_VISIBLE_DEVICES="$GPU_ID" \
-bash "$TOOLS_DIR/train.sh" \
-    --config-path "$CONFIG_DIR" \
-    --config-name "$CONFIG_NAME" \
-    env.remote.host="$ENV_HOST" \
-    env.remote.port="$ENV_PORT" \
-    openpi.host="$OPENPI_HOST" \
-    openpi.port="$OPENPI_PORT" \
+TRAIN_ARGS=(
+    --config-path "$CONFIG_DIR"
+    --config-name "$CONFIG_NAME"
+    env.remote.host="$ENV_HOST"
+    env.remote.port="$ENV_PORT"
+    openpi.host="$OPENPI_HOST"
+    openpi.port="$OPENPI_PORT"
     "${EXTRA_ARGS[@]}"
+)
+if [[ -n "$HYDRA_RUN_OVERRIDE" ]]; then
+    TRAIN_ARGS+=("$HYDRA_RUN_OVERRIDE")
+fi
+TRAIN_CMD=(
+    bash "$TOOLS_DIR/train.sh" "${TRAIN_ARGS[@]}"
+)
+echo "Training command: CUDA_VISIBLE_DEVICES=$(printf "%q" "$GPU_ID") $(format_cmd "${TRAIN_CMD[@]}")" | tee -a "$LAUNCH_LOG"
+CUDA_VISIBLE_DEVICES="$GPU_ID" \
+"${TRAIN_CMD[@]}"
