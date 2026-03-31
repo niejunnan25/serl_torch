@@ -238,15 +238,20 @@ class SACAgent:
         chunk_horizon = int(transform_cfg.get("chunk_horizon", 1))
         chunk_step_enabled = bool(transform_cfg.get("chunk_step_enabled", False))
         clip_gripper = bool(transform_cfg.get("clip_gripper", True))
-        scale_key = str(transform_cfg.get("scale_key", "xi"))
+        scale_key = str(transform_cfg.get("scale_key", "alpha"))
+        raw_scale = self._extract_aux_tensor(observations, scale_key)
 
-        scale = self._extract_aux_tensor(observations, scale_key).to(
+        scale = raw_scale.to(
             device=policy_actions.device,
             dtype=policy_actions.dtype,
         )
         if scale.ndim == 1:
             scale = scale.unsqueeze(-1)
-        scale = torch.clamp(scale, min=0.0)
+        if torch.any(scale < 0.0):
+            min_scale = float(scale.min().detach().cpu().item())
+            raise ValueError(
+                f"Observation residual scale '{scale_key}' must be >= 0.0, got min={min_scale}"
+            )
 
         if not chunk_step_enabled:
             base_key = str(transform_cfg.get("base_action_key", "base_action"))

@@ -39,6 +39,7 @@ from serl_torch.examples.libero.utils import (
     JsonlLogger,
     ensure_serl_launcher_importable,
 )
+from serl_torch.examples.libero.utils.alpha_utils import require_residual_alpha
 from serl_torch.examples.libero.utils.config_utils import (
     build_residual_action_transform,
     build_drq_agent,
@@ -149,7 +150,7 @@ def main(cfg: DictConfig) -> None:
     )
     step_action_dim = int(len(control_indices))
     chunk_horizon = int(cfg.residual.chunk_horizon)
-    residual_xi = float(cfg.residual.get("xi", 1.0))
+    residual_alpha = require_residual_alpha(cfg.get("residual", None))
     chunk_step_cfg = cfg.get("chunk_step", None)
     chunk_step_enabled = (
         bool(chunk_step_cfg.get("enabled", False))
@@ -332,7 +333,7 @@ def main(cfg: DictConfig) -> None:
                         normalizer=normalizer,
                         obs_cache=obs_cache,
                         base_action_chunk=(base_chunk if chunk_step_enabled else None),
-                        xi=float(residual_xi),
+                        alpha=float(residual_alpha),
                     )
 
                     if checkpoint_path and agent is None:
@@ -376,7 +377,7 @@ def main(cfg: DictConfig) -> None:
                             residual_chunk=executed_residual_chunk,
                             indices=control_indices,
                             limits=residual_limits,
-                            xi=residual_xi,
+                            alpha=residual_alpha,
                             clip_gripper=bool(cfg.residual.clip_gripper),
                         )
 
@@ -453,7 +454,7 @@ def main(cfg: DictConfig) -> None:
                             residual_action=residual_step_action,
                             indices=control_indices,
                             limits=residual_limits,
-                            xi=residual_xi,
+                            alpha=residual_alpha,
                             clip_gripper=bool(cfg.residual.clip_gripper),
                         )
 
@@ -549,7 +550,7 @@ def main(cfg: DictConfig) -> None:
             "chunk_horizon": int(chunk_horizon),
             "residual_action_dim": int(agent_action_dim),
             "chunk_step_enabled": bool(chunk_step_enabled),
-            "residual_xi": float(residual_xi),
+            "residual_alpha": float(residual_alpha),
             "expert_check": bool(cfg.eval.expert_check),
             "eval_seed": int(eval_seed),
             "expert_precheck_failed_episodes": int(precheck_failed_episodes),

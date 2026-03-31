@@ -41,7 +41,7 @@ env:
 # ---------------------------
 residual:
   image_keys: [image, wrist_image]
-  xi: 0.1
+  alpha: 0.1
   action_dim: 7
   action_indices: null
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
@@ -134,6 +134,9 @@ training:
 
   warmup:
     episodes: 5
+  online_prefill:
+    enabled: false
+    dataset_paths: []
   random_steps: 0
   enable_base_probing: false
   probing_alpha: null
@@ -188,8 +191,8 @@ training:
     summary_jsonl: async_eval_results.jsonl
     eval_script: null
     python_executable: null
-    xi_mode: checkpoint_schedule
-    fixed_xi: null
+    alpha_mode: checkpoint_schedule
+    fixed_alpha: null
 
   calql_pretrain:
     enabled: true
@@ -199,10 +202,10 @@ training:
     n_actions: 10
     temperature: 1.0
 
-  xi_scheduler:
+  alpha_scheduler:
     enabled: false
     type: linear
-    min_xi: 0.05
+    min_alpha: 0.05
     warmup_steps: 0
     anneal_steps: 20000
 

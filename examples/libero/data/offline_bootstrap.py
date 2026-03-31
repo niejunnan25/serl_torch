@@ -33,7 +33,7 @@ def _bootstrap_offline_with_base_success(
     offline_buffer: "ReplayBuffer",
     sample_obs_template: Dict[str, np.ndarray],
     action_dim: int,
-    residual_xi: float,
+    residual_alpha: float,
     image_keys: Tuple[str, ...],
     stack_horizon: int,
     chunk_horizon: int,
@@ -180,7 +180,7 @@ def _bootstrap_offline_with_base_success(
                             ),
                             "rewards": float(reward),
                             "dones": bool(done),
-                            "xi": float(residual_xi),
+                            "alpha": float(residual_alpha),
                             "episode_id": int(seed),
                             "episode_step": int(current_episode_step),
                         }
@@ -220,7 +220,7 @@ def _bootstrap_offline_with_base_success(
                     stack_horizon=stack_horizon,
                     normalizer=normalizer,
                     obs_cache=obs_cache,
-                    xi=float(residual_xi),
+                    alpha=float(residual_alpha),
                 )
                 next_obs_raw, reward, env_done, _, info = _profile_call(
                     profiler,
@@ -245,7 +245,7 @@ def _bootstrap_offline_with_base_success(
                         stack_horizon=stack_horizon,
                         normalizer=normalizer,
                         obs_cache=obs_cache,
-                        xi=float(residual_xi),
+                        alpha=float(residual_alpha),
                     )
                     mask = 1.0
                 else:
@@ -267,7 +267,7 @@ def _bootstrap_offline_with_base_success(
                         stack_horizon=stack_horizon,
                         normalizer=normalizer,
                         obs_cache=obs_cache,
-                        xi=float(residual_xi),
+                        alpha=float(residual_alpha),
                     )
                     cached_base_chunk = next_base_chunk
                     mask = 1.0

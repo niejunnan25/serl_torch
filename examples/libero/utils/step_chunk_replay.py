@@ -6,8 +6,10 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from .alpha_utils import validate_alpha
 
-_OBS_SPECIAL_KEYS = {"state", "base_action", "base_action_chunk", "xi"}
+
+_OBS_SPECIAL_KEYS = {"state", "base_action", "base_action_chunk", "alpha"}
 
 
 def _strip_sample_axis(template: np.ndarray) -> np.ndarray:
@@ -101,7 +103,7 @@ class StepChunkReplayBuffer:
         )
         self._rewards = np.empty((self.capacity,), dtype=np.float32)
         self._dones = np.empty((self.capacity,), dtype=bool)
-        self._xis = np.empty((self.capacity,), dtype=np.float32)
+        self._alphas = np.empty((self.capacity,), dtype=np.float32)
         self._episode_ids = np.empty((self.capacity,), dtype=np.int64)
         self._episode_steps = np.empty((self.capacity,), dtype=np.int32)
         self._step_ids = np.full((self.capacity,), -1, dtype=np.int64)
@@ -248,9 +250,16 @@ class StepChunkReplayBuffer:
         self._base_action[insert_index] = base_action
         self._base_action_norm[insert_index] = base_action_norm
         self._final_action[insert_index] = final_action
+        if "alpha" not in data_dict:
+            raise KeyError("chunk-step replay transition must include 'alpha'")
+        residual_scale = validate_alpha(
+            data_dict["alpha"],
+            name="chunk-step replay alpha",
+            allow_zero=True,
+        )
         self._rewards[insert_index] = np.float32(data_dict["rewards"])
         self._dones[insert_index] = bool(data_dict["dones"])
-        self._xis[insert_index] = np.float32(data_dict["xi"])
+        self._alphas[insert_index] = np.float32(residual_scale)
         self._episode_ids[insert_index] = np.int64(data_dict["episode_id"])
         self._episode_steps[insert_index] = np.int32(data_dict["episode_step"])
         self._step_ids[insert_index] = np.int64(self._insert_count)
@@ -284,7 +293,7 @@ class StepChunkReplayBuffer:
                 self._state_core[start_idx],
                 self._base_action_norm[start_idx],
                 base_window_norm.reshape(-1),
-                np.asarray([self._xis[start_idx]], dtype=np.float32),
+                np.asarray([self._alphas[start_idx]], dtype=np.float32),
             ),
             axis=0,
         ).astype(np.float32)
@@ -293,7 +302,7 @@ class StepChunkReplayBuffer:
             "base_action": np.expand_dims(
                 np.array(self._base_action[start_idx], copy=True), axis=0
             ),
-            "xi": np.asarray([[self._xis[start_idx]]], dtype=np.float32),
+            "alpha": np.asarray([[self._alphas[start_idx]]], dtype=np.float32),
             "base_action_chunk": np.expand_dims(
                 np.array(base_window, copy=True), axis=0
             ),

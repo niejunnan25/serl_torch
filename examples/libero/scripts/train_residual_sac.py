@@ -52,6 +52,9 @@ from serl_torch.examples.libero.data import StateActionNormalizer, load_normaliz
 from serl_torch.examples.libero.data.offline_bootstrap import (
     _bootstrap_offline_with_base_success,
 )
+from serl_torch.examples.libero.data.online_prefill_dataset import (
+    _load_online_prefill_buffer,
+)
 from serl_torch.examples.libero.data.offline_residual import (
     _load_offline_residual_buffer,
 )
@@ -110,6 +113,10 @@ from serl_torch.examples.libero.utils.obs_utils import (
     _obs_space_from_sample,
     _zero_obs_like,
 )
+from serl_torch.examples.libero.utils.alpha_utils import (
+    require_residual_alpha,
+    validate_alpha,
+)
 from serl_torch.examples.libero.utils.profiling import (
     _RuntimeProfiler,
     _build_residual_step_obs_profiled,
@@ -121,7 +128,7 @@ from serl_torch.examples.libero.utils.replay_batch import (
     _consume_prepared_replay_batch,
     _prepare_replay_batch,
 )
-from serl_torch.examples.libero.utils.schedules import _scheduled_xi
+from serl_torch.examples.libero.utils.schedules import _scheduled_alpha
 from serl_torch.examples.libero.utils.serialization import _to_jsonable
 from serl_torch.examples.libero.utils.step_chunk_replay import ChunkReplayBuffer
 from serl_torch.examples.libero.utils.train_loop_utils import (
@@ -203,7 +210,7 @@ def main(cfg: DictConfig) -> None:
     )
     step_action_dim = int(len(control_indices))
     chunk_horizon = int(cfg.residual.chunk_horizon)
-    residual_xi = float(cfg.residual.get("xi", 1.0))
+    residual_alpha = require_residual_alpha(cfg.get("residual", None))
     chunk_step_cfg = cfg.get("chunk_step", None)
     chunk_step_enabled = (
         bool(chunk_step_cfg.get("enabled", False))
@@ -256,7 +263,7 @@ def main(cfg: DictConfig) -> None:
     )
     logger.info(
         "Residual config: image_keys=%s step_action_dim=%s agent_action_dim=%s "
-        "action_indices=%s env_action_dim=%s chunk_horizon=%s xi=%.4f "
+        "action_indices=%s env_action_dim=%s chunk_horizon=%s alpha=%.4f "
         "chunk_step_enabled=%s stride=%s limits=%s",
         list(image_keys),
         step_action_dim,
@@ -264,7 +271,7 @@ def main(cfg: DictConfig) -> None:
         control_indices.tolist(),
         env_action_dim,
         chunk_horizon,
-        residual_xi,
+        residual_alpha,
         chunk_step_enabled,
         chunk_step_sample_stride,
         residual_limits.tolist(),
@@ -389,6 +396,22 @@ def main(cfg: DictConfig) -> None:
     }
     bootstrap_stats: Dict[str, Any] = {"enabled": 0, "inserted": 0}
     warmstart_info: Dict[str, Any] = {"enabled": 0, "steps": 0}
+    online_prefill_stats: Dict[str, Any] = {
+        "enabled": 0,
+        "mode": "stepchunk" if chunk_step_enabled else "step",
+        "files_total": 0,
+        "files_loaded": 0,
+        "files_missing": 0,
+        "episodes_loaded": 0,
+        "candidates": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "errors": 0,
+        "success_episodes": 0,
+        "episode_return_sum": 0.0,
+        "episode_step_sum": 0,
+        "recent_episode_successes": [],
+    }
 
     checkpoint_cfg = cfg.training.get("checkpoint", None)
     if checkpoint_cfg is None:
@@ -415,19 +438,44 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(
             "training.async_eval.enabled=true requires training.async_eval.every_episodes > 0"
         )
-    async_eval_xi_mode = (
-        str(async_eval_cfg.get("xi_mode", "checkpoint_schedule")).strip().lower()
+    async_eval_alpha_mode = (
+        str(
+            async_eval_cfg.get(
+                "alpha_mode",
+                "checkpoint_schedule",
+            )
+        )
+        .strip()
+        .lower()
         if async_eval_cfg is not None
         else "checkpoint_schedule"
     )
-    # Async eval reconstructs xi from checkpoint env-step. Do not allow decision-step clock here.
+    valid_async_eval_alpha_modes = {"checkpoint_schedule", "base", "fixed"}
+    if async_eval_enabled and async_eval_alpha_mode not in valid_async_eval_alpha_modes:
+        raise ValueError(
+            "training.async_eval.alpha_mode must be one of "
+            f"{sorted(valid_async_eval_alpha_modes)}, got {async_eval_alpha_mode!r}"
+        )
+    if async_eval_enabled and async_eval_alpha_mode == "fixed":
+        fixed_alpha_cfg = async_eval_cfg.get("fixed_alpha", None)
+        if fixed_alpha_cfg is None:
+            raise ValueError(
+                "training.async_eval.alpha_mode=fixed requires "
+                "training.async_eval.fixed_alpha to be set"
+            )
+        validate_alpha(
+            fixed_alpha_cfg,
+            name="training.async_eval.fixed_alpha",
+            allow_zero=True,
+        )
+    # Async eval reconstructs alpha from checkpoint env-step. Do not allow decision-step clock here.
     if (
         async_eval_enabled
-        and async_eval_xi_mode == "checkpoint_schedule"
+        and async_eval_alpha_mode == "checkpoint_schedule"
         and chunk_step_scheduler_clock != "env_step"
     ):
         raise ValueError(
-            "training.async_eval.xi_mode=checkpoint_schedule requires "
+            "training.async_eval.alpha_mode=checkpoint_schedule requires "
             "chunk_step.scheduler_clock=env_step"
         )
 
@@ -509,7 +557,7 @@ def main(cfg: DictConfig) -> None:
         normalizer=normalizer,
         obs_cache=obs_cache,
         base_action_chunk=(sample_base_chunk if chunk_step_enabled else None),
-        xi=float(residual_xi),
+        alpha=float(residual_alpha),
     )
     sample_state_core = build_residual_step_core(
         sample_obs_raw,
@@ -529,7 +577,7 @@ def main(cfg: DictConfig) -> None:
         *,
         base_action: np.ndarray,
         final_action: np.ndarray,
-        xi_obs: float,
+        alpha_obs: float,
         episode_id: int,
         episode_step: int,
         done: bool,
@@ -549,7 +597,7 @@ def main(cfg: DictConfig) -> None:
             "actions": final_action_arr,
             "rewards": 0.0,
             "dones": bool(done),
-            "xi": float(xi_obs),
+            "alpha": float(alpha_obs),
             "episode_id": int(episode_id),
             "episode_step": int(episode_step),
         }
@@ -603,7 +651,9 @@ def main(cfg: DictConfig) -> None:
                 action_space=action_space,
                 capacity=int(cfg.offline.capacity),
             )
-        offline_residual_xi = _scheduled_xi(cfg, base_xi=residual_xi, schedule_step=0)
+        offline_residual_alpha = _scheduled_alpha(
+            cfg, base_alpha=residual_alpha, schedule_step=0
+        )
         bootstrap_stats = _bootstrap_offline_with_base_success(
             cfg,
             env=env,
@@ -611,7 +661,7 @@ def main(cfg: DictConfig) -> None:
             offline_buffer=offline_buffer,
             sample_obs_template=sample_obs,
             action_dim=env_action_dim,
-            residual_xi=offline_residual_xi,
+            residual_alpha=offline_residual_alpha,
             image_keys=image_keys,
             stack_horizon=stack_horizon,
             chunk_horizon=chunk_horizon,
@@ -635,7 +685,7 @@ def main(cfg: DictConfig) -> None:
                 chunk_horizon=chunk_horizon,
                 control_indices=control_indices,
                 residual_limits=residual_limits,
-                residual_xi=offline_residual_xi,
+                residual_alpha=offline_residual_alpha,
                 openpi_client=openpi_client,
                 image_keys=image_keys,
                 stack_horizon=stack_horizon,
@@ -671,9 +721,78 @@ def main(cfg: DictConfig) -> None:
         )
 
     warmup_cfg = cfg.training.get("warmup", None)
-    warmup_episodes_cfg = (
+    configured_warmup_episodes = (
         int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
     )
+    online_prefill_cfg = cfg.training.get("online_prefill", None)
+    online_prefill_enabled = (
+        bool(online_prefill_cfg.get("enabled", False))
+        if online_prefill_cfg is not None
+        else False
+    )
+    online_prefill_loaded_episodes = 0
+    if online_prefill_enabled and configured_warmup_episodes > 0:
+        online_prefill_dataset_paths = online_prefill_cfg.get("dataset_paths", None)
+        if not online_prefill_dataset_paths:
+            raise ValueError(
+                "training.online_prefill.enabled=true requires "
+                "training.online_prefill.dataset_paths to be set when "
+                "training.warmup.episodes > 0"
+            )
+        online_prefill_stats = _load_online_prefill_buffer(
+            cfg,
+            replay_buffer=replay_buffer,
+            sample_obs_template=sample_obs,
+            action_dim=env_action_dim,
+            chunk_horizon=chunk_horizon,
+            image_keys=image_keys,
+            stack_horizon=stack_horizon,
+            chunk_step_enabled=chunk_step_enabled,
+            logger=logger,
+            normalizer=normalizer,
+            profiler=profiler,
+            max_episodes=configured_warmup_episodes,
+        )
+        online_prefill_loaded_episodes = int(
+            online_prefill_stats.get("episodes_loaded", 0)
+        )
+        if (
+            online_prefill_loaded_episodes <= 0
+            or int(online_prefill_stats.get("inserted", 0)) <= 0
+        ):
+            raise RuntimeError(
+                "training.online_prefill.enabled=true but no online prefill "
+                "episodes were loaded into the replay buffer"
+            )
+        logger.info(
+            "online prefill: episodes_loaded=%s/%s files_loaded=%s/%s inserted=%s "
+            "success_episodes=%s",
+            online_prefill_loaded_episodes,
+            configured_warmup_episodes,
+            online_prefill_stats.get("files_loaded", 0),
+            online_prefill_stats.get("files_total", 0),
+            online_prefill_stats.get("inserted", 0),
+            online_prefill_stats.get("success_episodes", 0),
+        )
+    elif online_prefill_enabled:
+        logger.info(
+            "training.online_prefill.enabled=true but training.warmup.episodes=%s; "
+            "skipping online prefill load",
+            configured_warmup_episodes,
+        )
+
+    warmup_episodes_cfg = max(
+        0,
+        int(configured_warmup_episodes) - int(online_prefill_loaded_episodes),
+    )
+    if online_prefill_loaded_episodes > 0 and warmup_episodes_cfg > 0:
+        logger.info(
+            "online prefill covered %s/%s warmup episodes; runtime warmup will "
+            "collect the remaining %s episodes",
+            online_prefill_loaded_episodes,
+            configured_warmup_episodes,
+            warmup_episodes_cfg,
+        )
     need_warmup_first = warmup_episodes_cfg > 0
 
     if not need_warmup_first and async_enabled:
@@ -740,15 +859,21 @@ def main(cfg: DictConfig) -> None:
     train_env_step = 0
     decision_step = 0
     train_episode_id = 0
-    warmup_episode_id = 0
-    init_episode_idx = 0
+    warmup_episode_id = int(online_prefill_loaded_episodes)
+    init_episode_idx = int(online_prefill_loaded_episodes)
     eval_trigger_count = 0
     train_total_success = 0
     train_recent_successes: deque[int] = deque(maxlen=20)
-    warmup_total_success = 0
-    warmup_recent_successes: deque[int] = deque(maxlen=20)
+    warmup_total_success = int(online_prefill_stats.get("success_episodes", 0))
+    warmup_recent_successes: deque[int] = deque(
+        [
+            int(v)
+            for v in online_prefill_stats.get("recent_episode_successes", [])
+        ],
+        maxlen=20,
+    )
     skipped_seeds = 0
-    seed_cursor = int(cfg.task.seed_base)
+    seed_cursor = int(cfg.task.seed_base) + int(online_prefill_loaded_episodes)
     stopped_by_env_budget = False
     last_update_info: Dict[str, Any] = {}
     saved_checkpoint_steps: set[int] = set()
@@ -838,10 +963,18 @@ def main(cfg: DictConfig) -> None:
 
     try:
         if need_warmup_first:
-            logger.info(
-                "Warmup phase: collecting %s base-only episodes, no actor/critic updates",
-                warmup_episodes_cfg,
-            )
+            if online_prefill_loaded_episodes > 0:
+                logger.info(
+                    "Warmup phase: collecting remaining %s/%s base-only episodes "
+                    "after loading online prefill, no actor/critic updates",
+                    warmup_episodes_cfg,
+                    configured_warmup_episodes,
+                )
+            else:
+                logger.info(
+                    "Warmup phase: collecting %s base-only episodes, no actor/critic updates",
+                    warmup_episodes_cfg,
+                )
             warmup_progress = _new_progress(
                 desc="warmup_episode",
                 total=int(warmup_episodes_cfg),
@@ -898,7 +1031,7 @@ def main(cfg: DictConfig) -> None:
                         cached_infer_info = None
 
                     if chunk_step_enabled:
-                        xi_step = 0.0
+                        alpha_step = 0.0
                         execute_horizon = int(
                             min(chunk_horizon, max_episode_steps - episode_steps)
                         )
@@ -975,9 +1108,9 @@ def main(cfg: DictConfig) -> None:
                                         (env_action_dim,), dtype=np.float32
                                     ).tolist(),
                                     "a_final": executed_base_chunk[chunk_step].tolist(),
-                                    "xi": 0.0,
-                                    "xi_obs": float(xi_step),
-                                    "xi_exec": 0.0,
+                                    "alpha": 0.0,
+                                    "alpha_obs": float(alpha_step),
+                                    "alpha_exec": 0.0,
                                     "reward": float(reward),
                                     "done": bool(done),
                                     "success": bool(episode_success),
@@ -987,7 +1120,7 @@ def main(cfg: DictConfig) -> None:
                                 current_step_obs_raw,
                                 base_action=executed_base_chunk[chunk_step],
                                 final_action=executed_base_chunk[chunk_step],
-                                xi_obs=float(xi_step),
+                                alpha_obs=float(alpha_step),
                                 episode_id=current_init_episode_idx,
                                 episode_step=current_episode_step,
                                 done=bool(done),
@@ -1028,7 +1161,7 @@ def main(cfg: DictConfig) -> None:
                         if episode_steps >= max_episode_steps:
                             episode_done = True
                             break
-                        xi_step = 0.0
+                        alpha_step = 0.0
                         obs_input = _build_residual_step_obs_profiled(
                             profiler,
                             next_obs_raw,
@@ -1037,7 +1170,7 @@ def main(cfg: DictConfig) -> None:
                             stack_horizon=stack_horizon,
                             normalizer=normalizer,
                             obs_cache=obs_cache,
-                            xi=float(xi_step),
+                            alpha=float(alpha_step),
                         )
                         residual_step_action = np.zeros(
                             (step_action_dim,), dtype=np.float32
@@ -1054,7 +1187,7 @@ def main(cfg: DictConfig) -> None:
                         episode_success = bool(info["success"])
                         timeout = bool(episode_steps >= max_episode_steps)
                         done = bool(env_done or timeout)
-                        next_xi_step = 0.0
+                        next_alpha_step = 0.0
                         next_chunk_future = None
                         if (
                             (not done)
@@ -1078,7 +1211,7 @@ def main(cfg: DictConfig) -> None:
                                 stack_horizon=stack_horizon,
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
-                                xi=float(next_xi_step),
+                                alpha=float(next_alpha_step),
                             )
                             mask = 1.0
                         else:
@@ -1109,7 +1242,7 @@ def main(cfg: DictConfig) -> None:
                                 stack_horizon=stack_horizon,
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
-                                xi=float(next_xi_step),
+                                alpha=float(next_alpha_step),
                             )
                             cached_base_chunk = next_base_chunk
                             cached_infer_info = next_infer_info
@@ -1168,9 +1301,9 @@ def main(cfg: DictConfig) -> None:
                                     base_chunk[chunk_step], dtype=np.float32
                                 ).tolist(),
                                 "a_final": final_action.tolist(),
-                                "xi": 0.0,
-                                "xi_obs": float(xi_step),
-                                "xi_exec": 0.0,
+                                "alpha": 0.0,
+                                "alpha_obs": float(alpha_step),
+                                "alpha_exec": 0.0,
                                 "reward": float(reward),
                                 "done": bool(done),
                                 "success": bool(episode_success),
@@ -1246,7 +1379,7 @@ def main(cfg: DictConfig) -> None:
                 logger.info(
                     "warmup episode %s/%s success=%s steps=%s return=%.2f",
                     current_warmup_episode_id,
-                    warmup_episodes_cfg,
+                    configured_warmup_episodes,
                     episode_success,
                     episode_steps,
                     episode_return,
@@ -1553,9 +1686,9 @@ def main(cfg: DictConfig) -> None:
                                 if chunk_step_scheduler_clock == "env_step"
                                 else int(decision_step)
                             )
-                            xi_step = _scheduled_xi(
+                            alpha_step = _scheduled_alpha(
                                 cfg,
-                                base_xi=residual_xi,
+                                base_alpha=residual_alpha,
                                 schedule_step=schedule_step,
                             )
                             obs_input = _build_residual_step_obs_profiled(
@@ -1567,10 +1700,10 @@ def main(cfg: DictConfig) -> None:
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 base_action_chunk=base_chunk,
-                                xi=float(xi_step),
+                                alpha=float(alpha_step),
                             )
 
-                            if xi_step <= 0.0:
+                            if alpha_step <= 0.0:
                                 residual_chunk = np.zeros(
                                     (chunk_horizon, step_action_dim), dtype=np.float32
                                 )
@@ -1653,7 +1786,7 @@ def main(cfg: DictConfig) -> None:
                                 residual_chunk=executed_residual_chunk,
                                 indices=control_indices,
                                 limits=residual_limits,
-                                xi=xi_step,
+                                alpha=alpha_step,
                                 clip_gripper=bool(cfg.residual.clip_gripper),
                             )
 
@@ -1759,7 +1892,7 @@ def main(cfg: DictConfig) -> None:
                                         ].tolist(),
                                         "a_res": delta_chunk[chunk_step].tolist(),
                                         "a_final": final_chunk[chunk_step].tolist(),
-                                        "xi": float(xi_step),
+                                        "alpha": float(alpha_step),
                                         "reward": float(reward),
                                         "done": bool(done),
                                         "success": bool(episode_success),
@@ -1769,7 +1902,7 @@ def main(cfg: DictConfig) -> None:
                                     current_step_obs_raw,
                                     base_action=executed_base_chunk[chunk_step],
                                     final_action=final_chunk[chunk_step],
-                                    xi_obs=float(xi_step),
+                                    alpha_obs=float(alpha_step),
                                     episode_id=current_init_episode_idx,
                                     episode_step=current_episode_step,
                                     done=bool(done),
@@ -1780,7 +1913,7 @@ def main(cfg: DictConfig) -> None:
                                 _append_tb_step_window(
                                     step_metric_window,
                                     reward=float(reward),
-                                    xi=float(xi_step),
+                                    alpha=float(alpha_step),
                                     residual_action=executed_residual_chunk[chunk_step],
                                     delta_action=delta_chunk[chunk_step],
                                     base_action=executed_base_chunk[chunk_step],
@@ -2049,9 +2182,9 @@ def main(cfg: DictConfig) -> None:
                                     break
 
                                 train_env_step_before_step = int(train_env_step)
-                                xi_step = _scheduled_xi(
+                                alpha_step = _scheduled_alpha(
                                     cfg,
-                                    base_xi=residual_xi,
+                                    base_alpha=residual_alpha,
                                     schedule_step=train_env_step_before_step,
                                 )
                                 obs_input = _build_residual_step_obs_profiled(
@@ -2062,10 +2195,10 @@ def main(cfg: DictConfig) -> None:
                                     stack_horizon=stack_horizon,
                                     normalizer=normalizer,
                                     obs_cache=obs_cache,
-                                    xi=float(xi_step),
+                                    alpha=float(alpha_step),
                                 )
 
-                                if xi_step <= 0.0:
+                                if alpha_step <= 0.0:
                                     residual_step_action = np.zeros(
                                         (step_action_dim,), dtype=np.float32
                                     )
@@ -2103,7 +2236,7 @@ def main(cfg: DictConfig) -> None:
                                     residual_action=residual_step_action,
                                     indices=control_indices,
                                     limits=residual_limits,
-                                    xi=xi_step,
+                                    alpha=alpha_step,
                                     clip_gripper=bool(cfg.residual.clip_gripper),
                                 )
 
@@ -2121,9 +2254,9 @@ def main(cfg: DictConfig) -> None:
                                     train_env_step += 1
                                     _update_train_progress()
                                 train_env_step_after_step = int(train_env_step)
-                                next_xi_step = _scheduled_xi(
+                                next_alpha_step = _scheduled_alpha(
                                     cfg,
-                                    base_xi=residual_xi,
+                                    base_alpha=residual_alpha,
                                     schedule_step=train_env_step_after_step,
                                 )
                                 episode_return += float(reward)
@@ -2189,7 +2322,7 @@ def main(cfg: DictConfig) -> None:
                                         "a_res_policy": residual_step_action.tolist(),
                                         "a_res": delta_action.tolist(),
                                         "a_final": final_action.tolist(),
-                                        "xi": float(xi_step),
+                                        "alpha": float(alpha_step),
                                         "reward": float(reward),
                                         "done": bool(done),
                                         "success": bool(episode_success),
@@ -2199,7 +2332,7 @@ def main(cfg: DictConfig) -> None:
                                 _append_tb_step_window(
                                     step_metric_window,
                                     reward=float(reward),
-                                    xi=float(xi_step),
+                                    alpha=float(alpha_step),
                                     residual_action=residual_step_action,
                                     delta_action=delta_action,
                                     base_action=base_chunk[chunk_step],
@@ -2230,7 +2363,7 @@ def main(cfg: DictConfig) -> None:
                                         stack_horizon=stack_horizon,
                                         normalizer=normalizer,
                                         obs_cache=obs_cache,
-                                        xi=float(next_xi_step),
+                                        alpha=float(next_alpha_step),
                                     )
                                     mask = 1.0
                                 else:
@@ -2261,7 +2394,7 @@ def main(cfg: DictConfig) -> None:
                                         stack_horizon=stack_horizon,
                                         normalizer=normalizer,
                                         obs_cache=obs_cache,
-                                        xi=float(next_xi_step),
+                                        alpha=float(next_alpha_step),
                                     )
                                     cached_base_chunk = next_base_chunk
                                     cached_infer_info = next_infer_info
@@ -2739,7 +2872,18 @@ def main(cfg: DictConfig) -> None:
             "train_env_step": int(train_env_step),
             "decision_step": int(decision_step),
             "train_episode_id": int(train_episode_id),
+            "configured_warmup_episodes": int(configured_warmup_episodes),
             "warmup_episode_id": int(warmup_episode_id),
+            "warmup_source": (
+                "online_prefill"
+                if int(online_prefill_loaded_episodes) > 0
+                and int(warmup_episode_id) == int(online_prefill_loaded_episodes)
+                else "online_prefill+runtime"
+                if int(online_prefill_loaded_episodes) > 0
+                else "runtime"
+                if int(warmup_episode_id) > 0
+                else "disabled"
+            ),
             "train_total_success": int(train_total_success),
             "train_success_rate": float(
                 train_total_success / max(1, int(train_episode_id))
@@ -2772,6 +2916,7 @@ def main(cfg: DictConfig) -> None:
             ),
             "offline_stats": offline_stats,
             "bootstrap_stats": bootstrap_stats,
+            "online_prefill_stats": _to_jsonable(online_prefill_stats),
             "critic_pretrain": _to_jsonable(warmstart_info),
             "checkpoint_dir": str(checkpoint_dir),
             "checkpoint_every_steps": int(checkpoint_every_steps),

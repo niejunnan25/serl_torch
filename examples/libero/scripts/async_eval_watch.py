@@ -15,6 +15,15 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from omegaconf import OmegaConf
 
+REPO_PARENT = Path(__file__).resolve().parents[4]
+if str(REPO_PARENT) not in sys.path:
+    sys.path.insert(0, str(REPO_PARENT))
+
+from serl_torch.examples.libero.utils.alpha_utils import (
+    require_residual_alpha,
+    validate_alpha,
+)
+
 
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -139,7 +148,7 @@ def _load_summary(summary_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _resolve_eval_residual_xi(
+def _resolve_eval_residual_alpha(
     *,
     train_cfg: Dict[str, Any],
     async_eval_cfg: Dict[str, Any],
@@ -147,55 +156,69 @@ def _resolve_eval_residual_xi(
     logger: logging.Logger,
 ) -> tuple[float, str, Optional[int]]:
     residual_cfg = train_cfg.get("residual", {}) if isinstance(train_cfg, dict) else {}
-    base_xi = float(residual_cfg.get("xi", 1.0))
-    xi_mode_raw = (
-        str(async_eval_cfg.get("xi_mode", "checkpoint_schedule")).strip().lower()
+    base_alpha = require_residual_alpha(residual_cfg, path="residual.alpha")
+    alpha_mode_raw = (
+        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule"))
+        .strip()
+        .lower()
     )
     valid_modes = {"checkpoint_schedule", "base", "fixed"}
-    if xi_mode_raw not in valid_modes:
-        logger.warning(
-            "Unknown training.async_eval.xi_mode=%s; fallback to checkpoint_schedule",
-            xi_mode_raw,
+    if alpha_mode_raw not in valid_modes:
+        raise ValueError(
+            "training.async_eval.alpha_mode must be one of "
+            f"{sorted(valid_modes)}, got {alpha_mode_raw!r}"
         )
-        xi_mode_raw = "checkpoint_schedule"
 
-    if xi_mode_raw == "base":
-        return float(base_xi), "base", None
+    if alpha_mode_raw == "base":
+        return float(base_alpha), "base", None
 
-    if xi_mode_raw == "fixed":
-        fixed_xi = async_eval_cfg.get("fixed_xi", None)
-        if fixed_xi is None:
-            logger.warning(
-                "training.async_eval.xi_mode=fixed but fixed_xi is null; fallback to base residual.xi=%.6f",
-                base_xi,
+    if alpha_mode_raw == "fixed":
+        fixed_alpha = async_eval_cfg.get("fixed_alpha", None)
+        if fixed_alpha is None:
+            raise ValueError(
+                "training.async_eval.alpha_mode=fixed requires "
+                "training.async_eval.fixed_alpha to be set"
             )
-            return float(base_xi), "base_fallback", None
-        return float(fixed_xi), "fixed", None
+        return (
+            validate_alpha(
+                fixed_alpha,
+                name="training.async_eval.fixed_alpha",
+                allow_zero=True,
+            ),
+            "fixed",
+            None,
+        )
 
     training_cfg = train_cfg.get("training", {}) if isinstance(train_cfg, dict) else {}
-    xi_scheduler_cfg = (
-        training_cfg.get("xi_scheduler", {}) if isinstance(training_cfg, dict) else {}
+    alpha_scheduler_cfg = (
+        training_cfg.get("alpha_scheduler", {})
+        if isinstance(training_cfg, dict)
+        else {}
     )
-    if (not isinstance(xi_scheduler_cfg, dict)) or (
-        not _as_bool(xi_scheduler_cfg.get("enabled", False))
+    if (not isinstance(alpha_scheduler_cfg, dict)) or (
+        not _as_bool(alpha_scheduler_cfg.get("enabled", False))
     ):
-        return float(base_xi), "checkpoint_schedule_disabled", int(checkpoint_step)
+        return float(base_alpha), "checkpoint_schedule_disabled", int(checkpoint_step)
 
-    min_xi = float(xi_scheduler_cfg.get("min_xi", base_xi))
-    warmup_steps = int(xi_scheduler_cfg.get("warmup_steps", 0))
-    anneal_steps = int(xi_scheduler_cfg.get("anneal_steps", 1))
+    min_alpha = validate_alpha(
+        alpha_scheduler_cfg.get("min_alpha", base_alpha),
+        name="training.alpha_scheduler.min_alpha",
+        allow_zero=True,
+    )
+    warmup_steps = int(alpha_scheduler_cfg.get("warmup_steps", 0))
+    anneal_steps = int(alpha_scheduler_cfg.get("anneal_steps", 1))
     # Async eval receives checkpoint snapshots keyed by train env-step only.
-    # Therefore xi reconstruction in checkpoint_schedule mode is always env-step based.
+    # Therefore alpha reconstruction in checkpoint_schedule mode is always env-step based.
     schedule_step = int(checkpoint_step)
 
     if schedule_step < warmup_steps:
-        return float(min_xi), "checkpoint_schedule", schedule_step
+        return float(min_alpha), "checkpoint_schedule", schedule_step
     if anneal_steps <= 0:
-        return float(base_xi), "checkpoint_schedule", schedule_step
+        return float(base_alpha), "checkpoint_schedule", schedule_step
 
     progress = min(1.0, max(0.0, (schedule_step - warmup_steps) / float(anneal_steps)))
-    xi = float(min_xi + (float(base_xi) - min_xi) * progress)
-    return xi, "checkpoint_schedule", schedule_step
+    alpha = float(min_alpha + (float(base_alpha) - min_alpha) * progress)
+    return alpha, "checkpoint_schedule", schedule_step
 
 
 def _build_eval_command(
@@ -207,7 +230,7 @@ def _build_eval_command(
     checkpoint_path: Path,
     eval_seed: int,
     eval_cfg: Dict[str, Any],
-    eval_residual_xi: float,
+    eval_residual_alpha: float,
 ) -> List[str]:
     overrides: List[str] = []
 
@@ -233,7 +256,7 @@ def _build_eval_command(
             f"env.remote.timeout_sec={_to_override_value(eval_cfg['env_timeout_sec'])}",
             f"openpi.host={_to_override_value(eval_cfg['openpi_host'])}",
             f"openpi.port={_to_override_value(eval_cfg['openpi_port'])}",
-            f"residual.xi={_to_override_value(eval_residual_xi)}",
+            f"residual.alpha={_to_override_value(eval_residual_alpha)}",
             f"task.seed_base={_to_override_value(eval_seed)}",
             f"eval.episodes={_to_override_value(eval_cfg['episodes'])}",
             f"eval.expert_check={_to_override_value(eval_cfg['expert_check'])}",
@@ -407,11 +430,34 @@ def main() -> None:
     probing_alpha = async_eval_cfg.get("probing_alpha", None)
     probing_min_steps = int(async_eval_cfg.get("probing_min_steps", 0))
     probing_max_steps = int(async_eval_cfg.get("probing_max_steps", 0))
-    xi_mode = str(async_eval_cfg.get("xi_mode", "checkpoint_schedule")).strip().lower()
-    fixed_xi_cfg = async_eval_cfg.get("fixed_xi", None)
-    fixed_xi = None if fixed_xi_cfg is None else float(fixed_xi_cfg)
+    alpha_mode = (
+        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule"))
+        .strip()
+        .lower()
+    )
+    valid_modes = {"checkpoint_schedule", "base", "fixed"}
+    if alpha_mode not in valid_modes:
+        raise ValueError(
+            "training.async_eval.alpha_mode must be one of "
+            f"{sorted(valid_modes)}, got {alpha_mode!r}"
+        )
+    fixed_alpha_cfg = async_eval_cfg.get("fixed_alpha", None)
+    if alpha_mode == "fixed" and fixed_alpha_cfg is None:
+        raise ValueError(
+            "training.async_eval.alpha_mode=fixed requires "
+            "training.async_eval.fixed_alpha to be set"
+        )
+    fixed_alpha = (
+        None
+        if fixed_alpha_cfg is None
+        else validate_alpha(
+            fixed_alpha_cfg,
+            name="training.async_eval.fixed_alpha",
+            allow_zero=True,
+        )
+    )
 
-    if xi_mode == "checkpoint_schedule":
+    if alpha_mode == "checkpoint_schedule":
         chunk_step_cfg = (
             train_cfg.get("chunk_step", {}) if isinstance(train_cfg, dict) else {}
         )
@@ -421,7 +467,7 @@ def main() -> None:
         if scheduler_clock != "env_step":
             # Hard guard: checkpoint-schedule async eval only supports env-step clock.
             raise ValueError(
-                "training.async_eval.xi_mode=checkpoint_schedule requires "
+                "training.async_eval.alpha_mode=checkpoint_schedule requires "
                 "training.chunk_step.scheduler_clock=env_step "
                 f"(got {scheduler_clock})"
             )
@@ -458,20 +504,20 @@ def main() -> None:
         "env_timeout_sec": env_timeout_sec,
         "openpi_host": openpi_host,
         "openpi_port": openpi_port,
-        "xi_mode": xi_mode,
-        "fixed_xi": fixed_xi,
+        "alpha_mode": alpha_mode,
+        "fixed_alpha": fixed_alpha,
     }
 
     logger.info(
-        "watch start: checkpoints=%s queue=%s every_episodes=%s eval_episodes=%s seed=%s xi_mode=%s fixed_xi=%s "
+        "watch start: checkpoints=%s queue=%s every_episodes=%s eval_episodes=%s seed=%s alpha_mode=%s fixed_alpha=%s "
         "queue_policy=%s poll_sec=%.2f stable_sec=%.2f",
         checkpoints_dir,
         queue_file,
         every_episodes,
         episodes,
         seed,
-        xi_mode,
-        fixed_xi,
+        alpha_mode,
+        fixed_alpha,
         queue_policy,
         poll_sec,
         file_stable_sec,
@@ -504,9 +550,9 @@ def main() -> None:
     running_start_time = 0.0
     running_eval_dir: Optional[Path] = None
     running_log_fp = None
-    running_eval_xi: Optional[float] = None
-    running_eval_xi_mode: Optional[str] = None
-    running_eval_xi_schedule_step: Optional[int] = None
+    running_eval_alpha: Optional[float] = None
+    running_eval_alpha_mode: Optional[str] = None
+    running_eval_alpha_schedule_step: Optional[int] = None
 
     while not stop_requested["value"]:
         if running_proc is not None:
@@ -546,13 +592,13 @@ def main() -> None:
                 if running_checkpoint_path is not None
                 else None,
                 "seed": int(running_seed) if running_seed is not None else None,
-                "eval_xi": float(running_eval_xi)
-                if running_eval_xi is not None
+                "eval_alpha": float(running_eval_alpha)
+                if running_eval_alpha is not None
                 else None,
-                "eval_xi_mode": running_eval_xi_mode,
-                "eval_xi_schedule_step": (
-                    int(running_eval_xi_schedule_step)
-                    if running_eval_xi_schedule_step is not None
+                "eval_alpha_mode": running_eval_alpha_mode,
+                "eval_alpha_schedule_step": (
+                    int(running_eval_alpha_schedule_step)
+                    if running_eval_alpha_schedule_step is not None
                     else None
                 ),
                 "eval_run_dir": str(running_eval_dir)
@@ -584,9 +630,9 @@ def main() -> None:
             running_checkpoint_path = None
             running_seed = None
             running_eval_dir = None
-            running_eval_xi = None
-            running_eval_xi_mode = None
-            running_eval_xi_schedule_step = None
+            running_eval_alpha = None
+            running_eval_alpha_mode = None
+            running_eval_alpha_schedule_step = None
             continue
 
         queue_requests: List[Dict[str, Any]] = []
@@ -700,7 +746,7 @@ def main() -> None:
             ).resolve()
             eval_run_dir.mkdir(parents=True, exist_ok=True)
             eval_log_path = eval_run_dir / "eval_runner.log"
-            eval_xi, eval_xi_mode, eval_xi_schedule_step = _resolve_eval_residual_xi(
+            eval_alpha, eval_alpha_mode, eval_alpha_schedule_step = _resolve_eval_residual_alpha(
                 train_cfg=train_cfg,
                 async_eval_cfg=async_eval_cfg,
                 checkpoint_step=int(checkpoint_step),
@@ -715,7 +761,7 @@ def main() -> None:
                 checkpoint_path=checkpoint_path,
                 eval_seed=eval_seed,
                 eval_cfg=eval_cfg,
-                eval_residual_xi=float(eval_xi),
+                eval_residual_alpha=float(eval_alpha),
             )
 
             running_log_fp = open(eval_log_path, "a", encoding="utf-8")
@@ -736,25 +782,25 @@ def main() -> None:
             running_seed = int(eval_seed)
             running_eval_dir = eval_run_dir
             running_start_time = time.time()
-            running_eval_xi = float(eval_xi)
-            running_eval_xi_mode = str(eval_xi_mode)
-            running_eval_xi_schedule_step = (
-                int(eval_xi_schedule_step)
-                if eval_xi_schedule_step is not None
+            running_eval_alpha = float(eval_alpha)
+            running_eval_alpha_mode = str(eval_alpha_mode)
+            running_eval_alpha_schedule_step = (
+                int(eval_alpha_schedule_step)
+                if eval_alpha_schedule_step is not None
                 else None
             )
 
             logger.info(
                 "async eval started: eval_index=%s train_episode=%s train_env_step=%s "
-                "checkpoint_step=%s seed=%s xi=%.6f xi_mode=%s schedule_step=%s pid=%s run_dir=%s",
+                "checkpoint_step=%s seed=%s alpha=%.6f alpha_mode=%s schedule_step=%s pid=%s run_dir=%s",
                 eval_index,
                 train_episode_id,
                 train_env_step,
                 checkpoint_step,
                 eval_seed,
-                float(eval_xi),
-                eval_xi_mode,
-                eval_xi_schedule_step,
+                float(eval_alpha),
+                eval_alpha_mode,
+                eval_alpha_schedule_step,
                 running_proc.pid,
                 eval_run_dir,
             )
@@ -800,13 +846,13 @@ def main() -> None:
                 if running_checkpoint_path is not None
                 else None,
                 "seed": int(running_seed) if running_seed is not None else None,
-                "eval_xi": float(running_eval_xi)
-                if running_eval_xi is not None
+                "eval_alpha": float(running_eval_alpha)
+                if running_eval_alpha is not None
                 else None,
-                "eval_xi_mode": running_eval_xi_mode,
-                "eval_xi_schedule_step": (
-                    int(running_eval_xi_schedule_step)
-                    if running_eval_xi_schedule_step is not None
+                "eval_alpha_mode": running_eval_alpha_mode,
+                "eval_alpha_schedule_step": (
+                    int(running_eval_alpha_schedule_step)
+                    if running_eval_alpha_schedule_step is not None
                     else None
                 ),
                 "eval_run_dir": str(running_eval_dir)
