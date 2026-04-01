@@ -1,0 +1,670 @@
+from __future__ import annotations
+
+"""Standalone agentlace learner for LIBERO residual SAC."""
+
+import logging
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
+
+    sys.modules["gym"] = gym
+import hydra
+import numpy as np
+import torch
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import DictConfig, OmegaConf
+from torch.utils.tensorboard import SummaryWriter
+
+REPO_PARENT = Path(__file__).resolve().parents[4]
+if str(REPO_PARENT) not in sys.path:
+    sys.path.insert(0, str(REPO_PARENT))
+
+from serl_torch.examples.libero.data import StateActionNormalizer, load_normalizer
+from serl_torch.examples.libero.data.offline_bootstrap import (
+    _bootstrap_offline_with_base_success,
+)
+from serl_torch.examples.libero.data.offline_residual import (
+    _load_offline_residual_buffer,
+)
+from serl_torch.examples.libero.env_wrappers import (
+    resolve_openpi_root,
+    setup_openpi_client_pythonpath,
+)
+from serl_torch.examples.libero.env_wrappers.factory import _create_env
+from serl_torch.examples.libero.policy import (
+    OpenPIChunkClient,
+    build_residual_limits,
+)
+from serl_torch.examples.libero.utils import (
+    JsonlLogger,
+    ensure_serl_launcher_importable,
+)
+from serl_torch.examples.libero.utils.agentlace_io import (
+    resolve_agentlace_bootstrap_path,
+    wait_for_agentlace_bootstrap,
+)
+from serl_torch.examples.libero.utils.async_learning import (
+    _apply_agent_snapshot_payload,
+    run_agentlace_learner_service,
+)
+from serl_torch.examples.libero.utils.checkpoint import (
+    _snapshot_agent_checkpoint_payload,
+)
+from serl_torch.examples.libero.utils.config_utils import (
+    build_drq_agent,
+    build_residual_action_transform,
+    resolve_control_indices_from_cfg,
+    resolve_image_keys,
+    resolve_residual_observation_state_mode,
+    set_global_seeds,
+)
+from serl_torch.examples.libero.utils.obs_utils import _obs_space_from_sample
+from serl_torch.examples.libero.utils.pretrain import _pretrain_critic_with_calql
+from serl_torch.examples.libero.utils.schedules import _scheduled_alpha
+from serl_torch.examples.libero.utils.serialization import _to_jsonable
+from serl_torch.examples.libero.utils.step_chunk_replay import ChunkReplayBuffer
+
+ensure_serl_launcher_importable()
+
+from serl_launcher.data.replay_buffer import ReplayBuffer
+
+
+class _LearnerStatsLogger:
+    """Persist actor-originated stats into the learner's normal logging stack."""
+
+    def __init__(
+        self,
+        *,
+        logger: logging.Logger,
+        step_logger: JsonlLogger,
+        episode_logger: JsonlLogger,
+        tb_writer: SummaryWriter,
+        replay_buffer: Any,
+        offline_buffer: Optional[Any],
+    ) -> None:
+        self.logger = logger
+        self.step_logger = step_logger
+        self.episode_logger = episode_logger
+        self.tb_writer = tb_writer
+        self.replay_buffer = replay_buffer
+        self.offline_buffer = offline_buffer
+
+    def _log_train_episode(self, payload: Dict[str, Any], *, update_steps: int) -> None:
+        train_episode_id = int(payload.get("train_episode_id", 0))
+        train_env_step = int(payload.get("train_env_step", 0))
+        decision_step = payload.get("decision_step", None)
+        record = {
+            "phase": str(payload.get("phase", "train")),
+            "warmup_episode_id": None,
+            "train_episode_id": train_episode_id,
+            "phase_episode_idx": train_episode_id,
+            "seed": None,
+            "init_state_idx": None,
+            "success": bool(payload.get("success", False)),
+            "episode_steps": int(payload.get("episode_steps", 0)),
+            "episode_return": float(payload.get("episode_return", 0.0)),
+            "train_env_step": train_env_step,
+            "decision_step": (
+                None if decision_step is None else int(decision_step)
+            ),
+            "running_success_rate": payload.get("running_success_rate", None),
+            "recent_success_rate": payload.get("recent_success_rate", None),
+        }
+        self.episode_logger.write(record)
+        self.tb_writer.add_scalar(
+            "train_episode/success",
+            int(record["success"]),
+            train_episode_id,
+        )
+        self.tb_writer.add_scalar(
+            "train_episode/return",
+            float(record["episode_return"]),
+            train_episode_id,
+        )
+        self.tb_writer.add_scalar(
+            "train_episode/length",
+            int(record["episode_steps"]),
+            train_episode_id,
+        )
+        if record["running_success_rate"] is not None:
+            self.tb_writer.add_scalar(
+                "train_episode/running_success_rate",
+                float(record["running_success_rate"]),
+                train_episode_id,
+            )
+        if record["recent_success_rate"] is not None:
+            self.tb_writer.add_scalar(
+                "train_episode/recent_success_rate_20",
+                float(record["recent_success_rate"]),
+                train_episode_id,
+            )
+        self.tb_writer.add_scalar(
+            "system/online_buffer_size",
+            int(len(self.replay_buffer)),
+            train_env_step,
+        )
+        if self.offline_buffer is not None:
+            self.tb_writer.add_scalar(
+                "system/offline_buffer_size",
+                int(len(self.offline_buffer)),
+                train_env_step,
+            )
+        if decision_step is not None:
+            self.tb_writer.add_scalar(
+                "system/decision_step",
+                int(decision_step),
+                train_env_step,
+            )
+        self.tb_writer.add_scalar(
+            "system/learner_update_steps",
+            int(update_steps),
+            train_env_step,
+        )
+        self.logger.info(
+            "agentlace train_episode=%s success=%s steps=%s return=%.2f "
+            "train_env_step=%s learner_update_steps=%s",
+            train_episode_id,
+            bool(record["success"]),
+            int(record["episode_steps"]),
+            float(record["episode_return"]),
+            train_env_step,
+            int(update_steps),
+        )
+
+    def _log_timer_payload(self, payload: Dict[str, Any], *, update_steps: int) -> None:
+        self.step_logger.write(
+            {
+                "record_type": "agentlace_timer",
+                "learner_update_steps": int(update_steps),
+                "payload": _to_jsonable(payload),
+            }
+        )
+        for key, value in payload.items():
+            if isinstance(value, (int, float, np.number)):
+                self.tb_writer.add_scalar(
+                    f"agentlace_timer/{key}",
+                    float(value),
+                    int(update_steps),
+                )
+
+    def handle_payload(
+        self,
+        payload: Dict[str, Any],
+        update_steps: int,
+        last_update_info: Dict[str, Any],
+        replay_buffer: Any,
+        offline_buffer: Optional[Any],
+    ) -> None:
+        del last_update_info
+        self.replay_buffer = replay_buffer
+        self.offline_buffer = offline_buffer
+
+        handled = set()
+        train_episode = payload.get("train_episode", None)
+        if isinstance(train_episode, dict):
+            self._log_train_episode(train_episode, update_steps=int(update_steps))
+            handled.add("train_episode")
+
+        timer_payload = payload.get("timer", None)
+        if isinstance(timer_payload, dict):
+            self._log_timer_payload(timer_payload, update_steps=int(update_steps))
+            handled.add("timer")
+
+        remaining = {key: value for key, value in payload.items() if key not in handled}
+        if remaining:
+            self.step_logger.write(
+                {
+                    "record_type": "agentlace_stats",
+                    "learner_update_steps": int(update_steps),
+                    "payload": _to_jsonable(remaining),
+                }
+            )
+
+
+def _build_online_replay(
+    cfg: DictConfig,
+    *,
+    sample_obs: Dict[str, np.ndarray],
+    state_core_dim: int,
+    critic_action_dim: int,
+    env_action_dim: int,
+    chunk_horizon: int,
+    chunk_step_enabled: bool,
+    state_mode: str,
+) -> Any:
+    chunk_step_cfg = cfg.get("chunk_step", None)
+    chunk_step_sample_stride = (
+        int(chunk_step_cfg.get("sample_stride", 1)) if chunk_step_cfg is not None else 1
+    )
+    chunk_step_require_full_horizon = (
+        bool(chunk_step_cfg.get("require_full_horizon", False))
+        if chunk_step_cfg is not None
+        else False
+    )
+    chunk_step_pad_action = (
+        bool(chunk_step_cfg.get("pad_action_to_horizon", True))
+        if chunk_step_cfg is not None
+        else True
+    )
+    if chunk_step_enabled:
+        return ChunkReplayBuffer(
+            sample_observation_template=sample_obs,
+            state_core_dim=int(state_core_dim),
+            step_action_dim=int(env_action_dim),
+            chunk_horizon=int(chunk_horizon),
+            discount=float(cfg.sac.discount),
+            capacity=int(cfg.replay.capacity),
+            sample_stride=chunk_step_sample_stride,
+            require_full_horizon=chunk_step_require_full_horizon,
+            pad_action_to_horizon=chunk_step_pad_action,
+            state_mode=str(state_mode),
+        )
+
+    action_space = gym.spaces.Box(
+        low=-1.0,
+        high=1.0,
+        shape=(int(critic_action_dim),),
+        dtype=np.float32,
+    )
+    return ReplayBuffer(
+        observation_space=_obs_space_from_sample(sample_obs),
+        action_space=action_space,
+        capacity=int(cfg.replay.capacity),
+    )
+
+
+def _build_offline_replay(
+    cfg: DictConfig,
+    *,
+    sample_obs: Dict[str, np.ndarray],
+    state_core_dim: int,
+    critic_action_dim: int,
+    env_action_dim: int,
+    chunk_horizon: int,
+    chunk_step_enabled: bool,
+    state_mode: str,
+) -> Any:
+    chunk_step_cfg = cfg.get("chunk_step", None)
+    chunk_step_sample_stride = (
+        int(chunk_step_cfg.get("sample_stride", 1)) if chunk_step_cfg is not None else 1
+    )
+    chunk_step_require_full_horizon = (
+        bool(chunk_step_cfg.get("require_full_horizon", False))
+        if chunk_step_cfg is not None
+        else False
+    )
+    chunk_step_pad_action = (
+        bool(chunk_step_cfg.get("pad_action_to_horizon", True))
+        if chunk_step_cfg is not None
+        else True
+    )
+    if chunk_step_enabled:
+        return ChunkReplayBuffer(
+            sample_observation_template=sample_obs,
+            state_core_dim=int(state_core_dim),
+            step_action_dim=int(env_action_dim),
+            chunk_horizon=int(chunk_horizon),
+            discount=float(cfg.sac.discount),
+            capacity=int(cfg.offline.capacity),
+            sample_stride=chunk_step_sample_stride,
+            require_full_horizon=chunk_step_require_full_horizon,
+            pad_action_to_horizon=chunk_step_pad_action,
+            state_mode=str(state_mode),
+        )
+
+    action_space = gym.spaces.Box(
+        low=-1.0,
+        high=1.0,
+        shape=(int(critic_action_dim),),
+        dtype=np.float32,
+    )
+    return ReplayBuffer(
+        observation_space=_obs_space_from_sample(sample_obs),
+        action_space=action_space,
+        capacity=int(cfg.offline.capacity),
+    )
+
+
+@hydra.main(version_base=None, config_path="../conf", config_name="train_residual_sac")
+def main(cfg: DictConfig) -> None:
+    run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
+    )
+    logger = logging.getLogger("libero_agentlace_learner")
+    logger.info("Hydra run dir: %s", run_dir)
+    logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
+
+    set_global_seeds(int(cfg.seed))
+
+    async_cfg = cfg.training.get("async", None)
+    async_enabled = (
+        bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
+    )
+    async_backend = (
+        str(async_cfg.get("backend", "thread")).strip().lower()
+        if async_cfg is not None
+        else "thread"
+    )
+    if not async_enabled or async_backend != "agentlace":
+        raise ValueError(
+            "run_learner.py requires training.async.enabled=true and "
+            "training.async.backend=agentlace"
+        )
+
+    async_update_frequency = (
+        int(async_cfg.get("update_frequency", 1)) if async_cfg is not None else 1
+    )
+    async_idle_sleep_sec = (
+        float(async_cfg.get("idle_sleep_sec", 0.002))
+        if async_cfg is not None
+        else 0.002
+    )
+    async_learner_device = (
+        str(async_cfg.get("learner_device")).strip()
+        if async_cfg is not None and async_cfg.get("learner_device", None) is not None
+        else None
+    )
+    async_trainer_host = (
+        str(async_cfg.get("trainer_host", "127.0.0.1"))
+        if async_cfg is not None
+        else "127.0.0.1"
+    )
+    async_trainer_port = (
+        int(async_cfg.get("trainer_port", 5488)) if async_cfg is not None else 5488
+    )
+    async_broadcast_port = (
+        int(async_cfg.get("broadcast_port", 5489)) if async_cfg is not None else 5489
+    )
+    async_agentlace_cfg = (
+        async_cfg.get("agentlace", None) if async_cfg is not None else None
+    )
+    async_agentlace_bootstrap_file = (
+        str(async_agentlace_cfg.get("bootstrap_file", "agentlace_bootstrap.pkl"))
+        if async_agentlace_cfg is not None
+        else "agentlace_bootstrap.pkl"
+    )
+    async_agentlace_connect_timeout_sec = (
+        float(async_agentlace_cfg.get("connect_timeout_sec", 120.0))
+        if async_agentlace_cfg is not None
+        else 120.0
+    )
+
+    if not Path(async_agentlace_bootstrap_file).expanduser().is_absolute():
+        logger.warning(
+            "training.async.agentlace.bootstrap_file is relative (%s). "
+            "For a standalone learner, an absolute path is recommended.",
+            async_agentlace_bootstrap_file,
+        )
+    bootstrap_path = resolve_agentlace_bootstrap_path(
+        run_dir=run_dir,
+        bootstrap_file=async_agentlace_bootstrap_file,
+    )
+    logger.info("Waiting for actor bootstrap: %s", bootstrap_path)
+    bootstrap = wait_for_agentlace_bootstrap(
+        bootstrap_path,
+        timeout_sec=async_agentlace_connect_timeout_sec,
+    )
+    logger.info("Loaded bootstrap payload from %s", bootstrap_path)
+
+    sample_obs = dict(bootstrap["sample_obs"])
+    state_core_dim = int(bootstrap["state_core_dim"])
+    env_action_dim = int(bootstrap["env_action_dim"])
+    step_action_dim = int(bootstrap["step_action_dim"])
+    agent_action_dim = int(bootstrap["agent_action_dim"])
+    critic_action_dim = int(bootstrap["critic_action_dim"])
+    image_keys = tuple(bootstrap.get("image_keys", resolve_image_keys(cfg)))
+    chunk_step_enabled = bool(bootstrap.get("chunk_step_enabled", False))
+    chunk_horizon = int(bootstrap.get("chunk_horizon", int(cfg.residual.chunk_horizon)))
+    state_mode = str(
+        bootstrap.get(
+            "state_mode",
+            resolve_residual_observation_state_mode(cfg),
+        )
+    )
+    control_indices = resolve_control_indices_from_cfg(
+        cfg, full_action_dim=int(env_action_dim)
+    )
+    residual_limits = build_residual_limits(
+        control_indices,
+        full_action_dim=int(env_action_dim),
+        action_limits=cfg.residual.get("action_limits", None),
+    )
+    action_transform = bootstrap.get("action_transform", None)
+    if action_transform is None:
+        action_transform = build_residual_action_transform(
+            control_indices=control_indices,
+            residual_limits=residual_limits,
+            full_action_dim=int(env_action_dim),
+            chunk_horizon=int(chunk_horizon),
+            chunk_step_enabled=bool(chunk_step_enabled),
+            clip_gripper=bool(cfg.residual.get("clip_gripper", True)),
+        )
+
+    normalizer: StateActionNormalizer | None = None
+    norm_cfg = cfg.get("normalization", None)
+    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
+        task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
+        normalizer = load_normalizer(
+            task_key, stats_dir=norm_cfg.get("stats_dir", None)
+        )
+        if normalizer is not None:
+            logger.info("Loaded normalizer for task_key=%s", task_key)
+
+    replay_buffer = _build_online_replay(
+        cfg,
+        sample_obs=sample_obs,
+        state_core_dim=state_core_dim,
+        critic_action_dim=critic_action_dim,
+        env_action_dim=env_action_dim,
+        chunk_horizon=chunk_horizon,
+        chunk_step_enabled=chunk_step_enabled,
+        state_mode=state_mode,
+    )
+
+    learner_agent = build_drq_agent(
+        cfg,
+        sample_obs=sample_obs,
+        action_dim=int(agent_action_dim),
+        image_keys=tuple(image_keys),
+        critic_action_dim=int(critic_action_dim),
+        action_transform=action_transform,
+        device=async_learner_device,
+    )
+    bootstrap_initial_payload = bootstrap.get("initial_agent_payload", None)
+    if isinstance(bootstrap_initial_payload, dict):
+        _apply_agent_snapshot_payload(
+            learner_agent,
+            bootstrap_initial_payload,
+            load_optimizers=True,
+        )
+
+    offline_buffer = None
+    learner_env = None
+    offline_enabled = bool(cfg.offline.enabled)
+    if offline_enabled:
+        offline_buffer = _build_offline_replay(
+            cfg,
+            sample_obs=sample_obs,
+            state_core_dim=state_core_dim,
+            critic_action_dim=critic_action_dim,
+            env_action_dim=env_action_dim,
+            chunk_horizon=chunk_horizon,
+            chunk_step_enabled=chunk_step_enabled,
+            state_mode=state_mode,
+        )
+        bootstrap_base_cfg = cfg.offline.get("bootstrap_base", None)
+        offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
+        bootstrap_base_enabled = bool(
+            bootstrap_base_cfg is not None
+            and bool(bootstrap_base_cfg.get("enabled", False))
+        )
+        has_offline_dataset_paths = (
+            bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
+        )
+        if bootstrap_base_enabled or has_offline_dataset_paths:
+            openpi_root = resolve_openpi_root(cfg.get("openpi_root", None))
+            setup_openpi_client_pythonpath(openpi_root)
+            logger.info("openpi root: %s", openpi_root)
+            openpi_client = OpenPIChunkClient(
+                host=str(cfg.openpi.host),
+                port=int(cfg.openpi.port),
+                logger=logger,
+            )
+            offline_residual_alpha = _scheduled_alpha(
+                cfg,
+                base_alpha=float(cfg.residual.alpha),
+                schedule_step=0,
+            )
+            if bootstrap_base_enabled:
+                learner_env = _create_env(cfg, logger)
+                bootstrap_stats = _bootstrap_offline_with_base_success(
+                    cfg,
+                    env=learner_env,
+                    openpi_client=openpi_client,
+                    offline_buffer=offline_buffer,
+                    sample_obs_template=sample_obs,
+                    action_dim=int(env_action_dim),
+                    residual_alpha=float(offline_residual_alpha),
+                    image_keys=tuple(image_keys),
+                    stack_horizon=int(cfg.sac.obs_stack_horizon),
+                    chunk_horizon=int(chunk_horizon),
+                    chunk_step_enabled=bool(chunk_step_enabled),
+                    discount=float(cfg.sac.discount),
+                    logger=logger,
+                    normalizer=normalizer,
+                    profiler=None,
+                    state_mode=state_mode,
+                )
+                logger.info(
+                    "offline bootstrap: success_episodes=%s collected=%s inserted=%s attempts=%s",
+                    bootstrap_stats.get("success_episodes", 0),
+                    bootstrap_stats.get("episodes_collected", 0),
+                    bootstrap_stats.get("inserted", 0),
+                    bootstrap_stats.get("attempts", 0),
+                )
+            if has_offline_dataset_paths:
+                offline_stats = _load_offline_residual_buffer(
+                    cfg,
+                    sample_obs_template=sample_obs,
+                    offline_buffer=offline_buffer,
+                    action_dim=int(step_action_dim),
+                    full_action_dim=int(env_action_dim),
+                    chunk_horizon=int(chunk_horizon),
+                    control_indices=control_indices,
+                    residual_limits=residual_limits,
+                    residual_alpha=float(offline_residual_alpha),
+                    openpi_client=openpi_client,
+                    image_keys=tuple(image_keys),
+                    stack_horizon=int(cfg.sac.obs_stack_horizon),
+                    chunk_step_enabled=bool(chunk_step_enabled),
+                    logger=logger,
+                    normalizer=normalizer,
+                    profiler=None,
+                    state_mode=state_mode,
+                )
+                logger.info(
+                    "offline preload: buffer=%s files_loaded=%s/%s candidates=%s inserted=%s "
+                    "skipped=%s clipped=%s errors=%s",
+                    len(offline_buffer),
+                    offline_stats.get("files_loaded", 0),
+                    offline_stats.get("files_total", 0),
+                    offline_stats.get("candidates", 0),
+                    offline_stats.get("inserted", 0),
+                    offline_stats.get("skipped", 0),
+                    offline_stats.get("clipped_values", 0),
+                    offline_stats.get("errors", 0),
+                )
+
+    step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
+    episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
+    tb_writer = SummaryWriter(log_dir=str(run_dir / "tb"))
+    stats_logger = _LearnerStatsLogger(
+        logger=logger,
+        step_logger=step_logger,
+        episode_logger=episode_logger,
+        tb_writer=tb_writer,
+        replay_buffer=replay_buffer,
+        offline_buffer=offline_buffer,
+    )
+
+    initial_payload = _snapshot_agent_checkpoint_payload(
+        learner_agent,
+        step=int(learner_agent.state.step),
+    )
+    critic_pretrain = _pretrain_critic_with_calql(
+        cfg,
+        agent=learner_agent,
+        offline_buffer=offline_buffer,
+        logger=logger,
+        tb_writer=tb_writer,
+    )
+    if int(critic_pretrain.get("enabled", 0)) > 0:
+        initial_payload = _snapshot_agent_checkpoint_payload(
+            learner_agent,
+            step=int(learner_agent.state.step),
+        )
+
+    logger.info(
+        "Starting standalone agentlace learner at %s:%s (broadcast=%s) "
+        "training_starts=%s online_capacity=%s offline_size=%s calql_enabled=%s",
+        async_trainer_host,
+        async_trainer_port,
+        async_broadcast_port,
+        int(cfg.training.training_starts),
+        int(getattr(replay_buffer, "capacity", getattr(replay_buffer, "_capacity", 0))),
+        int(len(offline_buffer)) if offline_buffer is not None else 0,
+        int(critic_pretrain.get("enabled", 0)),
+    )
+
+    del learner_agent
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    try:
+        run_agentlace_learner_service(
+            cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+            sample_obs=sample_obs,
+            action_dim=int(agent_action_dim),
+            critic_action_dim=int(critic_action_dim),
+            image_keys=tuple(image_keys),
+            action_transform=action_transform,
+            learner_device=async_learner_device,
+            update_frequency=async_update_frequency,
+            idle_sleep_sec=async_idle_sleep_sec,
+            training_starts=int(cfg.training.training_starts),
+            initial_payload=initial_payload,
+            replay_buffer=replay_buffer,
+            offline_buffer=offline_buffer,
+            batch_size=int(cfg.replay.batch_size),
+            offline_ratio=float(cfg.offline.ratio),
+            symmetric_replay=bool(cfg.offline.get("symmetric_replay", False)),
+            host=async_trainer_host,
+            port_number=async_trainer_port,
+            broadcast_port=async_broadcast_port,
+            status_queue=None,
+            command_queue=None,
+            stats_request_callback=stats_logger.handle_payload,
+        )
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt, stopping standalone learner")
+    finally:
+        if learner_env is not None:
+            try:
+                learner_env.close()
+            except Exception:
+                pass
+        step_logger.close()
+        episode_logger.close()
+        tb_writer.close()
+
+
+if __name__ == "__main__":
+    main()

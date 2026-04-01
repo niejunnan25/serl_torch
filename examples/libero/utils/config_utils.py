@@ -141,6 +141,7 @@ def build_drq_agent(
     *,
     critic_action_dim: int | None = None,
     action_transform: Dict[str, Any] | None = None,
+    device: str | torch.device | None = None,
 ):
     from serl_launcher.agents.continuous.drq import DrQAgent
 
@@ -225,6 +226,7 @@ def build_drq_agent(
         int(cfg.seed),
         sample_obs,
         sample_action,
+        device=device,
         **kwargs,
     )
 

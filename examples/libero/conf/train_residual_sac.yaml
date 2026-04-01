@@ -159,8 +159,21 @@ training:
   updates_per_step: 1
   async:
     enabled: false
+    backend: process   # process | thread | agentlace
     update_frequency: 10
     idle_sleep_sec: 0.002
+    actor_device: null
+    learner_device: null
+    batch_queue_size: 2
+    trainer_host: 127.0.0.1
+    trainer_port: 5488
+    broadcast_port: 5489
+    data_store_queue_size: 2000
+    stats_period_steps: 100
+    agentlace:
+      spawn_local_worker: true
+      bootstrap_file: agentlace_bootstrap.pkl
+      connect_timeout_sec: 120.0
 
   # Performance
   replay_prefetch:

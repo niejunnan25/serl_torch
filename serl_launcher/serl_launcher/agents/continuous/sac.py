@@ -786,6 +786,7 @@ class SACAgent:
         cql_n_actions: int = 10,
         cql_temperature: float = 1.0,
         action_transform: Optional[dict] = None,
+        device: Optional[torch.device | str] = None,
     ):
         del rng
         if entropy_per_dim:
@@ -793,7 +794,10 @@ class SACAgent:
                 "entropy_per_dim is not supported in torch migration"
             )
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            device = torch.device(device)
 
         actor_def = actor_def.to(device)
         critic_def = critic_def.to(device)

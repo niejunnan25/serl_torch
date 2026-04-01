@@ -97,7 +97,11 @@ def _bootstrap_offline_with_base_success(
 
         obs_cache.clear()
         obs_raw = _profile_call(
-            profiler, "env_reset", env.reset, seed=seed, episode_id=-1
+            profiler,
+            "env_reset",
+            env.reset,
+            seed=seed,
+            init_episode_idx=-1,
         )
         max_episode_steps = int(env.step_limit)
         if max_ep_steps_override is not None:
