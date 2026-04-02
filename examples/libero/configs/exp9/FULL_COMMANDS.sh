@@ -5,6 +5,33 @@
 #
 # Run each command in a separate terminal/tmux pane.
 
+# ------------------------------------------------------------
+# Recommended: one-command Hydra launcher (RLinf-style)
+# ------------------------------------------------------------
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag6.yaml
+
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag3.yaml
+
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag10.yaml
+
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_null.yaml
+
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag6_unfreeze.yaml
+
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag3_unfreeze.yaml
+
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag10_unfreeze.yaml
+
+bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_null_unfreeze.yaml
+
 # ===========================
 # fused lag6
 # ===========================
@@ -176,7 +203,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/serve_openpi
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag6_unfreeze_resnet/learner && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag6_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag6_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag6_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 1 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag6_unfreeze_resnet/learner \
@@ -184,7 +211,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag6_unfreeze_resnet/actor && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_actor.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag6_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag6_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag6_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 0 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag6_unfreeze_resnet/actor \
@@ -213,7 +240,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/serve_openpi
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag3_unfreeze_resnet/learner && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag3_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag3_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag3_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 3 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag3_unfreeze_resnet/learner \
@@ -221,7 +248,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag3_unfreeze_resnet/actor && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_actor.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag3_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag3_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag3_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 2 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag3_unfreeze_resnet/actor \
@@ -250,7 +277,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/serve_openpi
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag10_unfreeze_resnet/learner && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag10_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag10_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag10_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 5 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag10_unfreeze_resnet/learner \
@@ -258,7 +285,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag10_unfreeze_resnet/actor && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_actor.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag10_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_lag10_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag10_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 4 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag10_unfreeze_resnet/actor \
@@ -287,7 +314,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/serve_openpi
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_null_unfreeze_resnet/learner && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_null_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_null_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_null_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 7 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_null_unfreeze_resnet/learner \
@@ -295,7 +322,7 @@ bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_learner.
 
 mkdir -p /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_null_unfreeze_resnet/actor && \
 bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/run_actor.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_alpha-01_async_full_null_unfreeze_resnet.yaml \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp9/chunk/libero_10_task_6_chunk_state-fused_async_null_unfreeze.yaml \
   --bootstrap /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_null_unfreeze_resnet/agentlace_bootstrap.pkl \
   --gpu_id 6 \
   hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_null_unfreeze_resnet/actor \

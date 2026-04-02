@@ -9,6 +9,12 @@ libero_root: null
 libero_config_dir: null
 libero_datasets_root: null
 
+launch:
+  output_root: /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9
+  actor_gpu: 4
+  learner_gpu: 5
+  openpi_gpu: 4
+
 # ---------------------------
 # Task / Environment
 # ---------------------------

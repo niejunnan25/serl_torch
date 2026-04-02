@@ -261,6 +261,15 @@ logging:
   tb_step_period: 100
   tb_histogram_period: 1000
 
+launch:
+  output_root: outputs/libero/launch_async_train
+  gpu_id: 0
+  actor_gpu: null
+  learner_gpu: null
+  openpi_gpu: null
+  env_start_timeout_sec: 60.0
+  openpi_start_timeout_sec: 300.0
+
 normalization:
   enabled: true
   stats_dir: null
