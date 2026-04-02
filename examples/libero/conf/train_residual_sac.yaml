@@ -177,7 +177,7 @@ training:
     bounded_lag:
       enabled: false
       max_update_lag_calls: 2
-      poll_sec: 0.2
+      poll_sec: null
       timeout_sec: 30.0
       sync_on_wait: true
       log_period_steps: 1000

@@ -93,7 +93,7 @@ sac:
   std_max: 5.0
   discount: 0.99
   soft_target_update_rate: 0.005
-  temperature_init: 1.0
+  temperature_init: 0.01
   backup_entropy: true
   critic_ensemble_size: 2
   critic_subsample_size: 2
@@ -161,15 +161,22 @@ training:
 
   async:
     enabled: true
-    update_frequency: 10
+    backend: agentlace
+    update_frequency: 1
     idle_sleep_sec: 0.002
+    stats_period_steps: 500
     trainer_port: 5688
     broadcast_port: 5689
+    agentlace:
+      spawn_local_worker: false
+      bootstrap_file: agentlace_bootstrap.pkl
+      connect_timeout_sec: 120.0
     bounded_lag:
       enabled: true
-      max_update_lag_calls: 2
+      max_update_lag_calls: 10
+      poll_sec: 0.2
       timeout_sec: 30.0
-      sync_on_wait: true
+      sync_on_wait: false
 
   replay_prefetch:
     enabled: true
@@ -245,4 +252,3 @@ logging:
   summary_file: summary.json
   tb_step_period: 100
   tb_histogram_period: 1000
-
