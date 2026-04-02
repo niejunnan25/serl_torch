@@ -420,11 +420,13 @@ def main(cfg: DictConfig) -> None:
     async_bounded_lag_cfg = (
         async_cfg.get("bounded_lag", None) if async_cfg is not None else None
     )
-    async_bounded_lag_enabled = (
-        bool(async_enabled)
-        and bool(async_bounded_lag_cfg.get("enabled", False))
+    async_bounded_lag_cfg_enabled = (
+        bool(async_bounded_lag_cfg.get("enabled", False))
         if async_bounded_lag_cfg is not None
         else False
+    )
+    async_bounded_lag_enabled = (
+        bool(async_enabled) and bool(async_bounded_lag_cfg_enabled)
     )
     async_bounded_lag_max_update_calls = (
         int(async_bounded_lag_cfg.get("max_update_lag_calls", 2))
@@ -455,6 +457,33 @@ def main(cfg: DictConfig) -> None:
         if async_bounded_lag_cfg is not None
         else int(async_stats_period_steps)
     )
+    async_bounded_lag_env_steps_per_update_call = (
+        async_bounded_lag_cfg.get("env_steps_per_update_call", None)
+        if async_bounded_lag_cfg is not None
+        else None
+    )
+    if async_bounded_lag_env_steps_per_update_call is not None:
+        async_bounded_lag_env_steps_per_update_call = float(
+            async_bounded_lag_env_steps_per_update_call
+        )
+        if not async_bounded_lag_env_steps_per_update_call.is_integer():
+            raise ValueError(
+                "training.async.bounded_lag.env_steps_per_update_call must be "
+                "an integer env-step count when set, got "
+                f"{async_bounded_lag_env_steps_per_update_call}"
+            )
+        async_bounded_lag_env_steps_per_update_call = int(
+            async_bounded_lag_env_steps_per_update_call
+        )
+    async_bounded_lag_manual_rate_enabled = bool(
+        async_bounded_lag_enabled
+        and async_bounded_lag_env_steps_per_update_call is not None
+    )
+    async_bounded_lag_mode = (
+        "manual_env_steps_per_update_call"
+        if async_bounded_lag_manual_rate_enabled
+        else "sync_trigger_budget"
+    )
     if async_bounded_lag_max_update_calls < 0:
         raise ValueError(
             "training.async.bounded_lag.max_update_lag_calls must be >= 0, "
@@ -475,6 +504,34 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(
             "training.async.bounded_lag.timeout_sec must be >= 0 when set, "
             f"got {async_bounded_lag_timeout_sec}"
+        )
+    if (
+        async_bounded_lag_env_steps_per_update_call is not None
+        and int(async_bounded_lag_env_steps_per_update_call) <= 0
+    ):
+        raise ValueError(
+            "training.async.bounded_lag.env_steps_per_update_call must be "
+            f"positive when set, got {async_bounded_lag_env_steps_per_update_call}"
+        )
+    if (
+        async_bounded_lag_env_steps_per_update_call is not None
+        and (not async_bounded_lag_enabled)
+    ):
+        logger.warning(
+            "training.async.bounded_lag.env_steps_per_update_call=%s is set, but "
+            "bounded lag is disabled (async.enabled=%s, bounded_lag.enabled=%s); "
+            "manual env-step/update-call pacing is ignored",
+            int(async_bounded_lag_env_steps_per_update_call),
+            bool(async_enabled),
+            bool(async_bounded_lag_cfg_enabled),
+        )
+    if (
+        async_bounded_lag_manual_rate_enabled
+        and int(cfg.training.updates_per_step) != 1
+    ):
+        raise ValueError(
+            "training.async.bounded_lag.env_steps_per_update_call requires "
+            f"training.updates_per_step=1, got {int(cfg.training.updates_per_step)}"
         )
     replay_prefetch_cfg = cfg.training.get("replay_prefetch", None)
     replay_prefetch_enabled = (
@@ -553,6 +610,29 @@ def main(cfg: DictConfig) -> None:
         async_agentlace_spawn_local_worker,
         async_agentlace_bootstrap_file,
         async_agentlace_connect_timeout_sec,
+    )
+    logger.info(
+        "Async bounded-lag: enabled=%s mode=%s max_update_lag_calls=%s "
+        "env_steps_per_update_call=%s poll_sec=%s timeout_sec=%s sync_on_wait=%s",
+        async_bounded_lag_enabled,
+        async_bounded_lag_mode,
+        async_bounded_lag_max_update_calls,
+        (
+            None
+            if async_bounded_lag_env_steps_per_update_call is None
+            else float(async_bounded_lag_env_steps_per_update_call)
+        ),
+        (
+            None
+            if async_bounded_lag_poll_sec is None
+            else float(async_bounded_lag_poll_sec)
+        ),
+        (
+            None
+            if async_bounded_lag_timeout_sec is None
+            else float(async_bounded_lag_timeout_sec)
+        ),
+        async_bounded_lag_sync_on_wait,
     )
     logger.info(
         "Replay batch prefetch: enabled=%s queue_size=%s pin_memory=%s to_device=%s",
@@ -734,6 +814,7 @@ def main(cfg: DictConfig) -> None:
     obs_cache = LiberoObservationCache()
     agentlace_timer_last_sent_step = -1
     async_target_update_calls = 0
+    async_bounded_lag_tracked_env_steps = 0
     async_bounded_lag_wait_count = 0
     async_bounded_lag_timeout_count = 0
     async_bounded_lag_wait_total_sec = 0.0
@@ -765,9 +846,17 @@ def main(cfg: DictConfig) -> None:
                 async_learner.get_prefetch_queue_size()
             )
             if async_bounded_lag_enabled:
+                payload["bounded_lag_mode"] = str(async_bounded_lag_mode)
                 payload["bounded_lag_target_update_calls"] = int(
                     async_target_update_calls
                 )
+                payload["bounded_lag_tracked_env_steps"] = int(
+                    async_bounded_lag_tracked_env_steps
+                )
+                if async_bounded_lag_env_steps_per_update_call is not None:
+                    payload["bounded_lag_env_steps_per_update_call"] = float(
+                        async_bounded_lag_env_steps_per_update_call
+                    )
                 payload["bounded_lag_required_update_steps"] = int(
                     async_bounded_lag_last_required_update_steps
                 )
@@ -832,12 +921,33 @@ def main(cfg: DictConfig) -> None:
         replay_size_after: int,
     ) -> int:
         nonlocal async_target_update_calls
+        nonlocal async_bounded_lag_tracked_env_steps
         if (
             (not async_bounded_lag_enabled)
             or async_learner is None
             or (not bool(phase_train_flag))
         ):
             return 0
+        if async_bounded_lag_manual_rate_enabled:
+            added_trainable_env_steps = _count_env_step_update_triggers(
+                train_step_before=int(train_step_before),
+                train_step_after=int(train_step_after),
+                replay_size_before=int(replay_size_before),
+                replay_size_after=int(replay_size_after),
+                training_starts=int(cfg.training.training_starts),
+                update_every=1,
+            )
+            if added_trainable_env_steps <= 0:
+                return 0
+            async_bounded_lag_tracked_env_steps += int(added_trainable_env_steps)
+            previous_target_update_calls = int(async_target_update_calls)
+            async_target_update_calls = int(
+                async_bounded_lag_tracked_env_steps
+                // float(async_bounded_lag_env_steps_per_update_call)
+            )
+            if async_target_update_calls < previous_target_update_calls:
+                async_target_update_calls = int(previous_target_update_calls)
+            return int(async_target_update_calls - previous_target_update_calls)
         trigger_count = _count_env_step_update_triggers(
             train_step_before=int(train_step_before),
             train_step_after=int(train_step_after),
@@ -924,6 +1034,31 @@ def main(cfg: DictConfig) -> None:
                 int(required_update_steps),
                 int(updated_steps),
                 float(wait_sec),
+            )
+
+    def _sync_async_bounded_lag_baseline_from_learner() -> None:
+        nonlocal async_target_update_calls
+        nonlocal async_bounded_lag_tracked_env_steps
+        if (not async_bounded_lag_enabled) or async_learner is None:
+            return
+        learner_update_steps = int(async_learner.get_update_steps())
+        previous_target_update_calls = int(async_target_update_calls)
+        if learner_update_steps > int(async_target_update_calls):
+            async_target_update_calls = int(learner_update_steps)
+        if async_bounded_lag_manual_rate_enabled:
+            min_tracked_env_steps = int(async_target_update_calls) * int(
+                async_bounded_lag_env_steps_per_update_call
+            )
+            if min_tracked_env_steps > int(async_bounded_lag_tracked_env_steps):
+                async_bounded_lag_tracked_env_steps = int(min_tracked_env_steps)
+        if int(async_target_update_calls) != int(previous_target_update_calls):
+            logger.info(
+                "Aligned bounded-lag baseline to learner update steps: "
+                "target_update_calls %s -> %s learner_update_steps=%s mode=%s",
+                int(previous_target_update_calls),
+                int(async_target_update_calls),
+                int(learner_update_steps),
+                str(async_bounded_lag_mode),
             )
 
     sample_obs_raw = _profile_call(
@@ -2128,6 +2263,8 @@ def main(cfg: DictConfig) -> None:
                 )
                 sync_replay_prefetcher.start()
 
+        _sync_async_bounded_lag_baseline_from_learner()
+
         for phase in cfg.training.phases:
             if max_train_env_steps > 0 and train_env_step >= max_train_env_steps:
                 stopped_by_env_budget = True
@@ -2836,6 +2973,22 @@ def main(cfg: DictConfig) -> None:
                                             train_env_step,
                                         )
                                         tb_writer.add_scalar(
+                                            "system/async_bounded_lag_tracked_env_steps",
+                                            float(async_bounded_lag_tracked_env_steps),
+                                            train_env_step,
+                                        )
+                                        if (
+                                            async_bounded_lag_env_steps_per_update_call
+                                            is not None
+                                        ):
+                                            tb_writer.add_scalar(
+                                                "system/async_env_steps_per_update_call",
+                                                float(
+                                                    async_bounded_lag_env_steps_per_update_call
+                                                ),
+                                                train_env_step,
+                                            )
+                                        tb_writer.add_scalar(
                                             "system/async_required_update_steps",
                                             float(
                                                 async_bounded_lag_last_required_update_steps
@@ -3387,6 +3540,22 @@ def main(cfg: DictConfig) -> None:
                                                 train_env_step,
                                             )
                                             tb_writer.add_scalar(
+                                                "system/async_bounded_lag_tracked_env_steps",
+                                                float(async_bounded_lag_tracked_env_steps),
+                                                train_env_step,
+                                            )
+                                            if (
+                                                async_bounded_lag_env_steps_per_update_call
+                                                is not None
+                                            ):
+                                                tb_writer.add_scalar(
+                                                    "system/async_env_steps_per_update_call",
+                                                    float(
+                                                        async_bounded_lag_env_steps_per_update_call
+                                                    ),
+                                                    train_env_step,
+                                                )
+                                            tb_writer.add_scalar(
                                                 "system/async_required_update_steps",
                                                 float(
                                                     async_bounded_lag_last_required_update_steps
@@ -3811,7 +3980,13 @@ def main(cfg: DictConfig) -> None:
             ),
             "async_bounded_lag": {
                 "enabled": bool(async_bounded_lag_enabled),
+                "mode": str(async_bounded_lag_mode),
                 "max_update_lag_calls": int(async_bounded_lag_max_update_calls),
+                "env_steps_per_update_call": (
+                    None
+                    if async_bounded_lag_env_steps_per_update_call is None
+                    else float(async_bounded_lag_env_steps_per_update_call)
+                ),
                 "poll_sec": (
                     None
                     if async_bounded_lag_poll_sec is None
@@ -3824,6 +3999,7 @@ def main(cfg: DictConfig) -> None:
                 ),
                 "sync_on_wait": bool(async_bounded_lag_sync_on_wait),
                 "target_update_calls": int(async_target_update_calls),
+                "tracked_env_steps": int(async_bounded_lag_tracked_env_steps),
                 "last_required_update_steps": int(
                     async_bounded_lag_last_required_update_steps
                 ),
