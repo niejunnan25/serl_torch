@@ -79,6 +79,18 @@ CONFIG_DIR="$(cd "$(dirname "$CONFIG_PATH")" && pwd)"
 CONFIG_BASENAME="$(basename "$CONFIG_PATH")"
 CONFIG_NAME="${CONFIG_BASENAME%.yaml}"
 
+HAS_HYDRA_RUN_DIR_OVERRIDE=0
+for arg in "${EXTRA_ARGS[@]:-}"; do
+    if [[ "$arg" == hydra.run.dir=* ]]; then
+        HAS_HYDRA_RUN_DIR_OVERRIDE=1
+        break
+    fi
+done
+
+if [[ "$HAS_HYDRA_RUN_DIR_OVERRIDE" -eq 0 ]]; then
+    EXTRA_ARGS+=('hydra.run.dir=${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}')
+fi
+
 cd "$ROOT_DIR"
 exec "$PYTHON_BIN" "$ROOT_DIR/scripts/launch_async_train.py" \
     --config-path "$CONFIG_DIR" \

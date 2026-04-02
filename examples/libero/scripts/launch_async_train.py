@@ -184,19 +184,13 @@ def main(cfg: DictConfig) -> None:
     )
     config_name_raw = str(HydraConfig.get().job.config_name or "train_residual_sac")
     config_name = Path(config_name_raw).stem or "train_residual_sac"
-    stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
     output_root_leaf = Path(output_root.name).stem
     if output_root_leaf == config_name:
-        run_parent = output_root
+        expected_run_parent = output_root
     else:
-        run_parent = output_root / config_name
-    run_parent.mkdir(parents=True, exist_ok=True)
-    run_root = run_parent / stamp
-    if run_root.exists():
-        suffix = 2
-        while (run_parent / f"{stamp}_{suffix}").exists():
-            suffix += 1
-        run_root = run_parent / f"{stamp}_{suffix}"
+        expected_run_parent = output_root / config_name
+    run_root = Path(HydraConfig.get().runtime.output_dir).resolve()
+    run_root.mkdir(parents=True, exist_ok=True)
     support_dir = run_root / "support"
     actor_run_dir = run_root / "actor"
     learner_run_dir = run_root / "learner"
@@ -245,6 +239,16 @@ def main(cfg: DictConfig) -> None:
         trainer_host,
         trainer_port,
     )
+    try:
+        run_root.relative_to(expected_run_parent)
+    except ValueError:
+        logger.warning(
+            "Hydra run dir %s is outside expected launch root %s. "
+            "If you want launch logs under launch.output_root, pass "
+            "hydra.run.dir accordingly.",
+            run_root,
+            expected_run_parent,
+        )
     logger.info("Resolved run root: %s", run_root)
 
     if _port_open(env_host, env_port):
