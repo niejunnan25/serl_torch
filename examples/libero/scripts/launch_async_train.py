@@ -137,13 +137,21 @@ def _stream_foreground_to_console_and_log(
             preexec_fn=os.setsid,
         )
         assert proc.stdout is not None
+        stdout_buffer = getattr(sys.stdout, "buffer", None)
         try:
-            for line in iter(proc.stdout.readline, b""):
-                if not line:
+            while True:
+                # Read raw chunks so carriage-return based tqdm refreshes are
+                # forwarded in real time instead of being delayed until '\n'.
+                chunk = proc.stdout.read1(4096)
+                if not chunk:
                     break
-                sys.stdout.buffer.write(line)
-                sys.stdout.buffer.flush()
-                log_fp.write(line)
+                if stdout_buffer is not None:
+                    stdout_buffer.write(chunk)
+                    stdout_buffer.flush()
+                else:
+                    sys.stdout.write(chunk.decode(errors="replace"))
+                    sys.stdout.flush()
+                log_fp.write(chunk)
                 log_fp.flush()
         finally:
             proc.stdout.close()
@@ -174,9 +182,14 @@ def main(cfg: DictConfig) -> None:
         launch_cfg.get("output_root", "outputs/libero/launch_async_train"),
         base=original_cwd,
     )
-    config_name = str(HydraConfig.get().job.config_name or "train_residual_sac")
+    config_name_raw = str(HydraConfig.get().job.config_name or "train_residual_sac")
+    config_name = Path(config_name_raw).stem or "train_residual_sac"
     stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-    run_parent = output_root / config_name
+    output_root_leaf = Path(output_root.name).stem
+    if output_root_leaf == config_name:
+        run_parent = output_root
+    else:
+        run_parent = output_root / config_name
     run_parent.mkdir(parents=True, exist_ok=True)
     run_root = run_parent / stamp
     if run_root.exists():

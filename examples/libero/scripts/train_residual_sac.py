@@ -171,7 +171,7 @@ def main(cfg: DictConfig) -> None:
     logging.basicConfig(
         level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
     )
-    logger = logging.getLogger("libero_train_residual_sac")
+    logger = logging.getLogger()
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 

@@ -10,7 +10,7 @@ libero_config_dir: null
 libero_datasets_root: null
 
 launch:
-  output_root: /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_lag10
+  output_root: /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9
   actor_gpu: 7
   learner_gpu: 6
   openpi_gpu: 7
