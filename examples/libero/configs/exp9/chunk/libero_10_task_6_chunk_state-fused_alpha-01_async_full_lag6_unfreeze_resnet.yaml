@@ -14,7 +14,6 @@ launch:
   actor_gpu: 0
   learner_gpu: 1
   openpi_gpu: 0
-  session_name: exp9_fused_lag6_unfreeze
 
 # ---------------------------
 # Task / Environment

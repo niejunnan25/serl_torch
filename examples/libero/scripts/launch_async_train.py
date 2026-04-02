@@ -169,7 +169,6 @@ def main(cfg: DictConfig) -> None:
     actor_gpu = _as_int(launch_cfg.get("actor_gpu", default_gpu), default_gpu)
     learner_gpu = _as_int(launch_cfg.get("learner_gpu", default_gpu), default_gpu)
     openpi_gpu = _as_int(launch_cfg.get("openpi_gpu", actor_gpu), actor_gpu)
-    session_name = launch_cfg.get("session_name", None)
 
     output_root = _resolve_path(
         launch_cfg.get("output_root", "outputs/libero/launch_async_train"),
@@ -215,8 +214,6 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Hydra run dir: %s", Path(HydraConfig.get().runtime.output_dir).resolve())
     logger.info("Config name: %s", config_name)
-    if session_name is not None:
-        logger.info("Session tag: %s", session_name)
     logger.info(
         "Launch resources: actor_gpu=%s learner_gpu=%s openpi_gpu=%s output_root=%s",
         actor_gpu,

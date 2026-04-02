@@ -267,7 +267,6 @@ launch:
   actor_gpu: null
   learner_gpu: null
   openpi_gpu: null
-  session_name: null
   env_start_timeout_sec: 60.0
   openpi_start_timeout_sec: 300.0
 

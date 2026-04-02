@@ -15,7 +15,6 @@ launch:
   actor_gpu: 6
   learner_gpu: 7
   openpi_gpu: 6
-  session_name: exp9_fused_null_unfreeze
 
 # ---------------------------
 # Task / Environment

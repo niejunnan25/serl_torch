@@ -15,7 +15,6 @@ launch:
   actor_gpu: 5
   learner_gpu: 6
   openpi_gpu: 5
-  session_name: exp9_fused_null
 
 # ---------------------------
 # Task / Environment
