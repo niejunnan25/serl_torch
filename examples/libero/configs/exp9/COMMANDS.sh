@@ -8,8 +8,10 @@ set -euo pipefail
 #   bash examples/libero/configs/exp9/COMMANDS.sh fused env
 #
 # run:
-#   - fused
-#   - raw
+#   - lag6 (or fused, legacy alias)
+#   - lag3 (or raw, legacy alias)
+#   - lag10
+#   - null
 # role:
 #   - env
 #   - async_eval_env
@@ -27,34 +29,54 @@ ROLE="${2:-}"
 
 if [[ -z "${RUN}" || -z "${ROLE}" ]]; then
   echo "Usage: bash examples/libero/configs/exp9/COMMANDS.sh <run> <role>"
-  echo "run: fused | raw"
+  echo "run: lag6|lag3|lag10|null (aliases: fused->lag6, raw->lag3)"
   echo "role: env | async_eval_env | openpi | learner | actor"
   exit 1
 fi
 
 case "${RUN}" in
-  fused)
-    RUN_DIR="${OUT_BASE}/fused_async_full"
-    CFG="${CFG_DIR}/libero_10_task_6_chunk_state-fused_alpha-01_async_full.yaml"
+  lag6|fused)
+    RUN_DIR="${OUT_BASE}/fused_async_full_lag6"
+    CFG="${CFG_DIR}/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag6.yaml"
     ENV_PORT=35490
     EVAL_ENV_PORT=35492
     OPENPI_PORT=35491
-    OPENPI_GPU=2
-    LEARNER_GPU=1
-    ACTOR_GPU=0
+    OPENPI_GPU=1
+    LEARNER_GPU=2
+    ACTOR_GPU=1
     ;;
-  raw)
-    RUN_DIR="${OUT_BASE}/raw_async_full"
-    CFG="${CFG_DIR}/libero_10_task_6_chunk_state-raw_alpha-01_async_full.yaml"
+  lag3|raw)
+    RUN_DIR="${OUT_BASE}/fused_async_full_lag3"
+    CFG="${CFG_DIR}/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag3.yaml"
     ENV_PORT=35530
     EVAL_ENV_PORT=35532
     OPENPI_PORT=35531
-    OPENPI_GPU=2
-    LEARNER_GPU=1
-    ACTOR_GPU=0
+    OPENPI_GPU=3
+    LEARNER_GPU=4
+    ACTOR_GPU=3
+    ;;
+  lag10)
+    RUN_DIR="${OUT_BASE}/fused_async_full_lag10"
+    CFG="${CFG_DIR}/libero_10_task_6_chunk_state-fused_alpha-01_async_full_lag10.yaml"
+    ENV_PORT=35690
+    EVAL_ENV_PORT=35692
+    OPENPI_PORT=35691
+    OPENPI_GPU=1
+    LEARNER_GPU=2
+    ACTOR_GPU=1
+    ;;
+  null)
+    RUN_DIR="${OUT_BASE}/fused_async_full_null"
+    CFG="${CFG_DIR}/libero_10_task_6_chunk_state-fused_alpha-01_async_full_null.yaml"
+    ENV_PORT=35790
+    EVAL_ENV_PORT=35792
+    OPENPI_PORT=35791
+    OPENPI_GPU=5
+    LEARNER_GPU=6
+    ACTOR_GPU=5
     ;;
   *)
-    echo "Invalid run: ${RUN}. Expected: fused | raw"
+    echo "Invalid run: ${RUN}. Expected: lag6|lag3|lag10|null (aliases: fused, raw)"
     exit 1
     ;;
 esac

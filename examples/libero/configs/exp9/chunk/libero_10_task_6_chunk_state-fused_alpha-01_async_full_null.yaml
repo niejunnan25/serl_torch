@@ -1,4 +1,5 @@
-# exp9 full-run config: fused-state async chunk training with async eval enabled.
+# exp9 full-run config: fused-state async chunk training with async eval enabled
+# (null pacing = no bounded-lag throttling).
 
 # ---------------------------
 # Global / Paths
@@ -25,14 +26,14 @@ task:
 
 openpi:
   host: localhost
-  port: 35491
+  port: 35791
 
 env:
   action_dim: 7
   backend: remote
   remote:
     host: 127.0.0.1
-    port: 35490
+    port: 35790
     timeout_sec: 180.0
 
 # ---------------------------
@@ -165,16 +166,16 @@ training:
     update_frequency: 1
     idle_sleep_sec: 0.002
     stats_period_steps: 500
-    trainer_port: 5688
-    broadcast_port: 5689
+    trainer_port: 5738
+    broadcast_port: 5739
     agentlace:
       spawn_local_worker: false
       bootstrap_file: agentlace_bootstrap.pkl
-      connect_timeout_sec: 120.0
+      connect_timeout_sec: 300.0
     bounded_lag:
-      enabled: true
+      enabled: false
       max_update_lag_calls: 10
-      env_steps_per_update_call: 6
+      env_steps_per_update_call: null
       poll_sec: 0.2
       timeout_sec: 30.0
       sync_on_wait: false
@@ -210,7 +211,7 @@ training:
     probing_min_steps: 0
     probing_max_steps: 0
     env_host: 127.0.0.1
-    env_port: 35492
+    env_port: 35792
     env_timeout_sec: 180.0
     reuse_openpi_port: true
     openpi_host: null
