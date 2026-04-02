@@ -10,6 +10,13 @@ libero_root: null
 libero_config_dir: null
 libero_datasets_root: null
 
+launch:
+  output_root: /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp9/chunk/fused_async_full_null
+  actor_gpu: 5
+  learner_gpu: 6
+  openpi_gpu: 5
+  session_name: exp9_fused_null
+
 # ---------------------------
 # Task / Environment
 # ---------------------------

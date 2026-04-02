@@ -18,6 +18,7 @@ set -euo pipefail
 #   - openpi
 #   - learner
 #   - actor
+#   - launch   (one-command Hydra launcher)
 
 ROOT="/vla/users/niejunnan/codebase/serl_torch"
 TOOLS_DIR="${ROOT}/examples/libero/tools"
@@ -30,7 +31,7 @@ ROLE="${2:-}"
 if [[ -z "${RUN}" || -z "${ROLE}" ]]; then
   echo "Usage: bash examples/libero/configs/exp9/COMMANDS.sh <run> <role>"
   echo "run: lag6|lag3|lag10|null (aliases: fused->lag6, raw->lag3)"
-  echo "role: env | async_eval_env | openpi | learner | actor"
+  echo "role: env | async_eval_env | openpi | learner | actor | launch"
   exit 1
 fi
 
@@ -123,8 +124,11 @@ case "${ROLE}" in
       hydra.run.dir="${RUN_DIR}/actor" \
       2>&1 | tee "${RUN_DIR}/actor_launcher.log"
     ;;
+  launch)
+    bash "${TOOLS_DIR}/launch_async_train.sh" "${CFG}"
+    ;;
   *)
-    echo "Invalid role: ${ROLE}. Expected: env | async_eval_env | openpi | learner | actor"
+    echo "Invalid role: ${ROLE}. Expected: env | async_eval_env | openpi | learner | actor | launch"
     exit 1
     ;;
 esac
