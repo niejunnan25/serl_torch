@@ -1,6 +1,7 @@
 """Asynchronous learner and replay prefetch helpers."""
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 import queue
 import socket
@@ -19,7 +20,7 @@ from .checkpoint import (
     _snapshot_agent_checkpoint_payload,
     _write_checkpoint_payload,
 )
-from .profiling import _RuntimeProfiler
+from .profiling import _RuntimeProfiler, _emit_profiling_snapshot
 from .replay_batch import (
     _PreparedBatch,
     _consume_prepared_replay_batch,
@@ -63,6 +64,10 @@ def _resolve_poll_interval(
     return float(max(1e-4, poll_interval_sec))
 
 
+def _default_agentlace_poll_interval_sec(idle_sleep_sec: float) -> float:
+    return float(max(0.05, min(0.2, max(1e-4, float(idle_sleep_sec) * 25.0))))
+
+
 def _resolve_timeout_deadline(timeout_sec: Optional[float]) -> Optional[float]:
     if timeout_sec is None:
         return None
@@ -87,6 +92,7 @@ def _build_status_payload(
     last_update_info: Dict[str, Any],
     replay_buffer: Any,
     replay_prefetch_queue_size: Optional[int] = None,
+    online_prefill_stats: Optional[Dict[str, Any]] = None,
     sync_payload: Optional[Dict[str, Any]] = None,
     message_type: str = "status",
 ) -> Dict[str, Any]:
@@ -99,6 +105,8 @@ def _build_status_payload(
     }
     if replay_prefetch_queue_size is not None:
         payload["replay_prefetch_queue_size"] = int(replay_prefetch_queue_size)
+    if online_prefill_stats is not None:
+        payload["online_prefill_stats"] = dict(online_prefill_stats)
     if sync_payload is not None:
         payload["sync_payload"] = sync_payload
     return payload
@@ -439,6 +447,12 @@ def run_agentlace_learner_service(
     replay_prefetch_queue_size: Optional[int] = None,
     replay_prefetch_pin_memory: Optional[bool] = None,
     replay_prefetch_to_device: Optional[bool] = None,
+    online_prefill_stats: Optional[Dict[str, Any]] = None,
+    profiler: Optional[_RuntimeProfiler] = None,
+    profiling_log_period_steps: int = 500,
+    profiling_logger: Any = None,
+    profiling_tb_writer: Any = None,
+    profiling_python_logger: Optional[logging.Logger] = None,
     status_queue: Any = None,
     command_queue: Any = None,
     stats_request_callback: Optional[
@@ -493,15 +507,85 @@ def run_agentlace_learner_service(
         if initial_payload is not None
         else int(learner_agent.state.step)
     )
+    profiling_log_period_steps = max(1, int(profiling_log_period_steps))
     last_update_info: Dict[str, Any] = {}
     server = None
     prefetcher: Optional[_MixedBatchPrefetcher] = None
     replay_store = _BufferDataStoreAdapter(replay_buffer)
+    logger = profiling_python_logger or logging.getLogger(
+        "libero_agentlace_learner_service"
+    )
+    latest_progress: Dict[str, int] = {
+        "train_env_step": 0,
+        "decision_step": 0,
+        "train_episode_id": 0,
+    }
+    online_prefill_status_payload = (
+        dict(online_prefill_stats) if online_prefill_stats is not None else None
+    )
+    profiling_last_flush_env_step = -1
 
     def _current_prefetch_queue_size() -> int:
         if prefetcher is None:
             return 0
         return prefetcher.get_queue_size()
+
+    def _update_latest_progress(payload: Dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        candidate_payloads = []
+        timer_payload = payload.get("timer", None)
+        if isinstance(timer_payload, dict):
+            candidate_payloads.append(timer_payload)
+        train_episode_payload = payload.get("train_episode", None)
+        if isinstance(train_episode_payload, dict):
+            candidate_payloads.append(train_episode_payload)
+        candidate_payloads.append(payload)
+        for item in candidate_payloads:
+            if not isinstance(item, dict):
+                continue
+            train_env_step = item.get("train_env_step", None)
+            if train_env_step is not None:
+                latest_progress["train_env_step"] = max(
+                    int(latest_progress.get("train_env_step", 0)),
+                    int(train_env_step),
+                )
+            decision_step = item.get("decision_step", None)
+            if decision_step is not None:
+                latest_progress["decision_step"] = max(
+                    int(latest_progress.get("decision_step", 0)),
+                    int(decision_step),
+                )
+            train_episode_id = item.get("train_episode_id", None)
+            if train_episode_id is not None:
+                latest_progress["train_episode_id"] = max(
+                    int(latest_progress.get("train_episode_id", 0)),
+                    int(train_episode_id),
+                )
+
+    def _maybe_emit_profiling(force: bool = False) -> None:
+        nonlocal profiling_last_flush_env_step
+        if profiler is None or (not profiler.enabled) or (not profiler.has_data()):
+            return
+        current_train_env_step = int(latest_progress.get("train_env_step", 0))
+        if (not force) and profiling_last_flush_env_step >= 0:
+            if (current_train_env_step - profiling_last_flush_env_step) < int(
+                profiling_log_period_steps
+            ):
+                return
+        payload = _emit_profiling_snapshot(
+            profiler,
+            profile_logger=profiling_logger,
+            tb_writer=profiling_tb_writer,
+            logger=logger,
+            train_env_step=current_train_env_step,
+            decision_step=int(latest_progress.get("decision_step", 0)),
+            train_episode_id=int(latest_progress.get("train_episode_id", 0)),
+            learner_update_steps=int(update_steps),
+            replay_prefetch_queue_size=_current_prefetch_queue_size(),
+        )
+        if payload is not None:
+            profiling_last_flush_env_step = int(current_train_env_step)
 
     def _sample_batch() -> Optional[Tuple[Dict[str, Any], int, int]]:
         if _replay_progress_size(replay_store) < int(training_starts):
@@ -520,6 +604,7 @@ def run_agentlace_learner_service(
             raise
 
     def _handle_stats_request(payload: Dict[str, Any]) -> None:
+        _update_latest_progress(payload)
         if stats_request_callback is not None:
             stats_request_callback(
                 dict(payload),
@@ -550,7 +635,7 @@ def run_agentlace_learner_service(
                     step=int(payload["step"]),
                 )
                 _write_checkpoint_payload(
-                    profiler=None,
+                    profiler=profiler,
                     checkpoint_dir=str(payload["checkpoint_dir"]),
                     payload=checkpoint_payload,
                     step=int(payload["step"]),
@@ -563,6 +648,7 @@ def run_agentlace_learner_service(
                     last_update_info=dict(last_update_info),
                     replay_buffer=replay_store,
                     replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                    online_prefill_stats=online_prefill_status_payload,
                 )
             if request_type == "sync-now":
                 if server is None:
@@ -578,6 +664,7 @@ def run_agentlace_learner_service(
                     last_update_info=dict(last_update_info),
                     replay_buffer=replay_store,
                     replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                    online_prefill_stats=online_prefill_status_payload,
                 )
             raise ValueError(f"Invalid request type: {request_type}")
 
@@ -600,6 +687,7 @@ def run_agentlace_learner_service(
                 last_update_info=dict(last_update_info),
                 replay_buffer=replay_store,
                 replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                online_prefill_stats=online_prefill_status_payload,
                 message_type="server_ready",
             ),
         )
@@ -614,7 +702,7 @@ def run_agentlace_learner_service(
                 device=learner_agent.device,
                 pin_memory=bool(replay_prefetch_pin_memory),
                 to_device=bool(replay_prefetch_to_device),
-                profiler=None,
+                profiler=profiler,
             )
             prefetcher.start()
 
@@ -657,6 +745,7 @@ def run_agentlace_learner_service(
                                 last_update_info=dict(last_update_info),
                                 replay_buffer=replay_store,
                                 replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                                online_prefill_stats=online_prefill_status_payload,
                             ),
                         )
                         continue
@@ -666,7 +755,7 @@ def run_agentlace_learner_service(
                             step=int(command["step"]),
                         )
                         _write_checkpoint_payload(
-                            profiler=None,
+                            profiler=profiler,
                             checkpoint_dir=str(command["checkpoint_dir"]),
                             payload=checkpoint_payload,
                             step=int(command["step"]),
@@ -688,16 +777,49 @@ def run_agentlace_learner_service(
                     allow_empty=True,
                 )
             else:
+                sample_start = time.perf_counter()
                 sampled = _sample_batch()
+                if sampled is not None and profiler is not None:
+                    profiler.record_duration(
+                        "replay_sample",
+                        (time.perf_counter() - sample_start) * 1000.0,
+                    )
             if sampled is None:
                 time.sleep(idle_sleep_sec)
                 continue
-            batch, online_bs, offline_bs = sampled
+            if prefetcher is not None:
+                batch, online_bs, offline_bs = sampled
+            else:
+                prepare_start = time.perf_counter()
+                prepared = _prepare_replay_batch(
+                    sampled,
+                    device=learner_agent.device,
+                    pin_memory=bool(replay_prefetch_pin_memory),
+                    to_device=bool(replay_prefetch_to_device),
+                    profiler=profiler,
+                    cuda_stream=None,
+                )
+                batch, online_bs, offline_bs = _consume_prepared_replay_batch(
+                    prepared,
+                    device=learner_agent.device,
+                    profiler=profiler,
+                )
+                if profiler is not None:
+                    profiler.record_duration(
+                        "replay_prepare",
+                        (time.perf_counter() - prepare_start) * 1000.0,
+                    )
 
+            update_start = time.perf_counter()
             learner_agent, info = learner_agent.update_high_utd(
                 batch,
                 utd_ratio=int(cfg.sac.utd_ratio),
             )
+            if profiler is not None:
+                profiler.record_duration(
+                    "agent_update_high_utd",
+                    (time.perf_counter() - update_start) * 1000.0,
+                )
             info["online_batch_size"] = int(online_bs)
             info["offline_batch_size"] = int(offline_bs)
             info["offline_fraction"] = float(
@@ -707,13 +829,14 @@ def run_agentlace_learner_service(
             update_steps += 1
             _safe_status_emit(
                 status_queue,
-                _build_status_payload(
-                    update_steps=int(update_steps),
-                    last_update_info=dict(last_update_info),
-                    replay_buffer=replay_store,
-                    replay_prefetch_queue_size=_current_prefetch_queue_size(),
-                ),
-            )
+                    _build_status_payload(
+                        update_steps=int(update_steps),
+                        last_update_info=dict(last_update_info),
+                        replay_buffer=replay_store,
+                        replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                        online_prefill_stats=online_prefill_status_payload,
+                    ),
+                )
             if update_steps % max(1, int(update_frequency)) == 0:
                 server.publish_network(
                     _snapshot_agent_checkpoint_payload(
@@ -721,9 +844,11 @@ def run_agentlace_learner_service(
                         step=int(update_steps),
                     )
                 )
+            _maybe_emit_profiling(force=False)
 
             time.sleep(max(0.0, float(idle_sleep_sec) * 0.25))
     finally:
+        _maybe_emit_profiling(force=True)
         if prefetcher is not None:
             prefetcher.stop()
         if server is not None:
@@ -1565,6 +1690,7 @@ class _AgentlaceAsyncLearner:
         self._actor_stats: Dict[str, Any] = {}
         self._server_ready = False
         self._remote_prefetch_queue_size: Optional[int] = None
+        self._online_prefill_stats: Dict[str, Any] = {}
         self._client_update_interval = max(1, int(update_frequency))
         self._pending_client_steps = 0
         self._last_client_update_ts = 0.0
@@ -1587,6 +1713,9 @@ class _AgentlaceAsyncLearner:
         info = payload.get("last_update_info", None)
         if info:
             self.last_update_info = dict(info)
+        online_prefill_stats = payload.get("online_prefill_stats", None)
+        if isinstance(online_prefill_stats, dict):
+            self._online_prefill_stats = dict(online_prefill_stats)
         prefetch_queue_size = payload.get("replay_prefetch_queue_size", None)
         if prefetch_queue_size is not None:
             self._remote_prefetch_queue_size = int(prefetch_queue_size)
@@ -1865,7 +1994,7 @@ class _AgentlaceAsyncLearner:
         target = max(0, int(min_update_steps))
         poll_sec = _resolve_poll_interval(
             poll_interval_sec,
-            default_sec=self.idle_sleep_sec,
+            default_sec=_default_agentlace_poll_interval_sec(self.idle_sleep_sec),
         )
         deadline = _resolve_timeout_deadline(timeout_sec)
         while True:
@@ -1889,3 +2018,8 @@ class _AgentlaceAsyncLearner:
             return int(self._data_store.qsize())
         except Exception:  # noqa: BLE001
             return 0
+
+    def get_online_prefill_stats(self) -> Dict[str, Any]:
+        if not self._closed:
+            self._pump_client(force_update=False, allow_empty_update=True)
+        return dict(self._online_prefill_stats)

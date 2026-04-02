@@ -1229,7 +1229,35 @@ def main(cfg: DictConfig) -> None:
         else False
     )
     online_prefill_loaded_episodes = 0
-    if online_prefill_enabled and configured_warmup_episodes > 0:
+    if (
+        external_agentlace_actor_mode
+        and async_learner is not None
+        and online_prefill_enabled
+        and configured_warmup_episodes > 0
+    ):
+        online_prefill_stats = async_learner.get_online_prefill_stats()
+        online_prefill_loaded_episodes = int(
+            online_prefill_stats.get("episodes_loaded", 0)
+        )
+        if (
+            online_prefill_loaded_episodes <= 0
+            or int(online_prefill_stats.get("inserted", 0)) <= 0
+        ):
+            raise RuntimeError(
+                "training.online_prefill.enabled=true in external agentlace actor mode, "
+                "but the learner reported no online prefill episodes loaded into replay"
+            )
+        logger.info(
+            "External agentlace actor mode: learner-owned online prefill "
+            "episodes_loaded=%s/%s files_loaded=%s/%s inserted=%s success_episodes=%s",
+            online_prefill_loaded_episodes,
+            configured_warmup_episodes,
+            online_prefill_stats.get("files_loaded", 0),
+            online_prefill_stats.get("files_total", 0),
+            online_prefill_stats.get("inserted", 0),
+            online_prefill_stats.get("success_episodes", 0),
+        )
+    elif online_prefill_enabled and configured_warmup_episodes > 0:
         online_prefill_dataset_paths = online_prefill_cfg.get("dataset_paths", None)
         if not online_prefill_dataset_paths:
             raise ValueError(

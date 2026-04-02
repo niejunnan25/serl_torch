@@ -1,3 +1,5 @@
+# exp9 profiling config: raw-state async chunk run for learner bottleneck diagnosis.
+
 # ---------------------------
 # Global / Paths
 # ---------------------------
@@ -12,7 +14,7 @@ libero_datasets_root: null
 # ---------------------------
 task:
   suite_name: libero_10
-  task_id: 8
+  task_id: 6
   seed_base: 7
   resolution: 256
   num_steps_wait: 10
@@ -23,14 +25,14 @@ task:
 
 openpi:
   host: localhost
-  port: 30001
+  port: 35331
 
 env:
   action_dim: 7
   backend: remote
   remote:
     host: 127.0.0.1
-    port: 30000
+    port: 35330
     timeout_sec: 180.0
 
 # ---------------------------
@@ -38,9 +40,9 @@ env:
 # ---------------------------
 residual:
   image_keys: [image, wrist_image]
-  alpha: 0.35
+  alpha: 0.1
   observation:
-    state_mode: fused
+    state_mode: raw
   epsilon_gating:
     enabled: false
     schedule: linear
@@ -58,8 +60,8 @@ residual:
   chunk_horizon: 5
 
 chunk_step:
-  enabled: false
-  sample_stride: 1
+  enabled: true
+  sample_stride: 2
   require_full_horizon: false
   pad_action_to_horizon: true
   scheduler_clock: env_step
@@ -95,7 +97,7 @@ sac:
   backup_entropy: true
   critic_ensemble_size: 2
   critic_subsample_size: 2
-  utd_ratio: 2
+  utd_ratio: 4
   otf_num_samples: 1
   cql_n_actions: 10
   cql_temperature: 1.0
@@ -117,7 +119,7 @@ replay:
 offline:
   enabled: true
   dataset_paths:
-    - data/offline/libero_10_task_8
+    - /vla/users/niejunnan/codebase/serl_torch/examples/libero/data/offline/libero_10_task_6
   ratio: 0.5
   symmetric_replay: true
   capacity: 50000
@@ -136,76 +138,52 @@ offline:
 # Training Loop
 # ---------------------------
 training:
-  # Budget / rollout
   max_env_steps_per_episode: null
-  max_train_env_steps: 300000
+  max_train_env_steps: 120000
   expert_check: false
 
-  # Warmup / gating
   warmup:
-    episodes: 5
+    episodes: 100
+
   online_prefill:
-    enabled: false
-    dataset_paths: []
+    enabled: true
+    dataset_paths:
+      - /vla/users/niejunnan/codebase/serl_torch/examples/libero/data/online_prefill/libero_10_task_6/stepchunk/manifest.json
   random_steps: 0
   enable_base_probing: false
   probing_alpha: null
   probing_min_steps: 0
   probing_max_steps: 0
 
-  # Learner updates
   training_starts: 1000
   update_every: 1
   updates_per_step: 1
+
   async:
-    enabled: false
-    backend: process   # process | thread | agentlace
+    enabled: true
     update_frequency: 10
     idle_sleep_sec: 0.002
-    actor_device: null
-    learner_device: null
-    batch_queue_size: 2
-    trainer_host: 127.0.0.1
-    trainer_port: 5488
-    broadcast_port: 5489
-    data_store_queue_size: 2000
-    stats_period_steps: 100
-    agentlace:
-      spawn_local_worker: true
-      bootstrap_file: agentlace_bootstrap.pkl
-      connect_timeout_sec: 120.0
-    bounded_lag:
-      enabled: false
-      max_update_lag_calls: 2
-      poll_sec: 0.2
-      timeout_sec: 30.0
-      sync_on_wait: true
-      log_period_steps: 1000
+    trainer_port: 5598
+    broadcast_port: 5599
 
-  # Performance
   replay_prefetch:
     enabled: true
     queue_size: 2
     pin_memory: true
     to_device: true
-  mixed_precision:
-    enabled: false
-    dtype: bfloat16
   profiling:
-    enabled: false
-    window_size: 2048
-    log_period_steps: 500
+    enabled: true
+    window_size: 1024
+    log_period_steps: 200
     log_file: profiling_logs.jsonl
 
-  # Checkpointing
   checkpoint:
-    every_steps: 2500
+    every_steps: 0
     keep: 0
     dir: checkpoints
 
-  # Async evaluation
   async_eval:
-    enabled: true
+    enabled: false
     every_episodes: 20
     episodes: 50
     seed: 7
@@ -216,7 +194,7 @@ training:
     probing_min_steps: 0
     probing_max_steps: 0
     env_host: 127.0.0.1
-    env_port: 31014
+    env_port: 35332
     env_timeout_sec: 180.0
     reuse_openpi_port: true
     openpi_host: null
@@ -227,17 +205,17 @@ training:
     summary_jsonl: async_eval_results.jsonl
     eval_script: null
     python_executable: null
-    alpha_mode: checkpoint_schedule  # checkpoint_schedule | base | fixed
+    alpha_mode: checkpoint_schedule
     fixed_alpha: null
 
-  # Optional pretrain / scheduler
   calql_pretrain:
-    enabled: true
+    enabled: false
     steps: 2000
     batch_size: 128
     alpha: 1.0
     n_actions: 10
     temperature: 1.0
+
   alpha_scheduler:
     enabled: false
     type: linear
@@ -258,12 +236,12 @@ logging:
   episode_log_file: episode_logs.jsonl
   summary_file: summary.json
   tb_step_period: 100
-  tb_histogram_period: 1000
+  tb_histogram_period: 1000000
 
 normalization:
-  enabled: true
+  enabled: false
   stats_dir: null
 
 hydra:
   run:
-    dir: outputs/libero/train_residual_sac/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: outputs/libero/exp9/chunk/chunk_state-raw_alpha-01_async_profile/${now:%Y-%m-%d}/${now:%H-%M-%S}

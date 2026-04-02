@@ -31,6 +31,9 @@ from serl_torch.examples.libero.data.offline_bootstrap import (
 from serl_torch.examples.libero.data.offline_residual import (
     _load_offline_residual_buffer,
 )
+from serl_torch.examples.libero.data.online_prefill_dataset import (
+    _load_online_prefill_buffer,
+)
 from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
@@ -65,6 +68,7 @@ from serl_torch.examples.libero.utils.config_utils import (
 )
 from serl_torch.examples.libero.utils.obs_utils import _obs_space_from_sample
 from serl_torch.examples.libero.utils.pretrain import _pretrain_critic_with_calql
+from serl_torch.examples.libero.utils.profiling import _RuntimeProfiler
 from serl_torch.examples.libero.utils.schedules import _scheduled_alpha
 from serl_torch.examples.libero.utils.serialization import _to_jsonable
 from serl_torch.examples.libero.utils.step_chunk_replay import ChunkReplayBuffer
@@ -396,6 +400,27 @@ def main(cfg: DictConfig) -> None:
         if async_agentlace_cfg is not None
         else 120.0
     )
+    profiling_cfg = cfg.training.get("profiling", None)
+    profiling_enabled = (
+        bool(profiling_cfg.get("enabled", False))
+        if profiling_cfg is not None
+        else False
+    )
+    profiling_window_size = (
+        int(profiling_cfg.get("window_size", 2048))
+        if profiling_cfg is not None
+        else 2048
+    )
+    profiling_log_period_steps = (
+        int(profiling_cfg.get("log_period_steps", 500))
+        if profiling_cfg is not None
+        else 500
+    )
+    profiling_log_file = (
+        str(profiling_cfg.get("log_file", "profiling_logs.jsonl"))
+        if profiling_cfg is not None
+        else "profiling_logs.jsonl"
+    )
 
     if not Path(async_agentlace_bootstrap_file).expanduser().is_absolute():
         logger.warning(
@@ -488,6 +513,22 @@ def main(cfg: DictConfig) -> None:
 
     offline_buffer = None
     learner_env = None
+    online_prefill_stats: Dict[str, Any] = {
+        "enabled": 0,
+        "mode": "stepchunk" if chunk_step_enabled else "step",
+        "files_total": 0,
+        "files_loaded": 0,
+        "files_missing": 0,
+        "episodes_loaded": 0,
+        "candidates": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "errors": 0,
+        "success_episodes": 0,
+        "episode_return_sum": 0.0,
+        "episode_step_sum": 0,
+        "recent_episode_successes": [],
+    }
     offline_enabled = bool(cfg.offline.enabled)
     if offline_enabled:
         offline_buffer = _build_offline_replay(
@@ -583,9 +624,70 @@ def main(cfg: DictConfig) -> None:
                     offline_stats.get("errors", 0),
                 )
 
+    warmup_cfg = cfg.training.get("warmup", None)
+    configured_warmup_episodes = (
+        int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
+    )
+    online_prefill_cfg = cfg.training.get("online_prefill", None)
+    online_prefill_enabled = (
+        bool(online_prefill_cfg.get("enabled", False))
+        if online_prefill_cfg is not None
+        else False
+    )
+    if online_prefill_enabled and configured_warmup_episodes > 0:
+        online_prefill_stats = _load_online_prefill_buffer(
+            cfg,
+            replay_buffer=replay_buffer,
+            sample_obs_template=sample_obs,
+            action_dim=int(env_action_dim),
+            chunk_horizon=int(chunk_horizon),
+            image_keys=tuple(image_keys),
+            stack_horizon=int(cfg.sac.obs_stack_horizon),
+            chunk_step_enabled=bool(chunk_step_enabled),
+            logger=logger,
+            normalizer=normalizer,
+            profiler=None,
+            max_episodes=int(configured_warmup_episodes),
+            state_mode=state_mode,
+        )
+        online_prefill_loaded_episodes = int(
+            online_prefill_stats.get("episodes_loaded", 0)
+        )
+        if (
+            online_prefill_loaded_episodes <= 0
+            or int(online_prefill_stats.get("inserted", 0)) <= 0
+        ):
+            raise RuntimeError(
+                "training.online_prefill.enabled=true but no online prefill "
+                "episodes were loaded into the learner replay buffer"
+            )
+        logger.info(
+            "online prefill (learner-owned): episodes_loaded=%s/%s files_loaded=%s/%s "
+            "inserted=%s success_episodes=%s",
+            online_prefill_loaded_episodes,
+            configured_warmup_episodes,
+            online_prefill_stats.get("files_loaded", 0),
+            online_prefill_stats.get("files_total", 0),
+            online_prefill_stats.get("inserted", 0),
+            online_prefill_stats.get("success_episodes", 0),
+        )
+    elif online_prefill_enabled:
+        logger.info(
+            "training.online_prefill.enabled=true but training.warmup.episodes=%s; "
+            "skipping learner-owned online prefill load",
+            configured_warmup_episodes,
+        )
+
     step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
     episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
+    profiling_logger: Optional[JsonlLogger] = None
+    if profiling_enabled:
+        profiling_logger = JsonlLogger(run_dir / profiling_log_file)
     tb_writer = SummaryWriter(log_dir=str(run_dir / "tb"))
+    profiler = _RuntimeProfiler(
+        enabled=profiling_enabled,
+        window_size=profiling_window_size,
+    )
     stats_logger = _LearnerStatsLogger(
         logger=logger,
         step_logger=step_logger,
@@ -649,6 +751,12 @@ def main(cfg: DictConfig) -> None:
             host=async_trainer_host,
             port_number=async_trainer_port,
             broadcast_port=async_broadcast_port,
+            profiler=profiler,
+            profiling_log_period_steps=profiling_log_period_steps,
+            profiling_logger=profiling_logger,
+            profiling_tb_writer=tb_writer,
+            profiling_python_logger=logger,
+            online_prefill_stats=online_prefill_stats,
             status_queue=None,
             command_queue=None,
             stats_request_callback=stats_logger.handle_payload,
@@ -663,6 +771,8 @@ def main(cfg: DictConfig) -> None:
                 pass
         step_logger.close()
         episode_logger.close()
+        if profiling_logger is not None:
+            profiling_logger.close()
         tb_writer.close()
 
 

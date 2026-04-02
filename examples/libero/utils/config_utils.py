@@ -67,6 +67,20 @@ def resolve_image_keys(cfg: DictConfig) -> Tuple[str, ...]:
     return image_keys
 
 
+def build_mixed_precision_kwargs(cfg: DictConfig) -> Dict[str, Any]:
+    training_cfg = cfg.get("training", {})
+    mixed_precision_cfg = training_cfg.get("mixed_precision", None)
+    if mixed_precision_cfg is None:
+        return {
+            "enabled": False,
+            "dtype": "bfloat16",
+        }
+    return {
+        "enabled": bool(mixed_precision_cfg.get("enabled", False)),
+        "dtype": str(mixed_precision_cfg.get("dtype", "bfloat16")),
+    }
+
+
 def resolve_residual_observation_state_mode(cfg: DictConfig) -> str:
     residual_cfg = cfg.get("residual", None)
     observation_cfg = (
@@ -215,6 +229,7 @@ def build_drq_agent(
         ),
         temperature_init=float(cfg.sac.temperature_init),
         action_transform=action_transform,
+        mixed_precision=build_mixed_precision_kwargs(cfg),
     )
     # Optional SAC knobs (YAML-only ablations). When unset, SAC uses defaults
     # (e.g. target_entropy = -policy_dim/2).
