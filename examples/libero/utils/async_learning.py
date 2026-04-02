@@ -70,6 +70,7 @@ def _build_status_payload(
     update_steps: int,
     last_update_info: Dict[str, Any],
     replay_buffer: Any,
+    replay_prefetch_queue_size: Optional[int] = None,
     sync_payload: Optional[Dict[str, Any]] = None,
     message_type: str = "status",
 ) -> Dict[str, Any]:
@@ -80,6 +81,8 @@ def _build_status_payload(
         "replay_num_steps": int(getattr(replay_buffer, "num_steps", len(replay_buffer))),
         "replay_sampleable_size": int(_replay_sampleable_size(replay_buffer)),
     }
+    if replay_prefetch_queue_size is not None:
+        payload["replay_prefetch_queue_size"] = int(replay_prefetch_queue_size)
     if sync_payload is not None:
         payload["sync_payload"] = sync_payload
     return payload
@@ -217,7 +220,10 @@ class _BufferDataStoreAdapter:
     def __init__(self, buffer: Any) -> None:
         self.buffer = buffer
         self._latest_id = int(getattr(buffer, "num_steps", len(buffer)))
-        self._lock = threading.Lock()
+        # Agentlace serves inserts from RPC worker threads while the learner loop
+        # samples from the same replay object. Guard every access through one
+        # shared adapter so chunk replay never sees partially updated internals.
+        self._lock = threading.RLock()
 
     def insert(self, data: Dict[str, Any]) -> None:
         with self._lock:
@@ -234,7 +240,8 @@ class _BufferDataStoreAdapter:
             return self.buffer.sample(*args, **kwargs)
 
     def latest_data_id(self) -> int:
-        return int(self._latest_id)
+        with self._lock:
+            return int(self._latest_id)
 
     def get_latest_data(self, from_id: int):
         del from_id
@@ -242,14 +249,20 @@ class _BufferDataStoreAdapter:
 
     @property
     def num_steps(self) -> int:
-        return int(getattr(self.buffer, "num_steps", len(self.buffer)))
+        with self._lock:
+            return int(getattr(self.buffer, "num_steps", len(self.buffer)))
 
     def __len__(self) -> int:
-        return int(getattr(self.buffer, "__len__", lambda: self.num_steps)())
+        with self._lock:
+            length_fn = getattr(self.buffer, "__len__", None)
+            if callable(length_fn):
+                return int(length_fn())
+            return int(getattr(self.buffer, "num_steps", self._latest_id))
 
     @property
     def sampleable_size(self) -> int:
-        return int(_replay_sampleable_size(self.buffer))
+        with self._lock:
+            return int(_replay_sampleable_size(self.buffer))
 
 
 def _async_process_worker(
@@ -406,6 +419,10 @@ def run_agentlace_learner_service(
     host: str,
     port_number: int,
     broadcast_port: int,
+    replay_prefetch_enabled: Optional[bool] = None,
+    replay_prefetch_queue_size: Optional[int] = None,
+    replay_prefetch_pin_memory: Optional[bool] = None,
+    replay_prefetch_to_device: Optional[bool] = None,
     status_queue: Any = None,
     command_queue: Any = None,
     stats_request_callback: Optional[
@@ -418,6 +435,31 @@ def run_agentlace_learner_service(
     from .config_utils import build_drq_agent
 
     cfg = OmegaConf.create(cfg_dict)
+    replay_prefetch_cfg = cfg.training.get("replay_prefetch", None)
+    if replay_prefetch_enabled is None:
+        replay_prefetch_enabled = (
+            bool(replay_prefetch_cfg.get("enabled", False))
+            if replay_prefetch_cfg is not None
+            else False
+        )
+    if replay_prefetch_queue_size is None:
+        replay_prefetch_queue_size = (
+            int(replay_prefetch_cfg.get("queue_size", 2))
+            if replay_prefetch_cfg is not None
+            else 2
+        )
+    if replay_prefetch_pin_memory is None:
+        replay_prefetch_pin_memory = (
+            bool(replay_prefetch_cfg.get("pin_memory", False))
+            if replay_prefetch_cfg is not None
+            else False
+        )
+    if replay_prefetch_to_device is None:
+        replay_prefetch_to_device = (
+            bool(replay_prefetch_cfg.get("to_device", False))
+            if replay_prefetch_cfg is not None
+            else False
+        )
     learner_agent = build_drq_agent(
         cfg,
         sample_obs=sample_obs,
@@ -437,6 +479,29 @@ def run_agentlace_learner_service(
     )
     last_update_info: Dict[str, Any] = {}
     server = None
+    prefetcher: Optional[_MixedBatchPrefetcher] = None
+    replay_store = _BufferDataStoreAdapter(replay_buffer)
+
+    def _current_prefetch_queue_size() -> int:
+        if prefetcher is None:
+            return 0
+        return prefetcher.get_queue_size()
+
+    def _sample_batch() -> Optional[Tuple[Dict[str, Any], int, int]]:
+        if _replay_progress_size(replay_store) < int(training_starts):
+            return None
+        try:
+            return _sample_mixed_batch(
+                replay_store,
+                offline_buffer,
+                batch_size=int(batch_size),
+                offline_ratio=float(offline_ratio),
+                symmetric_replay=bool(symmetric_replay),
+            )
+        except (RuntimeError, ValueError) as exc:
+            if _is_transient_replay_unavailable(exc):
+                return None
+            raise
 
     def _handle_stats_request(payload: Dict[str, Any]) -> None:
         if stats_request_callback is not None:
@@ -444,7 +509,7 @@ def run_agentlace_learner_service(
                 dict(payload),
                 int(update_steps),
                 dict(last_update_info),
-                replay_buffer,
+                replay_store,
                 offline_buffer,
             )
             return
@@ -478,7 +543,8 @@ def run_agentlace_learner_service(
                 return _build_status_payload(
                     update_steps=int(update_steps),
                     last_update_info=dict(last_update_info),
-                    replay_buffer=replay_buffer,
+                    replay_buffer=replay_store,
+                    replay_prefetch_queue_size=_current_prefetch_queue_size(),
                 )
             raise ValueError(f"Invalid request type: {request_type}")
 
@@ -491,7 +557,7 @@ def run_agentlace_learner_service(
         )
         server.register_data_store(
             "actor_env",
-            _BufferDataStoreAdapter(replay_buffer),
+            replay_store,
         )
         server.start(threaded=True)
         _safe_status_emit(
@@ -499,15 +565,27 @@ def run_agentlace_learner_service(
             _build_status_payload(
                 update_steps=int(update_steps),
                 last_update_info=dict(last_update_info),
-                replay_buffer=replay_buffer,
+                replay_buffer=replay_store,
+                replay_prefetch_queue_size=_current_prefetch_queue_size(),
                 message_type="server_ready",
             ),
         )
         server.publish_network(
             _snapshot_agent_checkpoint_payload(learner_agent, step=update_steps)
         )
+        if replay_prefetch_enabled:
+            prefetcher = _MixedBatchPrefetcher(
+                sample_fn=_sample_batch,
+                queue_size=max(1, int(replay_prefetch_queue_size)),
+                idle_sleep_sec=float(idle_sleep_sec),
+                device=learner_agent.device,
+                pin_memory=bool(replay_prefetch_pin_memory),
+                to_device=bool(replay_prefetch_to_device),
+                profiler=None,
+            )
+            prefetcher.start()
 
-        while int(getattr(replay_buffer, "num_steps", len(replay_buffer))) < int(
+        while int(getattr(replay_store, "num_steps", len(replay_store))) < int(
             training_starts
         ):
             if command_queue is not None:
@@ -544,7 +622,8 @@ def run_agentlace_learner_service(
                             _build_status_payload(
                                 update_steps=int(update_steps),
                                 last_update_info=dict(last_update_info),
-                                replay_buffer=replay_buffer,
+                                replay_buffer=replay_store,
+                                replay_prefetch_queue_size=_current_prefetch_queue_size(),
                             ),
                         )
                         continue
@@ -564,25 +643,23 @@ def run_agentlace_learner_service(
             if stop_requested:
                 break
 
-            if int(getattr(replay_buffer, "num_steps", len(replay_buffer))) < int(
+            if int(getattr(replay_store, "num_steps", len(replay_store))) < int(
                 training_starts
             ):
                 time.sleep(idle_sleep_sec)
                 continue
 
-            try:
-                batch, online_bs, offline_bs = _sample_mixed_batch(
-                    replay_buffer,
-                    offline_buffer,
-                    batch_size=int(batch_size),
-                    offline_ratio=float(offline_ratio),
-                    symmetric_replay=bool(symmetric_replay),
+            if prefetcher is not None:
+                sampled = prefetcher.get(
+                    timeout=max(0.01, float(idle_sleep_sec)),
+                    allow_empty=True,
                 )
-            except (RuntimeError, ValueError) as exc:
-                if _is_transient_replay_unavailable(exc):
-                    time.sleep(idle_sleep_sec)
-                    continue
-                raise
+            else:
+                sampled = _sample_batch()
+            if sampled is None:
+                time.sleep(idle_sleep_sec)
+                continue
+            batch, online_bs, offline_bs = sampled
 
             learner_agent, info = learner_agent.update_high_utd(
                 batch,
@@ -600,7 +677,8 @@ def run_agentlace_learner_service(
                 _build_status_payload(
                     update_steps=int(update_steps),
                     last_update_info=dict(last_update_info),
-                    replay_buffer=replay_buffer,
+                    replay_buffer=replay_store,
+                    replay_prefetch_queue_size=_current_prefetch_queue_size(),
                 ),
             )
             if update_steps % max(1, int(update_frequency)) == 0:
@@ -613,6 +691,8 @@ def run_agentlace_learner_service(
 
             time.sleep(max(0.0, float(idle_sleep_sec) * 0.25))
     finally:
+        if prefetcher is not None:
+            prefetcher.stop()
         if server is not None:
             server.stop()
 
@@ -782,12 +862,19 @@ class _MixedBatchPrefetcher:
             self._exception = exc
             self._stop_event.set()
 
-    def get(self, timeout: float = 1.0) -> Optional[Tuple[Dict[str, Any], int, int]]:
+    def get(
+        self,
+        timeout: float = 1.0,
+        *,
+        allow_empty: bool = False,
+    ) -> Optional[Tuple[Dict[str, Any], int, int]]:
         while not self._stop_event.is_set():
             self._raise_if_failed()
             try:
                 prepared = self._queue.get(timeout=timeout)
             except queue.Empty:
+                if allow_empty:
+                    return None
                 continue
 
             return _consume_prepared_replay_batch(
@@ -1379,6 +1466,7 @@ class _AgentlaceAsyncLearner:
         )
         self._actor_stats: Dict[str, Any] = {}
         self._server_ready = False
+        self._remote_prefetch_queue_size: Optional[int] = None
         self._client_update_interval = max(1, int(update_frequency))
         self._pending_client_steps = 0
         self._last_client_update_ts = 0.0
@@ -1401,6 +1489,9 @@ class _AgentlaceAsyncLearner:
         info = payload.get("last_update_info", None)
         if info:
             self.last_update_info = dict(info)
+        prefetch_queue_size = payload.get("replay_prefetch_queue_size", None)
+        if prefetch_queue_size is not None:
+            self._remote_prefetch_queue_size = int(prefetch_queue_size)
         replay_num_steps = payload.get("replay_num_steps", None)
         replay_sampleable_size = payload.get("replay_sampleable_size", None)
         self._replay_proxy.sync_from_status(
@@ -1646,6 +1737,8 @@ class _AgentlaceAsyncLearner:
     def get_prefetch_queue_size(self) -> int:
         if not self._closed:
             self._pump_client(force_update=False, allow_empty_update=False)
+        if self._remote_prefetch_queue_size is not None:
+            return int(self._remote_prefetch_queue_size)
         if self._data_store is None:
             return 0
         try:
