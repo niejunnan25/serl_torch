@@ -1,6 +1,7 @@
 """Asynchronous learner and replay prefetch helpers."""
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 import queue
 import socket
@@ -19,7 +20,7 @@ from .checkpoint import (
     _snapshot_agent_checkpoint_payload,
     _write_checkpoint_payload,
 )
-from .profiling import _RuntimeProfiler
+from .profiling import _RuntimeProfiler, _emit_profiling_snapshot
 from .replay_batch import (
     _PreparedBatch,
     _consume_prepared_replay_batch,
@@ -43,7 +44,7 @@ def _make_agentlace_trainer_config(*, port_number: int, broadcast_port: int):
     return TrainerConfig(
         port_number=int(port_number),
         broadcast_port=int(broadcast_port),
-        request_types=["send-stats", "save-checkpoint", "get-status"],
+        request_types=["send-stats", "save-checkpoint", "get-status", "sync-now"],
     )
 
 
@@ -51,6 +52,26 @@ def _safe_status_emit(status_queue: Any, item: Dict[str, Any]) -> None:
     if status_queue is None:
         return
     _put_latest_queue_item(status_queue, item)
+
+
+def _resolve_poll_interval(
+    poll_interval_sec: Optional[float],
+    *,
+    default_sec: float,
+) -> float:
+    if poll_interval_sec is None:
+        return float(max(1e-4, default_sec))
+    return float(max(1e-4, poll_interval_sec))
+
+
+def _default_agentlace_poll_interval_sec(idle_sleep_sec: float) -> float:
+    return float(max(0.05, min(0.2, max(1e-4, float(idle_sleep_sec) * 25.0))))
+
+
+def _resolve_timeout_deadline(timeout_sec: Optional[float]) -> Optional[float]:
+    if timeout_sec is None:
+        return None
+    return time.monotonic() + max(0.0, float(timeout_sec))
 
 
 def _replay_sampleable_size(buffer: Any) -> int:
@@ -71,6 +92,7 @@ def _build_status_payload(
     last_update_info: Dict[str, Any],
     replay_buffer: Any,
     replay_prefetch_queue_size: Optional[int] = None,
+    online_prefill_stats: Optional[Dict[str, Any]] = None,
     sync_payload: Optional[Dict[str, Any]] = None,
     message_type: str = "status",
 ) -> Dict[str, Any]:
@@ -83,6 +105,8 @@ def _build_status_payload(
     }
     if replay_prefetch_queue_size is not None:
         payload["replay_prefetch_queue_size"] = int(replay_prefetch_queue_size)
+    if online_prefill_stats is not None:
+        payload["online_prefill_stats"] = dict(online_prefill_stats)
     if sync_payload is not None:
         payload["sync_payload"] = sync_payload
     return payload
@@ -423,6 +447,12 @@ def run_agentlace_learner_service(
     replay_prefetch_queue_size: Optional[int] = None,
     replay_prefetch_pin_memory: Optional[bool] = None,
     replay_prefetch_to_device: Optional[bool] = None,
+    online_prefill_stats: Optional[Dict[str, Any]] = None,
+    profiler: Optional[_RuntimeProfiler] = None,
+    profiling_log_period_steps: int = 500,
+    profiling_logger: Any = None,
+    profiling_tb_writer: Any = None,
+    profiling_python_logger: Optional[logging.Logger] = None,
     status_queue: Any = None,
     command_queue: Any = None,
     stats_request_callback: Optional[
@@ -477,15 +507,85 @@ def run_agentlace_learner_service(
         if initial_payload is not None
         else int(learner_agent.state.step)
     )
+    profiling_log_period_steps = max(1, int(profiling_log_period_steps))
     last_update_info: Dict[str, Any] = {}
     server = None
     prefetcher: Optional[_MixedBatchPrefetcher] = None
     replay_store = _BufferDataStoreAdapter(replay_buffer)
+    logger = profiling_python_logger or logging.getLogger(
+        "libero_agentlace_learner_service"
+    )
+    latest_progress: Dict[str, int] = {
+        "train_env_step": 0,
+        "decision_step": 0,
+        "train_episode_id": 0,
+    }
+    online_prefill_status_payload = (
+        dict(online_prefill_stats) if online_prefill_stats is not None else None
+    )
+    profiling_last_flush_env_step = -1
 
     def _current_prefetch_queue_size() -> int:
         if prefetcher is None:
             return 0
         return prefetcher.get_queue_size()
+
+    def _update_latest_progress(payload: Dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        candidate_payloads = []
+        timer_payload = payload.get("timer", None)
+        if isinstance(timer_payload, dict):
+            candidate_payloads.append(timer_payload)
+        train_episode_payload = payload.get("train_episode", None)
+        if isinstance(train_episode_payload, dict):
+            candidate_payloads.append(train_episode_payload)
+        candidate_payloads.append(payload)
+        for item in candidate_payloads:
+            if not isinstance(item, dict):
+                continue
+            train_env_step = item.get("train_env_step", None)
+            if train_env_step is not None:
+                latest_progress["train_env_step"] = max(
+                    int(latest_progress.get("train_env_step", 0)),
+                    int(train_env_step),
+                )
+            decision_step = item.get("decision_step", None)
+            if decision_step is not None:
+                latest_progress["decision_step"] = max(
+                    int(latest_progress.get("decision_step", 0)),
+                    int(decision_step),
+                )
+            train_episode_id = item.get("train_episode_id", None)
+            if train_episode_id is not None:
+                latest_progress["train_episode_id"] = max(
+                    int(latest_progress.get("train_episode_id", 0)),
+                    int(train_episode_id),
+                )
+
+    def _maybe_emit_profiling(force: bool = False) -> None:
+        nonlocal profiling_last_flush_env_step
+        if profiler is None or (not profiler.enabled) or (not profiler.has_data()):
+            return
+        current_train_env_step = int(latest_progress.get("train_env_step", 0))
+        if (not force) and profiling_last_flush_env_step >= 0:
+            if (current_train_env_step - profiling_last_flush_env_step) < int(
+                profiling_log_period_steps
+            ):
+                return
+        payload = _emit_profiling_snapshot(
+            profiler,
+            profile_logger=profiling_logger,
+            tb_writer=profiling_tb_writer,
+            logger=logger,
+            train_env_step=current_train_env_step,
+            decision_step=int(latest_progress.get("decision_step", 0)),
+            train_episode_id=int(latest_progress.get("train_episode_id", 0)),
+            learner_update_steps=int(update_steps),
+            replay_prefetch_queue_size=_current_prefetch_queue_size(),
+        )
+        if payload is not None:
+            profiling_last_flush_env_step = int(current_train_env_step)
 
     def _sample_batch() -> Optional[Tuple[Dict[str, Any], int, int]]:
         if _replay_progress_size(replay_store) < int(training_starts):
@@ -504,6 +604,7 @@ def run_agentlace_learner_service(
             raise
 
     def _handle_stats_request(payload: Dict[str, Any]) -> None:
+        _update_latest_progress(payload)
         if stats_request_callback is not None:
             stats_request_callback(
                 dict(payload),
@@ -522,6 +623,8 @@ def run_agentlace_learner_service(
         )
 
     try:
+        server = None
+
         def _stats_callback(request_type: str, payload: dict) -> dict:
             if request_type == "send-stats":
                 _handle_stats_request(dict(payload))
@@ -532,7 +635,7 @@ def run_agentlace_learner_service(
                     step=int(payload["step"]),
                 )
                 _write_checkpoint_payload(
-                    profiler=None,
+                    profiler=profiler,
                     checkpoint_dir=str(payload["checkpoint_dir"]),
                     payload=checkpoint_payload,
                     step=int(payload["step"]),
@@ -545,6 +648,23 @@ def run_agentlace_learner_service(
                     last_update_info=dict(last_update_info),
                     replay_buffer=replay_store,
                     replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                    online_prefill_stats=online_prefill_status_payload,
+                )
+            if request_type == "sync-now":
+                if server is None:
+                    raise RuntimeError("Agentlace trainer server is not ready")
+                server.publish_network(
+                    _snapshot_agent_checkpoint_payload(
+                        learner_agent,
+                        step=int(update_steps),
+                    )
+                )
+                return _build_status_payload(
+                    update_steps=int(update_steps),
+                    last_update_info=dict(last_update_info),
+                    replay_buffer=replay_store,
+                    replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                    online_prefill_stats=online_prefill_status_payload,
                 )
             raise ValueError(f"Invalid request type: {request_type}")
 
@@ -567,6 +687,7 @@ def run_agentlace_learner_service(
                 last_update_info=dict(last_update_info),
                 replay_buffer=replay_store,
                 replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                online_prefill_stats=online_prefill_status_payload,
                 message_type="server_ready",
             ),
         )
@@ -581,7 +702,7 @@ def run_agentlace_learner_service(
                 device=learner_agent.device,
                 pin_memory=bool(replay_prefetch_pin_memory),
                 to_device=bool(replay_prefetch_to_device),
-                profiler=None,
+                profiler=profiler,
             )
             prefetcher.start()
 
@@ -624,6 +745,7 @@ def run_agentlace_learner_service(
                                 last_update_info=dict(last_update_info),
                                 replay_buffer=replay_store,
                                 replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                                online_prefill_stats=online_prefill_status_payload,
                             ),
                         )
                         continue
@@ -633,7 +755,7 @@ def run_agentlace_learner_service(
                             step=int(command["step"]),
                         )
                         _write_checkpoint_payload(
-                            profiler=None,
+                            profiler=profiler,
                             checkpoint_dir=str(command["checkpoint_dir"]),
                             payload=checkpoint_payload,
                             step=int(command["step"]),
@@ -655,16 +777,49 @@ def run_agentlace_learner_service(
                     allow_empty=True,
                 )
             else:
+                sample_start = time.perf_counter()
                 sampled = _sample_batch()
+                if sampled is not None and profiler is not None:
+                    profiler.record_duration(
+                        "replay_sample",
+                        (time.perf_counter() - sample_start) * 1000.0,
+                    )
             if sampled is None:
                 time.sleep(idle_sleep_sec)
                 continue
-            batch, online_bs, offline_bs = sampled
+            if prefetcher is not None:
+                batch, online_bs, offline_bs = sampled
+            else:
+                prepare_start = time.perf_counter()
+                prepared = _prepare_replay_batch(
+                    sampled,
+                    device=learner_agent.device,
+                    pin_memory=bool(replay_prefetch_pin_memory),
+                    to_device=bool(replay_prefetch_to_device),
+                    profiler=profiler,
+                    cuda_stream=None,
+                )
+                batch, online_bs, offline_bs = _consume_prepared_replay_batch(
+                    prepared,
+                    device=learner_agent.device,
+                    profiler=profiler,
+                )
+                if profiler is not None:
+                    profiler.record_duration(
+                        "replay_prepare",
+                        (time.perf_counter() - prepare_start) * 1000.0,
+                    )
 
+            update_start = time.perf_counter()
             learner_agent, info = learner_agent.update_high_utd(
                 batch,
                 utd_ratio=int(cfg.sac.utd_ratio),
             )
+            if profiler is not None:
+                profiler.record_duration(
+                    "agent_update_high_utd",
+                    (time.perf_counter() - update_start) * 1000.0,
+                )
             info["online_batch_size"] = int(online_bs)
             info["offline_batch_size"] = int(offline_bs)
             info["offline_fraction"] = float(
@@ -674,13 +829,14 @@ def run_agentlace_learner_service(
             update_steps += 1
             _safe_status_emit(
                 status_queue,
-                _build_status_payload(
-                    update_steps=int(update_steps),
-                    last_update_info=dict(last_update_info),
-                    replay_buffer=replay_store,
-                    replay_prefetch_queue_size=_current_prefetch_queue_size(),
-                ),
-            )
+                    _build_status_payload(
+                        update_steps=int(update_steps),
+                        last_update_info=dict(last_update_info),
+                        replay_buffer=replay_store,
+                        replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                        online_prefill_stats=online_prefill_status_payload,
+                    ),
+                )
             if update_steps % max(1, int(update_frequency)) == 0:
                 server.publish_network(
                     _snapshot_agent_checkpoint_payload(
@@ -688,9 +844,11 @@ def run_agentlace_learner_service(
                         step=int(update_steps),
                     )
                 )
+            _maybe_emit_profiling(force=False)
 
             time.sleep(max(0.0, float(idle_sleep_sec) * 0.25))
     finally:
+        _maybe_emit_profiling(force=True)
         if prefetcher is not None:
             prefetcher.stop()
         if server is not None:
@@ -972,6 +1130,7 @@ class _AsyncLearner:
         self.learner_lock = threading.Lock()
 
         self.update_steps = 0
+        self.actor_synced_update_steps = int(self.actor_agent.state.step)
         self.last_update_info: Dict[str, Any] = {}
         self.prefetch_enabled = bool(replay_prefetch_enabled)
         self.prefetch_queue_size = max(1, int(replay_prefetch_queue_size))
@@ -984,9 +1143,11 @@ class _AsyncLearner:
         with self.learner_lock:
             with self.actor_lock:
                 _sync_agent_modules_inplace(self.actor_agent, self.learner_agent)
+                self.actor_synced_update_steps = int(self.update_steps)
 
-    def sync_now(self) -> None:
+    def sync_now(self, timeout_sec: Optional[float] = None) -> int:
         self._sync_actor()
+        return int(self.actor_synced_update_steps)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -1058,6 +1219,27 @@ class _AsyncLearner:
     def get_update_steps(self) -> int:
         with self.learner_lock:
             return int(self.update_steps)
+
+    def wait_for_update_steps(
+        self,
+        min_update_steps: int,
+        *,
+        poll_interval_sec: Optional[float] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> int:
+        target = max(0, int(min_update_steps))
+        poll_sec = _resolve_poll_interval(
+            poll_interval_sec,
+            default_sec=self.idle_sleep_sec,
+        )
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            current = self.get_update_steps()
+            if current >= target:
+                return int(current)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(current)
+            time.sleep(poll_sec)
 
     def get_prefetch_queue_size(self) -> int:
         if self._prefetcher is None:
@@ -1197,6 +1379,7 @@ class _ProcessAsyncLearner:
         self.learner_lock = threading.Lock()
 
         self.update_steps = 0
+        self.actor_synced_update_steps = int(self.actor_agent.state.step)
         self.last_update_info: Dict[str, Any] = {}
         self._exception: Optional[BaseException] = None
         self._process_traceback: Optional[str] = None
@@ -1244,6 +1427,9 @@ class _ProcessAsyncLearner:
                         sync_payload,
                         load_optimizers=False,
                     )
+                self.actor_synced_update_steps = int(
+                    message.get("update_steps", self.update_steps)
+                )
 
     def _sample_batch(self) -> Optional[Tuple[Dict[str, Any], int, int]]:
         with self.replay_lock:
@@ -1376,6 +1562,42 @@ class _ProcessAsyncLearner:
         self._raise_if_failed()
         return int(self.update_steps)
 
+    def sync_now(self, timeout_sec: Optional[float] = None) -> int:
+        self._drain_status_queue()
+        self._raise_if_failed()
+        target_update_steps = int(self.update_steps)
+        _put_latest_queue_item(self._command_queue, {"type": "sync_now"})
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            self._drain_status_queue()
+            self._raise_if_failed()
+            if int(self.actor_synced_update_steps) >= target_update_steps:
+                return int(self.actor_synced_update_steps)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(self.actor_synced_update_steps)
+            time.sleep(self.idle_sleep_sec)
+
+    def wait_for_update_steps(
+        self,
+        min_update_steps: int,
+        *,
+        poll_interval_sec: Optional[float] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> int:
+        target = max(0, int(min_update_steps))
+        poll_sec = _resolve_poll_interval(
+            poll_interval_sec,
+            default_sec=self.idle_sleep_sec,
+        )
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            current = self.get_update_steps()
+            if current >= target:
+                return int(current)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(current)
+            time.sleep(poll_sec)
+
     def get_prefetch_queue_size(self) -> int:
         self._drain_status_queue()
         self._raise_if_failed()
@@ -1423,6 +1645,7 @@ class _AgentlaceAsyncLearner:
         self.learner_lock = threading.Lock()
         self.replay_lock = threading.Lock()
         self.update_steps = 0
+        self.actor_synced_update_steps = int(self.actor_agent.state.step)
         self.last_update_info: Dict[str, Any] = {}
         self._exception: Optional[BaseException] = None
         self._process_traceback: Optional[str] = None
@@ -1467,6 +1690,7 @@ class _AgentlaceAsyncLearner:
         self._actor_stats: Dict[str, Any] = {}
         self._server_ready = False
         self._remote_prefetch_queue_size: Optional[int] = None
+        self._online_prefill_stats: Dict[str, Any] = {}
         self._client_update_interval = max(1, int(update_frequency))
         self._pending_client_steps = 0
         self._last_client_update_ts = 0.0
@@ -1489,6 +1713,9 @@ class _AgentlaceAsyncLearner:
         info = payload.get("last_update_info", None)
         if info:
             self.last_update_info = dict(info)
+        online_prefill_stats = payload.get("online_prefill_stats", None)
+        if isinstance(online_prefill_stats, dict):
+            self._online_prefill_stats = dict(online_prefill_stats)
         prefetch_queue_size = payload.get("replay_prefetch_queue_size", None)
         if prefetch_queue_size is not None:
             self._remote_prefetch_queue_size = int(prefetch_queue_size)
@@ -1511,6 +1738,9 @@ class _AgentlaceAsyncLearner:
                 self.actor_agent,
                 payload,
                 load_optimizers=False,
+            )
+            self.actor_synced_update_steps = int(
+                payload.get("step", self.actor_agent.state.step)
             )
 
     def _ensure_agentlace(self) -> None:
@@ -1585,6 +1815,26 @@ class _AgentlaceAsyncLearner:
 
     def flush(self) -> None:
         self._pump_client(force_update=True, allow_empty_update=True)
+
+    def sync_now(self, timeout_sec: Optional[float] = None) -> int:
+        if self._closed:
+            return int(self.actor_synced_update_steps)
+        self._pump_client(force_update=True, allow_empty_update=True)
+        target_update_steps = int(self.update_steps)
+        if self._client is None:
+            return int(self.actor_synced_update_steps)
+        payload = self._client.request("sync-now", {})
+        if isinstance(payload, dict):
+            self._ingest_status_payload(payload)
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            self._drain_status_queue()
+            self._raise_if_failed()
+            if int(self.actor_synced_update_steps) >= target_update_steps:
+                return int(self.actor_synced_update_steps)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(self.actor_synced_update_steps)
+            time.sleep(self.idle_sleep_sec)
 
     def start(self) -> None:
         if self._client is not None:
@@ -1734,6 +1984,29 @@ class _AgentlaceAsyncLearner:
             self._pump_client(force_update=False, allow_empty_update=False)
         return int(self.update_steps)
 
+    def wait_for_update_steps(
+        self,
+        min_update_steps: int,
+        *,
+        poll_interval_sec: Optional[float] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> int:
+        target = max(0, int(min_update_steps))
+        poll_sec = _resolve_poll_interval(
+            poll_interval_sec,
+            default_sec=_default_agentlace_poll_interval_sec(self.idle_sleep_sec),
+        )
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            if not self._closed:
+                self._pump_client(force_update=False, allow_empty_update=True)
+            current = int(self.update_steps)
+            if current >= target:
+                return int(current)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(current)
+            time.sleep(poll_sec)
+
     def get_prefetch_queue_size(self) -> int:
         if not self._closed:
             self._pump_client(force_update=False, allow_empty_update=False)
@@ -1745,3 +2018,8 @@ class _AgentlaceAsyncLearner:
             return int(self._data_store.qsize())
         except Exception:  # noqa: BLE001
             return 0
+
+    def get_online_prefill_stats(self) -> Dict[str, Any]:
+        if not self._closed:
+            self._pump_client(force_update=False, allow_empty_update=True)
+        return dict(self._online_prefill_stats)
