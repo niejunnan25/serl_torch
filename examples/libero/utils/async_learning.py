@@ -43,7 +43,7 @@ def _make_agentlace_trainer_config(*, port_number: int, broadcast_port: int):
     return TrainerConfig(
         port_number=int(port_number),
         broadcast_port=int(broadcast_port),
-        request_types=["send-stats", "save-checkpoint", "get-status"],
+        request_types=["send-stats", "save-checkpoint", "get-status", "sync-now"],
     )
 
 
@@ -51,6 +51,22 @@ def _safe_status_emit(status_queue: Any, item: Dict[str, Any]) -> None:
     if status_queue is None:
         return
     _put_latest_queue_item(status_queue, item)
+
+
+def _resolve_poll_interval(
+    poll_interval_sec: Optional[float],
+    *,
+    default_sec: float,
+) -> float:
+    if poll_interval_sec is None:
+        return float(max(1e-4, default_sec))
+    return float(max(1e-4, poll_interval_sec))
+
+
+def _resolve_timeout_deadline(timeout_sec: Optional[float]) -> Optional[float]:
+    if timeout_sec is None:
+        return None
+    return time.monotonic() + max(0.0, float(timeout_sec))
 
 
 def _replay_sampleable_size(buffer: Any) -> int:
@@ -522,6 +538,8 @@ def run_agentlace_learner_service(
         )
 
     try:
+        server = None
+
         def _stats_callback(request_type: str, payload: dict) -> dict:
             if request_type == "send-stats":
                 _handle_stats_request(dict(payload))
@@ -540,6 +558,21 @@ def run_agentlace_learner_service(
                 )
                 return {}
             if request_type == "get-status":
+                return _build_status_payload(
+                    update_steps=int(update_steps),
+                    last_update_info=dict(last_update_info),
+                    replay_buffer=replay_store,
+                    replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                )
+            if request_type == "sync-now":
+                if server is None:
+                    raise RuntimeError("Agentlace trainer server is not ready")
+                server.publish_network(
+                    _snapshot_agent_checkpoint_payload(
+                        learner_agent,
+                        step=int(update_steps),
+                    )
+                )
                 return _build_status_payload(
                     update_steps=int(update_steps),
                     last_update_info=dict(last_update_info),
@@ -972,6 +1005,7 @@ class _AsyncLearner:
         self.learner_lock = threading.Lock()
 
         self.update_steps = 0
+        self.actor_synced_update_steps = int(self.actor_agent.state.step)
         self.last_update_info: Dict[str, Any] = {}
         self.prefetch_enabled = bool(replay_prefetch_enabled)
         self.prefetch_queue_size = max(1, int(replay_prefetch_queue_size))
@@ -984,9 +1018,11 @@ class _AsyncLearner:
         with self.learner_lock:
             with self.actor_lock:
                 _sync_agent_modules_inplace(self.actor_agent, self.learner_agent)
+                self.actor_synced_update_steps = int(self.update_steps)
 
-    def sync_now(self) -> None:
+    def sync_now(self, timeout_sec: Optional[float] = None) -> int:
         self._sync_actor()
+        return int(self.actor_synced_update_steps)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -1058,6 +1094,27 @@ class _AsyncLearner:
     def get_update_steps(self) -> int:
         with self.learner_lock:
             return int(self.update_steps)
+
+    def wait_for_update_steps(
+        self,
+        min_update_steps: int,
+        *,
+        poll_interval_sec: Optional[float] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> int:
+        target = max(0, int(min_update_steps))
+        poll_sec = _resolve_poll_interval(
+            poll_interval_sec,
+            default_sec=self.idle_sleep_sec,
+        )
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            current = self.get_update_steps()
+            if current >= target:
+                return int(current)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(current)
+            time.sleep(poll_sec)
 
     def get_prefetch_queue_size(self) -> int:
         if self._prefetcher is None:
@@ -1197,6 +1254,7 @@ class _ProcessAsyncLearner:
         self.learner_lock = threading.Lock()
 
         self.update_steps = 0
+        self.actor_synced_update_steps = int(self.actor_agent.state.step)
         self.last_update_info: Dict[str, Any] = {}
         self._exception: Optional[BaseException] = None
         self._process_traceback: Optional[str] = None
@@ -1244,6 +1302,9 @@ class _ProcessAsyncLearner:
                         sync_payload,
                         load_optimizers=False,
                     )
+                self.actor_synced_update_steps = int(
+                    message.get("update_steps", self.update_steps)
+                )
 
     def _sample_batch(self) -> Optional[Tuple[Dict[str, Any], int, int]]:
         with self.replay_lock:
@@ -1376,6 +1437,42 @@ class _ProcessAsyncLearner:
         self._raise_if_failed()
         return int(self.update_steps)
 
+    def sync_now(self, timeout_sec: Optional[float] = None) -> int:
+        self._drain_status_queue()
+        self._raise_if_failed()
+        target_update_steps = int(self.update_steps)
+        _put_latest_queue_item(self._command_queue, {"type": "sync_now"})
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            self._drain_status_queue()
+            self._raise_if_failed()
+            if int(self.actor_synced_update_steps) >= target_update_steps:
+                return int(self.actor_synced_update_steps)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(self.actor_synced_update_steps)
+            time.sleep(self.idle_sleep_sec)
+
+    def wait_for_update_steps(
+        self,
+        min_update_steps: int,
+        *,
+        poll_interval_sec: Optional[float] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> int:
+        target = max(0, int(min_update_steps))
+        poll_sec = _resolve_poll_interval(
+            poll_interval_sec,
+            default_sec=self.idle_sleep_sec,
+        )
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            current = self.get_update_steps()
+            if current >= target:
+                return int(current)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(current)
+            time.sleep(poll_sec)
+
     def get_prefetch_queue_size(self) -> int:
         self._drain_status_queue()
         self._raise_if_failed()
@@ -1423,6 +1520,7 @@ class _AgentlaceAsyncLearner:
         self.learner_lock = threading.Lock()
         self.replay_lock = threading.Lock()
         self.update_steps = 0
+        self.actor_synced_update_steps = int(self.actor_agent.state.step)
         self.last_update_info: Dict[str, Any] = {}
         self._exception: Optional[BaseException] = None
         self._process_traceback: Optional[str] = None
@@ -1512,6 +1610,9 @@ class _AgentlaceAsyncLearner:
                 payload,
                 load_optimizers=False,
             )
+            self.actor_synced_update_steps = int(
+                payload.get("step", self.actor_agent.state.step)
+            )
 
     def _ensure_agentlace(self) -> None:
         try:
@@ -1585,6 +1686,26 @@ class _AgentlaceAsyncLearner:
 
     def flush(self) -> None:
         self._pump_client(force_update=True, allow_empty_update=True)
+
+    def sync_now(self, timeout_sec: Optional[float] = None) -> int:
+        if self._closed:
+            return int(self.actor_synced_update_steps)
+        self._pump_client(force_update=True, allow_empty_update=True)
+        target_update_steps = int(self.update_steps)
+        if self._client is None:
+            return int(self.actor_synced_update_steps)
+        payload = self._client.request("sync-now", {})
+        if isinstance(payload, dict):
+            self._ingest_status_payload(payload)
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            self._drain_status_queue()
+            self._raise_if_failed()
+            if int(self.actor_synced_update_steps) >= target_update_steps:
+                return int(self.actor_synced_update_steps)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(self.actor_synced_update_steps)
+            time.sleep(self.idle_sleep_sec)
 
     def start(self) -> None:
         if self._client is not None:
@@ -1733,6 +1854,29 @@ class _AgentlaceAsyncLearner:
         if not self._closed:
             self._pump_client(force_update=False, allow_empty_update=False)
         return int(self.update_steps)
+
+    def wait_for_update_steps(
+        self,
+        min_update_steps: int,
+        *,
+        poll_interval_sec: Optional[float] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> int:
+        target = max(0, int(min_update_steps))
+        poll_sec = _resolve_poll_interval(
+            poll_interval_sec,
+            default_sec=self.idle_sleep_sec,
+        )
+        deadline = _resolve_timeout_deadline(timeout_sec)
+        while True:
+            if not self._closed:
+                self._pump_client(force_update=False, allow_empty_update=True)
+            current = int(self.update_steps)
+            if current >= target:
+                return int(current)
+            if deadline is not None and time.monotonic() >= deadline:
+                return int(current)
+            time.sleep(poll_sec)
 
     def get_prefetch_queue_size(self) -> int:
         if not self._closed:
