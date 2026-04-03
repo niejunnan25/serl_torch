@@ -192,3 +192,6 @@ third_party/
 
 references/
 reference/
+
+# Temporary scratch files and directories
+tmp*

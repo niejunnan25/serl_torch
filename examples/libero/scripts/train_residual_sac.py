@@ -85,8 +85,10 @@ from serl_torch.examples.libero.utils.async_eval import (
     _sync_async_eval_results_to_tb,
 )
 from serl_torch.examples.libero.utils.async_learning import (
+    _AgentlaceAsyncLearner,
     _AsyncLearner,
     _MixedBatchPrefetcher,
+    _ProcessAsyncLearner,
     _sample_mixed_batch,
     _sync_agent_modules_inplace,
 )
@@ -117,6 +119,10 @@ from serl_torch.examples.libero.utils.obs_utils import (
 from serl_torch.examples.libero.utils.alpha_utils import (
     require_residual_alpha,
     validate_alpha,
+)
+from serl_torch.examples.libero.utils.agentlace_io import (
+    resolve_agentlace_bootstrap_path,
+    save_agentlace_bootstrap,
 )
 from serl_torch.examples.libero.utils.profiling import (
     _RuntimeProfiler,
@@ -165,7 +171,7 @@ def main(cfg: DictConfig) -> None:
     logging.basicConfig(
         level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
     )
-    logger = logging.getLogger("libero_train_residual_sac")
+    logger = logging.getLogger()
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
@@ -351,6 +357,182 @@ def main(cfg: DictConfig) -> None:
         if async_cfg is not None
         else 0.002
     )
+    async_backend = (
+        str(async_cfg.get("backend", "thread")).strip().lower()
+        if async_cfg is not None
+        else "thread"
+    )
+    if async_backend not in {"thread", "process", "agentlace"}:
+        raise ValueError(
+            "training.async.backend must be 'thread', 'process', or 'agentlace', "
+            f"got {async_backend}"
+        )
+    async_actor_device = (
+        str(async_cfg.get("actor_device")).strip()
+        if async_cfg is not None and async_cfg.get("actor_device", None) is not None
+        else None
+    )
+    async_learner_device = (
+        str(async_cfg.get("learner_device")).strip()
+        if async_cfg is not None and async_cfg.get("learner_device", None) is not None
+        else None
+    )
+    async_batch_queue_size = (
+        int(async_cfg.get("batch_queue_size", 2)) if async_cfg is not None else 2
+    )
+    async_trainer_host = (
+        str(async_cfg.get("trainer_host", "127.0.0.1"))
+        if async_cfg is not None
+        else "127.0.0.1"
+    )
+    async_trainer_port = (
+        int(async_cfg.get("trainer_port", 5488)) if async_cfg is not None else 5488
+    )
+    async_broadcast_port = (
+        int(async_cfg.get("broadcast_port", 5489)) if async_cfg is not None else 5489
+    )
+    async_data_store_queue_size = (
+        int(async_cfg.get("data_store_queue_size", 2000))
+        if async_cfg is not None
+        else 2000
+    )
+    async_stats_period_steps = (
+        int(async_cfg.get("stats_period_steps", 100)) if async_cfg is not None else 100
+    )
+    async_agentlace_cfg = (
+        async_cfg.get("agentlace", None) if async_cfg is not None else None
+    )
+    async_agentlace_spawn_local_worker = (
+        bool(async_agentlace_cfg.get("spawn_local_worker", True))
+        if async_agentlace_cfg is not None
+        else True
+    )
+    async_agentlace_bootstrap_file = (
+        str(async_agentlace_cfg.get("bootstrap_file", "agentlace_bootstrap.pkl"))
+        if async_agentlace_cfg is not None
+        else "agentlace_bootstrap.pkl"
+    )
+    async_agentlace_connect_timeout_sec = (
+        float(async_agentlace_cfg.get("connect_timeout_sec", 120.0))
+        if async_agentlace_cfg is not None
+        else 120.0
+    )
+    async_bounded_lag_cfg = (
+        async_cfg.get("bounded_lag", None) if async_cfg is not None else None
+    )
+    async_bounded_lag_cfg_enabled = (
+        bool(async_bounded_lag_cfg.get("enabled", False))
+        if async_bounded_lag_cfg is not None
+        else False
+    )
+    async_bounded_lag_enabled = (
+        bool(async_enabled) and bool(async_bounded_lag_cfg_enabled)
+    )
+    async_bounded_lag_max_update_calls = (
+        int(async_bounded_lag_cfg.get("max_update_lag_calls", 2))
+        if async_bounded_lag_cfg is not None
+        else 2
+    )
+    async_bounded_lag_poll_sec = (
+        async_bounded_lag_cfg.get("poll_sec", None)
+        if async_bounded_lag_cfg is not None
+        else None
+    )
+    if async_bounded_lag_poll_sec is not None:
+        async_bounded_lag_poll_sec = float(async_bounded_lag_poll_sec)
+    async_bounded_lag_timeout_sec = (
+        async_bounded_lag_cfg.get("timeout_sec", 30.0)
+        if async_bounded_lag_cfg is not None
+        else 30.0
+    )
+    if async_bounded_lag_timeout_sec is not None:
+        async_bounded_lag_timeout_sec = float(async_bounded_lag_timeout_sec)
+    async_bounded_lag_sync_on_wait = (
+        bool(async_bounded_lag_cfg.get("sync_on_wait", True))
+        if async_bounded_lag_cfg is not None
+        else True
+    )
+    async_bounded_lag_log_period_steps = (
+        int(async_bounded_lag_cfg.get("log_period_steps", async_stats_period_steps))
+        if async_bounded_lag_cfg is not None
+        else int(async_stats_period_steps)
+    )
+    async_bounded_lag_env_steps_per_update_call = (
+        async_bounded_lag_cfg.get("env_steps_per_update_call", None)
+        if async_bounded_lag_cfg is not None
+        else None
+    )
+    if async_bounded_lag_env_steps_per_update_call is not None:
+        async_bounded_lag_env_steps_per_update_call = float(
+            async_bounded_lag_env_steps_per_update_call
+        )
+        if not async_bounded_lag_env_steps_per_update_call.is_integer():
+            raise ValueError(
+                "training.async.bounded_lag.env_steps_per_update_call must be "
+                "an integer env-step count when set, got "
+                f"{async_bounded_lag_env_steps_per_update_call}"
+            )
+        async_bounded_lag_env_steps_per_update_call = int(
+            async_bounded_lag_env_steps_per_update_call
+        )
+    async_bounded_lag_manual_rate_enabled = bool(
+        async_bounded_lag_enabled
+        and async_bounded_lag_env_steps_per_update_call is not None
+    )
+    async_bounded_lag_mode = (
+        "manual_env_steps_per_update_call"
+        if async_bounded_lag_manual_rate_enabled
+        else "sync_trigger_budget"
+    )
+    if async_bounded_lag_max_update_calls < 0:
+        raise ValueError(
+            "training.async.bounded_lag.max_update_lag_calls must be >= 0, "
+            f"got {async_bounded_lag_max_update_calls}"
+        )
+    if (
+        async_bounded_lag_poll_sec is not None
+        and float(async_bounded_lag_poll_sec) <= 0.0
+    ):
+        raise ValueError(
+            "training.async.bounded_lag.poll_sec must be positive when set, "
+            f"got {async_bounded_lag_poll_sec}"
+        )
+    if (
+        async_bounded_lag_timeout_sec is not None
+        and float(async_bounded_lag_timeout_sec) < 0.0
+    ):
+        raise ValueError(
+            "training.async.bounded_lag.timeout_sec must be >= 0 when set, "
+            f"got {async_bounded_lag_timeout_sec}"
+        )
+    if (
+        async_bounded_lag_env_steps_per_update_call is not None
+        and int(async_bounded_lag_env_steps_per_update_call) <= 0
+    ):
+        raise ValueError(
+            "training.async.bounded_lag.env_steps_per_update_call must be "
+            f"positive when set, got {async_bounded_lag_env_steps_per_update_call}"
+        )
+    if (
+        async_bounded_lag_env_steps_per_update_call is not None
+        and (not async_bounded_lag_enabled)
+    ):
+        logger.warning(
+            "training.async.bounded_lag.env_steps_per_update_call=%s is set, but "
+            "bounded lag is disabled (async.enabled=%s, bounded_lag.enabled=%s); "
+            "manual env-step/update-call pacing is ignored",
+            int(async_bounded_lag_env_steps_per_update_call),
+            bool(async_enabled),
+            bool(async_bounded_lag_cfg_enabled),
+        )
+    if (
+        async_bounded_lag_manual_rate_enabled
+        and int(cfg.training.updates_per_step) != 1
+    ):
+        raise ValueError(
+            "training.async.bounded_lag.env_steps_per_update_call requires "
+            f"training.updates_per_step=1, got {int(cfg.training.updates_per_step)}"
+        )
     replay_prefetch_cfg = cfg.training.get("replay_prefetch", None)
     replay_prefetch_enabled = (
         bool(replay_prefetch_cfg.get("enabled", True))
@@ -400,11 +582,57 @@ def main(cfg: DictConfig) -> None:
             "Detected non-train phase in training.phases; disable async mode to preserve phase semantics."
         )
         async_enabled = False
+    external_agentlace_actor_mode = bool(
+        async_enabled
+        and async_backend == "agentlace"
+        and (not async_agentlace_spawn_local_worker)
+    )
+    manage_learner_state_locally = not external_agentlace_actor_mode
     logger.info(
-        "Async collection-learning: enabled=%s update_frequency=%s idle_sleep_sec=%.4f",
+        "Async collection-learning: enabled=%s backend=%s update_frequency=%s "
+        "idle_sleep_sec=%.4f actor_device=%s learner_device=%s batch_queue_size=%s "
+        "trainer_host=%s trainer_port=%s broadcast_port=%s data_store_queue_size=%s "
+        "stats_period_steps=%s "
+        "agentlace_spawn_local_worker=%s agentlace_bootstrap_file=%s "
+        "agentlace_connect_timeout_sec=%.1f",
         async_enabled,
+        async_backend,
         async_update_frequency,
         async_idle_sleep_sec,
+        async_actor_device,
+        async_learner_device,
+        async_batch_queue_size,
+        async_trainer_host,
+        async_trainer_port,
+        async_broadcast_port,
+        async_data_store_queue_size,
+        async_stats_period_steps,
+        async_agentlace_spawn_local_worker,
+        async_agentlace_bootstrap_file,
+        async_agentlace_connect_timeout_sec,
+    )
+    logger.info(
+        "Async bounded-lag: enabled=%s mode=%s max_update_lag_calls=%s "
+        "env_steps_per_update_call=%s poll_sec=%s timeout_sec=%s sync_on_wait=%s",
+        async_bounded_lag_enabled,
+        async_bounded_lag_mode,
+        async_bounded_lag_max_update_calls,
+        (
+            None
+            if async_bounded_lag_env_steps_per_update_call is None
+            else float(async_bounded_lag_env_steps_per_update_call)
+        ),
+        (
+            None
+            if async_bounded_lag_poll_sec is None
+            else float(async_bounded_lag_poll_sec)
+        ),
+        (
+            None
+            if async_bounded_lag_timeout_sec is None
+            else float(async_bounded_lag_timeout_sec)
+        ),
+        async_bounded_lag_sync_on_wait,
     )
     logger.info(
         "Replay batch prefetch: enabled=%s queue_size=%s pin_memory=%s to_device=%s",
@@ -426,7 +654,7 @@ def main(cfg: DictConfig) -> None:
     )
     agent = None
     learner_agent = None
-    async_learner: Optional[_AsyncLearner] = None
+    async_learner: Optional[Any] = None
     sync_replay_lock: Optional[threading.Lock] = None
     sync_replay_prefetcher: Optional[_MixedBatchPrefetcher] = None
     checkpoint_writer: Optional[_AsyncCheckpointWriter] = None
@@ -461,6 +689,10 @@ def main(cfg: DictConfig) -> None:
         "episode_step_sum": 0,
         "recent_episode_successes": [],
     }
+
+    def _flush_external_agentlace_actor() -> None:
+        if external_agentlace_actor_mode and async_learner is not None:
+            async_learner.flush()
 
     checkpoint_cfg = cfg.training.get("checkpoint", None)
     if checkpoint_cfg is None:
@@ -535,7 +767,8 @@ def main(cfg: DictConfig) -> None:
     async_eval_watcher_return_code: Optional[int] = None
     async_eval_dead_reported = False
     profiler = _RuntimeProfiler(
-        enabled=profiling_enabled, window_size=profiling_window_size
+        enabled=(profiling_enabled or external_agentlace_actor_mode),
+        window_size=profiling_window_size,
     )
     checkpoint_writer = _AsyncCheckpointWriter(profiler=profiler)
     profiling_logger: Optional[JsonlLogger] = None
@@ -579,6 +812,254 @@ def main(cfg: DictConfig) -> None:
     step_metric_window = _new_tb_step_window()
     async_eval_tb_sync_state = _init_async_eval_tb_sync_state(async_eval_summary_path)
     obs_cache = LiberoObservationCache()
+    agentlace_timer_last_sent_step = -1
+    async_target_update_calls = 0
+    async_bounded_lag_tracked_env_steps = 0
+    async_bounded_lag_wait_count = 0
+    async_bounded_lag_timeout_count = 0
+    async_bounded_lag_wait_total_sec = 0.0
+    async_bounded_lag_last_wait_sec = 0.0
+    async_bounded_lag_last_required_update_steps = 0
+    async_bounded_lag_last_lag_before_wait = 0
+    async_bounded_lag_last_lag_after_wait = 0
+
+    def _build_agentlace_timer_payload(
+        *,
+        train_env_step_value: int,
+        decision_step_value: int,
+        train_episode_id_value: int,
+    ) -> Optional[Dict[str, Any]]:
+        if profiler is None or (not profiler.enabled) or (not profiler.has_data()):
+            return None
+        snapshot = profiler.snapshot()
+        payload: Dict[str, Any] = {
+            "train_env_step": int(train_env_step_value),
+            "decision_step": int(decision_step_value),
+            "train_episode_id": int(train_episode_id_value),
+            "online_buffer_size": int(len(replay_buffer)) if replay_buffer is not None else 0,
+        }
+        if offline_buffer is not None:
+            payload["offline_buffer_size"] = int(len(offline_buffer))
+        if async_learner is not None:
+            payload["learner_update_steps"] = int(async_learner.get_update_steps())
+            payload["replay_prefetch_queue_size"] = int(
+                async_learner.get_prefetch_queue_size()
+            )
+            if async_bounded_lag_enabled:
+                payload["bounded_lag_mode"] = str(async_bounded_lag_mode)
+                payload["bounded_lag_target_update_calls"] = int(
+                    async_target_update_calls
+                )
+                payload["bounded_lag_tracked_env_steps"] = int(
+                    async_bounded_lag_tracked_env_steps
+                )
+                if async_bounded_lag_env_steps_per_update_call is not None:
+                    payload["bounded_lag_env_steps_per_update_call"] = float(
+                        async_bounded_lag_env_steps_per_update_call
+                    )
+                payload["bounded_lag_required_update_steps"] = int(
+                    async_bounded_lag_last_required_update_steps
+                )
+                payload["bounded_lag_lag_before_wait"] = int(
+                    async_bounded_lag_last_lag_before_wait
+                )
+                payload["bounded_lag_lag_after_wait"] = int(
+                    async_bounded_lag_last_lag_after_wait
+                )
+                payload["bounded_lag_wait_last_sec"] = float(
+                    async_bounded_lag_last_wait_sec
+                )
+        elif sync_replay_prefetcher is not None:
+            payload["replay_prefetch_queue_size"] = int(
+                sync_replay_prefetcher.get_queue_size()
+            )
+
+        def _safe_name(name: str) -> str:
+            return str(name).replace(".", "_").replace("/", "_").replace(" ", "_")
+
+        for name, stats in snapshot.get("durations", {}).items():
+            mean_ms = stats.get("mean_ms", None)
+            if mean_ms is not None:
+                payload[f"{_safe_name(name)}_mean_ms"] = float(mean_ms)
+        for name, stats in snapshot.get("values", {}).items():
+            mean_value = stats.get("mean", None)
+            if mean_value is not None:
+                payload[f"{_safe_name(name)}_mean"] = float(mean_value)
+        return payload
+
+    def _maybe_send_agentlace_timer_stats(
+        *,
+        train_env_step_value: int,
+        decision_step_value: int,
+        train_episode_id_value: int,
+        force: bool = False,
+    ) -> None:
+        nonlocal agentlace_timer_last_sent_step
+        if (not external_agentlace_actor_mode) or async_learner is None:
+            return
+        current_step = int(train_env_step_value)
+        period = max(1, int(async_stats_period_steps))
+        if (not force) and agentlace_timer_last_sent_step >= 0:
+            if (current_step - agentlace_timer_last_sent_step) < period:
+                return
+        payload = _build_agentlace_timer_payload(
+            train_env_step_value=int(train_env_step_value),
+            decision_step_value=int(decision_step_value),
+            train_episode_id_value=int(train_episode_id_value),
+        )
+        if payload is None:
+            return
+        async_learner.request_stats({"timer": payload})
+        agentlace_timer_last_sent_step = current_step
+
+    def _advance_async_target_update_calls(
+        *,
+        phase_train_flag: bool,
+        train_step_before: int,
+        train_step_after: int,
+        replay_size_before: int,
+        replay_size_after: int,
+    ) -> int:
+        nonlocal async_target_update_calls
+        nonlocal async_bounded_lag_tracked_env_steps
+        if (
+            (not async_bounded_lag_enabled)
+            or async_learner is None
+            or (not bool(phase_train_flag))
+        ):
+            return 0
+        if async_bounded_lag_manual_rate_enabled:
+            added_trainable_env_steps = _count_env_step_update_triggers(
+                train_step_before=int(train_step_before),
+                train_step_after=int(train_step_after),
+                replay_size_before=int(replay_size_before),
+                replay_size_after=int(replay_size_after),
+                training_starts=int(cfg.training.training_starts),
+                update_every=1,
+            )
+            if added_trainable_env_steps <= 0:
+                return 0
+            async_bounded_lag_tracked_env_steps += int(added_trainable_env_steps)
+            previous_target_update_calls = int(async_target_update_calls)
+            async_target_update_calls = int(
+                async_bounded_lag_tracked_env_steps
+                // float(async_bounded_lag_env_steps_per_update_call)
+            )
+            if async_target_update_calls < previous_target_update_calls:
+                async_target_update_calls = int(previous_target_update_calls)
+            return int(async_target_update_calls - previous_target_update_calls)
+        trigger_count = _count_env_step_update_triggers(
+            train_step_before=int(train_step_before),
+            train_step_after=int(train_step_after),
+            replay_size_before=int(replay_size_before),
+            replay_size_after=int(replay_size_after),
+            training_starts=int(cfg.training.training_starts),
+            update_every=int(cfg.training.update_every),
+        )
+        added_update_calls = int(trigger_count * int(cfg.training.updates_per_step))
+        if added_update_calls > 0:
+            async_target_update_calls += int(added_update_calls)
+        return int(added_update_calls)
+
+    def _maybe_wait_for_async_learner_budget(
+        *,
+        train_env_step_value: int,
+        decision_step_value: int,
+    ) -> None:
+        nonlocal async_bounded_lag_wait_count
+        nonlocal async_bounded_lag_timeout_count
+        nonlocal async_bounded_lag_wait_total_sec
+        nonlocal async_bounded_lag_last_wait_sec
+        nonlocal async_bounded_lag_last_required_update_steps
+        nonlocal async_bounded_lag_last_lag_before_wait
+        nonlocal async_bounded_lag_last_lag_after_wait
+        if (not async_bounded_lag_enabled) or async_learner is None:
+            return
+        required_update_steps = max(
+            0,
+            int(async_target_update_calls) - int(async_bounded_lag_max_update_calls),
+        )
+        async_bounded_lag_last_required_update_steps = int(required_update_steps)
+        current_update_steps = int(async_learner.get_update_steps())
+        lag_before_wait = max(0, required_update_steps - current_update_steps)
+        async_bounded_lag_last_lag_before_wait = int(lag_before_wait)
+        async_bounded_lag_last_lag_after_wait = int(lag_before_wait)
+        async_bounded_lag_last_wait_sec = 0.0
+        if lag_before_wait <= 0:
+            return
+
+        wait_start = time.perf_counter()
+        updated_steps = int(
+            async_learner.wait_for_update_steps(
+                required_update_steps,
+                poll_interval_sec=async_bounded_lag_poll_sec,
+                timeout_sec=async_bounded_lag_timeout_sec,
+            )
+        )
+        if async_bounded_lag_sync_on_wait:
+            async_learner.sync_now(timeout_sec=async_bounded_lag_timeout_sec)
+            updated_steps = int(async_learner.get_update_steps())
+        wait_sec = float(time.perf_counter() - wait_start)
+        lag_after_wait = max(0, required_update_steps - updated_steps)
+
+        async_bounded_lag_wait_count += 1
+        async_bounded_lag_wait_total_sec += wait_sec
+        async_bounded_lag_last_wait_sec = float(wait_sec)
+        async_bounded_lag_last_lag_after_wait = int(lag_after_wait)
+
+        if lag_after_wait > 0:
+            async_bounded_lag_timeout_count += 1
+            logger.warning(
+                "Bounded async lag timeout: train_env_step=%s decision_step=%s "
+                "required_update_steps=%s learner_update_steps=%s remaining_lag=%s "
+                "wait_sec=%.3f",
+                int(train_env_step_value),
+                int(decision_step_value),
+                int(required_update_steps),
+                int(updated_steps),
+                int(lag_after_wait),
+                float(wait_sec),
+            )
+            return
+
+        log_period = max(0, int(async_bounded_lag_log_period_steps))
+        if log_period > 0 and int(train_env_step_value) % log_period == 0:
+            logger.info(
+                "Bounded async lag wait complete: train_env_step=%s decision_step=%s "
+                "target_update_calls=%s required_update_steps=%s learner_update_steps=%s "
+                "wait_sec=%.3f",
+                int(train_env_step_value),
+                int(decision_step_value),
+                int(async_target_update_calls),
+                int(required_update_steps),
+                int(updated_steps),
+                float(wait_sec),
+            )
+
+    def _sync_async_bounded_lag_baseline_from_learner() -> None:
+        nonlocal async_target_update_calls
+        nonlocal async_bounded_lag_tracked_env_steps
+        if (not async_bounded_lag_enabled) or async_learner is None:
+            return
+        learner_update_steps = int(async_learner.get_update_steps())
+        previous_target_update_calls = int(async_target_update_calls)
+        if learner_update_steps > int(async_target_update_calls):
+            async_target_update_calls = int(learner_update_steps)
+        if async_bounded_lag_manual_rate_enabled:
+            min_tracked_env_steps = int(async_target_update_calls) * int(
+                async_bounded_lag_env_steps_per_update_call
+            )
+            if min_tracked_env_steps > int(async_bounded_lag_tracked_env_steps):
+                async_bounded_lag_tracked_env_steps = int(min_tracked_env_steps)
+        if int(async_target_update_calls) != int(previous_target_update_calls):
+            logger.info(
+                "Aligned bounded-lag baseline to learner update steps: "
+                "target_update_calls %s -> %s learner_update_steps=%s mode=%s",
+                int(previous_target_update_calls),
+                int(async_target_update_calls),
+                int(learner_update_steps),
+                str(async_bounded_lag_mode),
+            )
 
     sample_obs_raw = _profile_call(
         profiler,
@@ -655,6 +1136,16 @@ def main(cfg: DictConfig) -> None:
     def _replay_progress_size(buffer: Any) -> int:
         return int(getattr(buffer, "num_steps", len(buffer)))
 
+    learner_agent_device = (
+        async_learner_device
+        if async_enabled and manage_learner_state_locally
+        else None
+    )
+    actor_agent_device = (
+        async_actor_device
+        if async_enabled and async_backend in {"process", "agentlace"}
+        else None
+    )
     learner_agent = build_drq_agent(
         cfg,
         sample_obs=sample_obs,
@@ -662,8 +1153,23 @@ def main(cfg: DictConfig) -> None:
         image_keys=image_keys,
         critic_action_dim=critic_action_dim,
         action_transform=action_transform,
+        device=learner_agent_device,
     )
-    agent = learner_agent
+    if async_enabled and async_backend in {"process", "agentlace"}:
+        agent = build_drq_agent(
+            cfg,
+            sample_obs=sample_obs,
+            action_dim=agent_action_dim,
+            image_keys=image_keys,
+            critic_action_dim=critic_action_dim,
+            action_transform=action_transform,
+            device=actor_agent_device,
+        )
+        _sync_agent_modules_inplace(agent, learner_agent)
+        if not manage_learner_state_locally:
+            learner_agent = agent
+    else:
+        agent = learner_agent
     if chunk_step_enabled:
         replay_buffer = ChunkReplayBuffer(
             sample_observation_template=sample_obs,
@@ -683,7 +1189,7 @@ def main(cfg: DictConfig) -> None:
             action_space=action_space,
             capacity=int(cfg.replay.capacity),
         )
-    if offline_enabled:
+    if offline_enabled and manage_learner_state_locally:
         if chunk_step_enabled:
             offline_buffer = ChunkReplayBuffer(
                 sample_observation_template=sample_obs,
@@ -774,6 +1280,79 @@ def main(cfg: DictConfig) -> None:
             tb_writer=tb_writer,
         )
 
+    async_agentlace_bootstrap_path: Optional[Path] = None
+    if async_enabled and async_backend == "agentlace":
+        async_agentlace_bootstrap_path = resolve_agentlace_bootstrap_path(
+            run_dir=run_dir,
+            bootstrap_file=async_agentlace_bootstrap_file,
+        )
+        save_agentlace_bootstrap(
+            async_agentlace_bootstrap_path,
+            {
+                "sample_obs": sample_obs,
+                "state_core_dim": int(sample_state_core.shape[0]),
+                "env_action_dim": int(env_action_dim),
+                "step_action_dim": int(step_action_dim),
+                "agent_action_dim": int(agent_action_dim),
+                "critic_action_dim": int(critic_action_dim),
+                "image_keys": tuple(image_keys),
+                "action_transform": action_transform,
+                "chunk_step_enabled": bool(chunk_step_enabled),
+                "chunk_horizon": int(chunk_horizon),
+                "state_mode": str(obs_state_mode),
+                "initial_agent_payload": _snapshot_agent_checkpoint_payload(
+                    learner_agent,
+                    step=int(learner_agent.state.step),
+                ),
+                "saved_at_unix": float(time.time()),
+            },
+        )
+        logger.info("Agentlace bootstrap saved to %s", async_agentlace_bootstrap_path)
+
+    if external_agentlace_actor_mode:
+        if offline_enabled:
+            logger.info(
+                "External agentlace actor mode: offline replay/pretrain will be owned by the external learner process."
+            )
+        async_learner = _AgentlaceAsyncLearner(
+            actor_agent=agent,
+            replay_buffer=replay_buffer,
+            offline_buffer=None,
+            batch_size=int(cfg.replay.batch_size),
+            offline_ratio=offline_ratio,
+            symmetric_replay=symmetric_replay,
+            training_starts=int(cfg.training.training_starts),
+            update_frequency=async_update_frequency,
+            idle_sleep_sec=async_idle_sleep_sec,
+            cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+            sample_obs=sample_obs,
+            action_dim=agent_action_dim,
+            critic_action_dim=critic_action_dim,
+            image_keys=image_keys,
+            action_transform=action_transform,
+            learner_device=async_learner_device,
+            host=async_trainer_host,
+            port_number=async_trainer_port,
+            broadcast_port=async_broadcast_port,
+            data_store_queue_size=async_data_store_queue_size,
+            replay_capacity=(
+                int(getattr(replay_buffer, "capacity"))
+                if hasattr(replay_buffer, "capacity")
+                else int(getattr(replay_buffer, "_capacity"))
+                if hasattr(replay_buffer, "_capacity")
+                else None
+            ),
+            spawn_local_worker=False,
+            connect_timeout_sec=async_agentlace_connect_timeout_sec,
+        )
+        async_learner.start()
+        replay_buffer = async_learner.replay_proxy
+        logger.info(
+            "Connected actor to external agentlace learner at %s:%s",
+            async_trainer_host,
+            async_trainer_port,
+        )
+
     warmup_cfg = cfg.training.get("warmup", None)
     configured_warmup_episodes = (
         int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
@@ -785,7 +1364,35 @@ def main(cfg: DictConfig) -> None:
         else False
     )
     online_prefill_loaded_episodes = 0
-    if online_prefill_enabled and configured_warmup_episodes > 0:
+    if (
+        external_agentlace_actor_mode
+        and async_learner is not None
+        and online_prefill_enabled
+        and configured_warmup_episodes > 0
+    ):
+        online_prefill_stats = async_learner.get_online_prefill_stats()
+        online_prefill_loaded_episodes = int(
+            online_prefill_stats.get("episodes_loaded", 0)
+        )
+        if (
+            online_prefill_loaded_episodes <= 0
+            or int(online_prefill_stats.get("inserted", 0)) <= 0
+        ):
+            raise RuntimeError(
+                "training.online_prefill.enabled=true in external agentlace actor mode, "
+                "but the learner reported no online prefill episodes loaded into replay"
+            )
+        logger.info(
+            "External agentlace actor mode: learner-owned online prefill "
+            "episodes_loaded=%s/%s files_loaded=%s/%s inserted=%s success_episodes=%s",
+            online_prefill_loaded_episodes,
+            configured_warmup_episodes,
+            online_prefill_stats.get("files_loaded", 0),
+            online_prefill_stats.get("files_total", 0),
+            online_prefill_stats.get("inserted", 0),
+            online_prefill_stats.get("success_episodes", 0),
+        )
+    elif online_prefill_enabled and configured_warmup_episodes > 0:
         online_prefill_dataset_paths = online_prefill_cfg.get("dataset_paths", None)
         if not online_prefill_dataset_paths:
             raise ValueError(
@@ -829,6 +1436,7 @@ def main(cfg: DictConfig) -> None:
             online_prefill_stats.get("inserted", 0),
             online_prefill_stats.get("success_episodes", 0),
         )
+        _flush_external_agentlace_actor()
     elif online_prefill_enabled:
         logger.info(
             "training.online_prefill.enabled=true but training.warmup.episodes=%s; "
@@ -850,36 +1458,99 @@ def main(cfg: DictConfig) -> None:
         )
     need_warmup_first = warmup_episodes_cfg > 0
 
-    if not need_warmup_first and async_enabled:
-        agent = build_drq_agent(
-            cfg,
-            sample_obs=sample_obs,
-            action_dim=agent_action_dim,
-            image_keys=image_keys,
-            critic_action_dim=critic_action_dim,
-            action_transform=action_transform,
-        )
-        _sync_agent_modules_inplace(agent, learner_agent)
-        async_learner = _AsyncLearner(
-            learner_agent=learner_agent,
-            actor_agent=agent,
-            online_buffer=replay_buffer,
-            offline_buffer=offline_buffer if offline_enabled else None,
-            batch_size=int(cfg.replay.batch_size),
-            offline_ratio=offline_ratio,
-            symmetric_replay=symmetric_replay,
-            training_starts=int(cfg.training.training_starts),
-            utd_ratio=int(cfg.sac.utd_ratio),
-            update_frequency=async_update_frequency,
-            idle_sleep_sec=async_idle_sleep_sec,
-            replay_prefetch_enabled=replay_prefetch_enabled,
-            replay_prefetch_queue_size=replay_prefetch_queue_size,
-            replay_prefetch_pin_memory=replay_prefetch_pin_memory,
-            replay_prefetch_to_device=replay_prefetch_to_device,
-            checkpoint_writer=checkpoint_writer,
-            profiler=profiler,
-        )
-        async_learner.start()
+    if async_learner is None and not need_warmup_first and async_enabled:
+        if async_backend == "agentlace":
+            agentlace_replay_buffer = replay_buffer
+            async_learner = _AgentlaceAsyncLearner(
+                actor_agent=agent,
+                replay_buffer=agentlace_replay_buffer,
+                offline_buffer=(
+                    offline_buffer
+                    if offline_enabled and manage_learner_state_locally
+                    else None
+                ),
+                batch_size=int(cfg.replay.batch_size),
+                offline_ratio=offline_ratio,
+                symmetric_replay=symmetric_replay,
+                training_starts=int(cfg.training.training_starts),
+                update_frequency=async_update_frequency,
+                idle_sleep_sec=async_idle_sleep_sec,
+                cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                sample_obs=sample_obs,
+                action_dim=agent_action_dim,
+                critic_action_dim=critic_action_dim,
+                image_keys=image_keys,
+                action_transform=action_transform,
+                learner_device=async_learner_device,
+                host=async_trainer_host,
+                port_number=async_trainer_port,
+                broadcast_port=async_broadcast_port,
+                data_store_queue_size=async_data_store_queue_size,
+                replay_capacity=(
+                    int(getattr(agentlace_replay_buffer, "capacity"))
+                    if hasattr(agentlace_replay_buffer, "capacity")
+                    else int(getattr(agentlace_replay_buffer, "_capacity"))
+                    if hasattr(agentlace_replay_buffer, "_capacity")
+                    else None
+                ),
+                spawn_local_worker=async_agentlace_spawn_local_worker,
+                connect_timeout_sec=async_agentlace_connect_timeout_sec,
+            )
+            async_learner.start()
+            replay_buffer = async_learner.replay_proxy
+        elif async_backend == "process":
+            async_learner = _ProcessAsyncLearner(
+                actor_agent=agent,
+                online_buffer=replay_buffer,
+                offline_buffer=offline_buffer if offline_enabled else None,
+                batch_size=int(cfg.replay.batch_size),
+                offline_ratio=offline_ratio,
+                symmetric_replay=symmetric_replay,
+                training_starts=int(cfg.training.training_starts),
+                update_frequency=async_update_frequency,
+                idle_sleep_sec=async_idle_sleep_sec,
+                cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                sample_obs=sample_obs,
+                action_dim=agent_action_dim,
+                critic_action_dim=critic_action_dim,
+                image_keys=image_keys,
+                action_transform=action_transform,
+                actor_device=async_actor_device,
+                learner_device=async_learner_device,
+                batch_queue_size=async_batch_queue_size,
+            )
+            async_learner.start()
+        else:
+            agent = build_drq_agent(
+                cfg,
+                sample_obs=sample_obs,
+                action_dim=agent_action_dim,
+                image_keys=image_keys,
+                critic_action_dim=critic_action_dim,
+                action_transform=action_transform,
+                device=async_actor_device,
+            )
+            _sync_agent_modules_inplace(agent, learner_agent)
+            async_learner = _AsyncLearner(
+                learner_agent=learner_agent,
+                actor_agent=agent,
+                online_buffer=replay_buffer,
+                offline_buffer=offline_buffer if offline_enabled else None,
+                batch_size=int(cfg.replay.batch_size),
+                offline_ratio=offline_ratio,
+                symmetric_replay=symmetric_replay,
+                training_starts=int(cfg.training.training_starts),
+                utd_ratio=int(cfg.sac.utd_ratio),
+                update_frequency=async_update_frequency,
+                idle_sleep_sec=async_idle_sleep_sec,
+                replay_prefetch_enabled=replay_prefetch_enabled,
+                replay_prefetch_queue_size=replay_prefetch_queue_size,
+                replay_prefetch_pin_memory=replay_prefetch_pin_memory,
+                replay_prefetch_to_device=replay_prefetch_to_device,
+                checkpoint_writer=checkpoint_writer,
+                profiler=profiler,
+            )
+            async_learner.start()
     elif not need_warmup_first and replay_prefetch_enabled:
         sync_replay_lock = threading.Lock()
 
@@ -1448,6 +2119,7 @@ def main(cfg: DictConfig) -> None:
                     episode_steps,
                     episode_return,
                 )
+                _flush_external_agentlace_actor()
                 warmup_episode_id = current_warmup_episode_id
                 if warmup_progress is not None:
                     warmup_progress.update(1)
@@ -1466,36 +2138,99 @@ def main(cfg: DictConfig) -> None:
             if warmup_progress is not None:
                 warmup_progress.close()
                 warmup_progress = None
-            if async_enabled:
-                agent = build_drq_agent(
-                    cfg,
-                    sample_obs=sample_obs,
-                    action_dim=agent_action_dim,
-                    image_keys=image_keys,
-                    critic_action_dim=critic_action_dim,
-                    action_transform=action_transform,
-                )
-                _sync_agent_modules_inplace(agent, learner_agent)
-                async_learner = _AsyncLearner(
-                    learner_agent=learner_agent,
-                    actor_agent=agent,
-                    online_buffer=replay_buffer,
-                    offline_buffer=offline_buffer if offline_enabled else None,
-                    batch_size=int(cfg.replay.batch_size),
-                    offline_ratio=offline_ratio,
-                    symmetric_replay=symmetric_replay,
-                    training_starts=int(cfg.training.training_starts),
-                    utd_ratio=int(cfg.sac.utd_ratio),
-                    update_frequency=async_update_frequency,
-                    idle_sleep_sec=async_idle_sleep_sec,
-                    replay_prefetch_enabled=replay_prefetch_enabled,
-                    replay_prefetch_queue_size=replay_prefetch_queue_size,
-                    replay_prefetch_pin_memory=replay_prefetch_pin_memory,
-                    replay_prefetch_to_device=replay_prefetch_to_device,
-                    checkpoint_writer=checkpoint_writer,
-                    profiler=profiler,
-                )
-                async_learner.start()
+            if async_learner is None and async_enabled:
+                if async_backend == "agentlace":
+                    agentlace_replay_buffer = replay_buffer
+                    async_learner = _AgentlaceAsyncLearner(
+                        actor_agent=agent,
+                        replay_buffer=agentlace_replay_buffer,
+                        offline_buffer=(
+                            offline_buffer
+                            if offline_enabled and manage_learner_state_locally
+                            else None
+                        ),
+                        batch_size=int(cfg.replay.batch_size),
+                        offline_ratio=offline_ratio,
+                        symmetric_replay=symmetric_replay,
+                        training_starts=int(cfg.training.training_starts),
+                        update_frequency=async_update_frequency,
+                        idle_sleep_sec=async_idle_sleep_sec,
+                        cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                        sample_obs=sample_obs,
+                        action_dim=agent_action_dim,
+                        critic_action_dim=critic_action_dim,
+                        image_keys=image_keys,
+                        action_transform=action_transform,
+                        learner_device=async_learner_device,
+                        host=async_trainer_host,
+                        port_number=async_trainer_port,
+                        broadcast_port=async_broadcast_port,
+                        data_store_queue_size=async_data_store_queue_size,
+                        replay_capacity=(
+                            int(getattr(agentlace_replay_buffer, "capacity"))
+                            if hasattr(agentlace_replay_buffer, "capacity")
+                            else int(getattr(agentlace_replay_buffer, "_capacity"))
+                            if hasattr(agentlace_replay_buffer, "_capacity")
+                            else None
+                        ),
+                        spawn_local_worker=async_agentlace_spawn_local_worker,
+                        connect_timeout_sec=async_agentlace_connect_timeout_sec,
+                    )
+                    async_learner.start()
+                    replay_buffer = async_learner.replay_proxy
+                elif async_backend == "process":
+                    async_learner = _ProcessAsyncLearner(
+                        actor_agent=agent,
+                        online_buffer=replay_buffer,
+                        offline_buffer=offline_buffer if offline_enabled else None,
+                        batch_size=int(cfg.replay.batch_size),
+                        offline_ratio=offline_ratio,
+                        symmetric_replay=symmetric_replay,
+                        training_starts=int(cfg.training.training_starts),
+                        update_frequency=async_update_frequency,
+                        idle_sleep_sec=async_idle_sleep_sec,
+                        cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                        sample_obs=sample_obs,
+                        action_dim=agent_action_dim,
+                        critic_action_dim=critic_action_dim,
+                        image_keys=image_keys,
+                        action_transform=action_transform,
+                        actor_device=async_actor_device,
+                        learner_device=async_learner_device,
+                        batch_queue_size=async_batch_queue_size,
+                    )
+                    async_learner.start()
+                else:
+                    agent = build_drq_agent(
+                        cfg,
+                        sample_obs=sample_obs,
+                        action_dim=agent_action_dim,
+                        image_keys=image_keys,
+                        critic_action_dim=critic_action_dim,
+                        action_transform=action_transform,
+                        device=async_actor_device,
+                    )
+                    _sync_agent_modules_inplace(agent, learner_agent)
+                    async_learner = _AsyncLearner(
+                        learner_agent=learner_agent,
+                        actor_agent=agent,
+                        online_buffer=replay_buffer,
+                        offline_buffer=offline_buffer if offline_enabled else None,
+                        batch_size=int(cfg.replay.batch_size),
+                        offline_ratio=offline_ratio,
+                        symmetric_replay=symmetric_replay,
+                        training_starts=int(cfg.training.training_starts),
+                        utd_ratio=int(cfg.sac.utd_ratio),
+                        update_frequency=async_update_frequency,
+                        idle_sleep_sec=async_idle_sleep_sec,
+                        replay_prefetch_enabled=replay_prefetch_enabled,
+                        replay_prefetch_queue_size=replay_prefetch_queue_size,
+                        replay_prefetch_pin_memory=replay_prefetch_pin_memory,
+                        replay_prefetch_to_device=replay_prefetch_to_device,
+                        checkpoint_writer=checkpoint_writer,
+                        profiler=profiler,
+                    )
+                    async_learner.start()
             elif replay_prefetch_enabled:
                 sync_replay_lock = threading.Lock()
 
@@ -1527,6 +2262,8 @@ def main(cfg: DictConfig) -> None:
                     profiler=profiler,
                 )
                 sync_replay_prefetcher.start()
+
+        _sync_async_bounded_lag_baseline_from_learner()
 
         for phase in cfg.training.phases:
             if max_train_env_steps > 0 and train_env_step >= max_train_env_steps:
@@ -2173,6 +2910,21 @@ def main(cfg: DictConfig) -> None:
                                         )
                                     agent = learner_agent
                             else:
+                                _advance_async_target_update_calls(
+                                    phase_train_flag=bool(phase_train),
+                                    train_step_before=int(train_env_step_before_chunk),
+                                    train_step_after=int(train_env_step_after_chunk),
+                                    replay_size_before=int(replay_size_before),
+                                    replay_size_after=int(replay_size_after),
+                                )
+                                _maybe_wait_for_async_learner_budget(
+                                    train_env_step_value=int(train_env_step_after_chunk),
+                                    decision_step_value=int(
+                                        current_decision_id
+                                        if current_decision_id is not None
+                                        else decision_step
+                                    ),
+                                )
                                 last_update_info = async_learner.get_last_update_info()
 
                             if (
@@ -2214,6 +2966,64 @@ def main(cfg: DictConfig) -> None:
                                         int(async_learner.get_prefetch_queue_size()),
                                         train_env_step,
                                     )
+                                    if async_bounded_lag_enabled:
+                                        tb_writer.add_scalar(
+                                            "system/async_target_update_calls",
+                                            float(async_target_update_calls),
+                                            train_env_step,
+                                        )
+                                        tb_writer.add_scalar(
+                                            "system/async_bounded_lag_tracked_env_steps",
+                                            float(async_bounded_lag_tracked_env_steps),
+                                            train_env_step,
+                                        )
+                                        if (
+                                            async_bounded_lag_env_steps_per_update_call
+                                            is not None
+                                        ):
+                                            tb_writer.add_scalar(
+                                                "system/async_env_steps_per_update_call",
+                                                float(
+                                                    async_bounded_lag_env_steps_per_update_call
+                                                ),
+                                                train_env_step,
+                                            )
+                                        tb_writer.add_scalar(
+                                            "system/async_required_update_steps",
+                                            float(
+                                                async_bounded_lag_last_required_update_steps
+                                            ),
+                                            train_env_step,
+                                        )
+                                        tb_writer.add_scalar(
+                                            "system/async_update_lag_before_wait",
+                                            float(
+                                                async_bounded_lag_last_lag_before_wait
+                                            ),
+                                            train_env_step,
+                                        )
+                                        tb_writer.add_scalar(
+                                            "system/async_update_lag_after_wait",
+                                            float(
+                                                async_bounded_lag_last_lag_after_wait
+                                            ),
+                                            train_env_step,
+                                        )
+                                        tb_writer.add_scalar(
+                                            "system/async_wait_last_sec",
+                                            float(async_bounded_lag_last_wait_sec),
+                                            train_env_step,
+                                        )
+                                        tb_writer.add_scalar(
+                                            "system/async_wait_count",
+                                            float(async_bounded_lag_wait_count),
+                                            train_env_step,
+                                        )
+                                        tb_writer.add_scalar(
+                                            "system/async_wait_timeout_count",
+                                            float(async_bounded_lag_timeout_count),
+                                            train_env_step,
+                                        )
                                 elif sync_replay_prefetcher is not None:
                                     tb_writer.add_scalar(
                                         "system/replay_prefetch_queue_size",
@@ -2255,6 +3065,11 @@ def main(cfg: DictConfig) -> None:
                                     ),
                                 )
                                 profiling_last_flush_step = int(train_env_step)
+                            _maybe_send_agentlace_timer_stats(
+                                train_env_step_value=int(train_env_step),
+                                decision_step_value=int(decision_step),
+                                train_episode_id_value=int(train_episode_id),
+                            )
 
                             checkpoint_hits = _iter_period_hits(
                                 step_before=train_env_step_before_chunk,
@@ -2528,6 +3343,9 @@ def main(cfg: DictConfig) -> None:
                                     "episode_id": int(current_init_episode_idx),
                                     "episode_step": int(episode_steps - 1),
                                 }
+                                replay_size_before = int(
+                                    _replay_progress_size(replay_buffer)
+                                )
                                 if async_learner is not None:
                                     with async_learner.replay_lock:
                                         _insert_online_transition(
@@ -2548,6 +3366,9 @@ def main(cfg: DictConfig) -> None:
                                         transition_payload,
                                         chunk_step_enabled=chunk_step_enabled,
                                     )
+                                replay_size_after = int(
+                                    _replay_progress_size(replay_buffer)
+                                )
 
                                 if async_learner is None:
                                     if (
@@ -2652,6 +3473,21 @@ def main(cfg: DictConfig) -> None:
                                             )
                                         agent = learner_agent
                                 else:
+                                    _advance_async_target_update_calls(
+                                        phase_train_flag=bool(phase_train),
+                                        train_step_before=int(train_env_step_before_step),
+                                        train_step_after=int(train_env_step_after_step),
+                                        replay_size_before=int(replay_size_before),
+                                        replay_size_after=int(replay_size_after),
+                                    )
+                                    _maybe_wait_for_async_learner_budget(
+                                        train_env_step_value=int(train_env_step_after_step),
+                                        decision_step_value=int(
+                                            current_decision_id
+                                            if current_decision_id is not None
+                                            else decision_step
+                                        ),
+                                    )
                                     last_update_info = (
                                         async_learner.get_last_update_info()
                                     )
@@ -2697,6 +3533,64 @@ def main(cfg: DictConfig) -> None:
                                             ),
                                             train_env_step,
                                         )
+                                        if async_bounded_lag_enabled:
+                                            tb_writer.add_scalar(
+                                                "system/async_target_update_calls",
+                                                float(async_target_update_calls),
+                                                train_env_step,
+                                            )
+                                            tb_writer.add_scalar(
+                                                "system/async_bounded_lag_tracked_env_steps",
+                                                float(async_bounded_lag_tracked_env_steps),
+                                                train_env_step,
+                                            )
+                                            if (
+                                                async_bounded_lag_env_steps_per_update_call
+                                                is not None
+                                            ):
+                                                tb_writer.add_scalar(
+                                                    "system/async_env_steps_per_update_call",
+                                                    float(
+                                                        async_bounded_lag_env_steps_per_update_call
+                                                    ),
+                                                    train_env_step,
+                                                )
+                                            tb_writer.add_scalar(
+                                                "system/async_required_update_steps",
+                                                float(
+                                                    async_bounded_lag_last_required_update_steps
+                                                ),
+                                                train_env_step,
+                                            )
+                                            tb_writer.add_scalar(
+                                                "system/async_update_lag_before_wait",
+                                                float(
+                                                    async_bounded_lag_last_lag_before_wait
+                                                ),
+                                                train_env_step,
+                                            )
+                                            tb_writer.add_scalar(
+                                                "system/async_update_lag_after_wait",
+                                                float(
+                                                    async_bounded_lag_last_lag_after_wait
+                                                ),
+                                                train_env_step,
+                                            )
+                                            tb_writer.add_scalar(
+                                                "system/async_wait_last_sec",
+                                                float(async_bounded_lag_last_wait_sec),
+                                                train_env_step,
+                                            )
+                                            tb_writer.add_scalar(
+                                                "system/async_wait_count",
+                                                float(async_bounded_lag_wait_count),
+                                                train_env_step,
+                                            )
+                                            tb_writer.add_scalar(
+                                                "system/async_wait_timeout_count",
+                                                float(async_bounded_lag_timeout_count),
+                                                train_env_step,
+                                            )
                                     elif sync_replay_prefetcher is not None:
                                         tb_writer.add_scalar(
                                             "system/replay_prefetch_queue_size",
@@ -2740,6 +3634,11 @@ def main(cfg: DictConfig) -> None:
                                         ),
                                     )
                                     profiling_last_flush_step = int(train_env_step)
+                                _maybe_send_agentlace_timer_stats(
+                                    train_env_step_value=int(train_env_step),
+                                    decision_step_value=int(decision_step),
+                                    train_episode_id_value=int(train_episode_id),
+                                )
 
                                 if (
                                     phase_train
@@ -2872,6 +3771,34 @@ def main(cfg: DictConfig) -> None:
                             running_success_rate,
                             recent_success_rate,
                         )
+                        if external_agentlace_actor_mode and async_learner is not None:
+                            _maybe_send_agentlace_timer_stats(
+                                train_env_step_value=int(train_env_step),
+                                decision_step_value=int(decision_step),
+                                train_episode_id_value=int(current_train_episode_id),
+                                force=True,
+                            )
+                            async_learner.request_stats(
+                                {
+                                    "train_episode": {
+                                        "phase": str(phase_name),
+                                        "train_episode_id": int(
+                                            current_train_episode_id
+                                        ),
+                                        "success": bool(episode_success),
+                                        "episode_steps": int(episode_steps),
+                                        "episode_return": float(episode_return),
+                                        "train_env_step": int(train_env_step),
+                                        "decision_step": int(decision_step),
+                                        "running_success_rate": float(
+                                            running_success_rate
+                                        ),
+                                        "recent_success_rate": float(
+                                            recent_success_rate
+                                        ),
+                                    }
+                                }
+                            )
                         train_episode_id = int(current_train_episode_id)
 
                         if (
@@ -3039,10 +3966,50 @@ def main(cfg: DictConfig) -> None:
             "checkpoint_keep": int(checkpoint_keep),
             "last_update_info": _to_jsonable(last_update_info),
             "async_enabled": bool(async_enabled),
+            "async_backend": str(async_backend),
             "async_update_frequency": int(async_update_frequency),
+            "async_actor_device": async_actor_device,
+            "async_learner_device": async_learner_device,
+            "async_batch_queue_size": int(async_batch_queue_size),
+            "async_trainer_host": str(async_trainer_host),
+            "async_trainer_port": int(async_trainer_port),
+            "async_broadcast_port": int(async_broadcast_port),
+            "async_data_store_queue_size": int(async_data_store_queue_size),
             "learner_update_steps": int(
                 async_learner.get_update_steps() if async_learner is not None else 0
             ),
+            "async_bounded_lag": {
+                "enabled": bool(async_bounded_lag_enabled),
+                "mode": str(async_bounded_lag_mode),
+                "max_update_lag_calls": int(async_bounded_lag_max_update_calls),
+                "env_steps_per_update_call": (
+                    None
+                    if async_bounded_lag_env_steps_per_update_call is None
+                    else float(async_bounded_lag_env_steps_per_update_call)
+                ),
+                "poll_sec": (
+                    None
+                    if async_bounded_lag_poll_sec is None
+                    else float(async_bounded_lag_poll_sec)
+                ),
+                "timeout_sec": (
+                    None
+                    if async_bounded_lag_timeout_sec is None
+                    else float(async_bounded_lag_timeout_sec)
+                ),
+                "sync_on_wait": bool(async_bounded_lag_sync_on_wait),
+                "target_update_calls": int(async_target_update_calls),
+                "tracked_env_steps": int(async_bounded_lag_tracked_env_steps),
+                "last_required_update_steps": int(
+                    async_bounded_lag_last_required_update_steps
+                ),
+                "last_lag_before_wait": int(async_bounded_lag_last_lag_before_wait),
+                "last_lag_after_wait": int(async_bounded_lag_last_lag_after_wait),
+                "wait_count": int(async_bounded_lag_wait_count),
+                "wait_timeout_count": int(async_bounded_lag_timeout_count),
+                "wait_total_sec": float(async_bounded_lag_wait_total_sec),
+                "last_wait_sec": float(async_bounded_lag_last_wait_sec),
+            },
             "replay_prefetch_enabled": bool(replay_prefetch_enabled),
             "replay_prefetch_queue_size": int(replay_prefetch_queue_size),
             "replay_prefetch_pin_memory": bool(replay_prefetch_pin_memory),

@@ -1,4 +1,5 @@
 import copy
+from contextlib import nullcontext
 from typing import FrozenSet, Optional, Tuple
 
 import numpy as np
@@ -12,6 +13,15 @@ from serl_launcher.common.typing import Batch, Data
 from serl_launcher.networks.actor_critic_nets import Critic, CriticEnsemble, Policy
 from serl_launcher.networks.lagrange import GeqLagrangeMultiplier
 from serl_launcher.networks.mlp import MLP
+
+
+_AUTOCAST_DTYPE_ALIASES = {
+    "bfloat16": "bfloat16",
+    "bf16": "bfloat16",
+}
+_AUTOCAST_TORCH_DTYPES = {
+    "bfloat16": torch.bfloat16,
+}
 
 
 def _to_torch(data, device: torch.device):
@@ -34,6 +44,58 @@ def _tree_mean(values):
             continue
         out[key] = float(np.mean(valid))
     return out
+
+
+def _normalize_mixed_precision_config(config: Optional[dict]) -> dict:
+    normalized = dict(config or {})
+    enabled = bool(normalized.get("enabled", False))
+    dtype_name = str(normalized.get("dtype", "bfloat16")).strip().lower()
+    canonical_dtype = _AUTOCAST_DTYPE_ALIASES.get(dtype_name, None)
+    if canonical_dtype is None:
+        raise ValueError(
+            "Unsupported mixed precision dtype: "
+            f"{normalized.get('dtype', dtype_name)!r}. "
+            f"Expected one of: {sorted(_AUTOCAST_DTYPE_ALIASES.keys())}"
+        )
+    return {
+        "enabled": enabled,
+        "dtype": canonical_dtype,
+    }
+
+
+def _is_cuda_bf16_supported(device: torch.device) -> bool:
+    if device.type != "cuda" or (not torch.cuda.is_available()):
+        return False
+    if hasattr(torch.cuda, "is_bf16_supported"):
+        try:
+            with torch.cuda.device(device):
+                return bool(torch.cuda.is_bf16_supported())
+        except TypeError:
+            return bool(torch.cuda.is_bf16_supported())
+    major, _minor = torch.cuda.get_device_capability(device)
+    return int(major) >= 8
+
+
+def _validate_mixed_precision_runtime(config: dict, device: torch.device) -> None:
+    if not bool(config.get("enabled", False)):
+        return
+    if device.type != "cuda":
+        raise ValueError(
+            "training.mixed_precision.enabled=true currently requires a CUDA device; "
+            f"got device={device!s}"
+        )
+    dtype_name = str(config.get("dtype", "bfloat16"))
+    if dtype_name != "bfloat16":
+        raise ValueError(
+            "Only bf16 mixed precision is currently supported in this training path; "
+            f"got dtype={dtype_name!r}"
+        )
+    if not _is_cuda_bf16_supported(device):
+        device_name = torch.cuda.get_device_name(device)
+        raise RuntimeError(
+            "Configured bf16 mixed precision, but the selected CUDA device does not "
+            f"report bf16 support: device={device_name} ({device!s})"
+        )
 
 
 def _split_batch(batch: Batch, utd_ratio: int):
@@ -73,6 +135,24 @@ class SACAgent:
         for key, value in kwargs.items():
             setattr(self, key, value)
         return self
+
+    def _mixed_precision_config(self) -> dict:
+        return _normalize_mixed_precision_config(
+            self.config.get("mixed_precision", None)
+        )
+
+    def _autocast_context(self):
+        mixed_precision_cfg = self._mixed_precision_config()
+        if (
+            (not mixed_precision_cfg["enabled"])
+            or self.device.type != "cuda"
+            or (not torch.cuda.is_available())
+        ):
+            return nullcontext()
+        return torch.autocast(
+            device_type="cuda",
+            dtype=_AUTOCAST_TORCH_DTYPES[mixed_precision_cfg["dtype"]],
+        )
 
     def forward_critic(
         self, observations: Data, actions: torch.Tensor, train: bool = True
@@ -692,7 +772,8 @@ class SACAgent:
 
         if "critic" in networks_to_update:
             self.state.zero_grad(["critic"])
-            critic_loss, critic_info = self.critic_loss_fn(batch)
+            with self._autocast_context():
+                critic_loss, critic_info = self.critic_loss_fn(batch)
             critic_loss.backward()
             self.state.optimizer_step("critic")
             self.state.target_update(self.config["soft_target_update_rate"])
@@ -700,14 +781,16 @@ class SACAgent:
 
         if "actor" in networks_to_update:
             self.state.zero_grad(["actor"])
-            actor_loss, actor_info = self.policy_loss_fn(batch)
+            with self._autocast_context():
+                actor_loss, actor_info = self.policy_loss_fn(batch)
             actor_loss.backward()
             self.state.optimizer_step("actor")
             info.update(actor_info)
 
         if "temperature" in networks_to_update:
             self.state.zero_grad(["temperature"])
-            temperature_loss, temperature_info = self.temperature_loss_fn(batch)
+            with self._autocast_context():
+                temperature_loss, temperature_info = self.temperature_loss_fn(batch)
             temperature_loss.backward()
             self.state.optimizer_step("temperature")
             info.update(temperature_info)
@@ -730,12 +813,13 @@ class SACAgent:
         del pmap_axis
         batch = _to_torch(batch, self.device)
         self.state.zero_grad(["critic"])
-        critic_loss, critic_info = self.critic_loss_fn(
-            batch,
-            calql_alpha=float(calql_alpha),
-            calql_n_actions=int(calql_n_actions),
-            calql_temperature=float(calql_temperature),
-        )
+        with self._autocast_context():
+            critic_loss, critic_info = self.critic_loss_fn(
+                batch,
+                calql_alpha=float(calql_alpha),
+                calql_n_actions=int(calql_n_actions),
+                calql_temperature=float(calql_temperature),
+            )
         critic_loss.backward()
         self.state.optimizer_step("critic")
         self.state.target_update(self.config["soft_target_update_rate"])
@@ -786,6 +870,8 @@ class SACAgent:
         cql_n_actions: int = 10,
         cql_temperature: float = 1.0,
         action_transform: Optional[dict] = None,
+        mixed_precision: Optional[dict] = None,
+        device: Optional[torch.device | str] = None,
     ):
         del rng
         if entropy_per_dim:
@@ -793,7 +879,12 @@ class SACAgent:
                 "entropy_per_dim is not supported in torch migration"
             )
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            device = torch.device(device)
+        mixed_precision_cfg = _normalize_mixed_precision_config(mixed_precision)
+        _validate_mixed_precision_runtime(mixed_precision_cfg, device)
 
         actor_def = actor_def.to(device)
         critic_def = critic_def.to(device)
@@ -865,6 +956,7 @@ class SACAgent:
                 cql_n_actions=int(max(1, cql_n_actions)),
                 cql_temperature=float(max(1e-6, cql_temperature)),
                 action_transform=copy.deepcopy(action_transform),
+                mixed_precision=mixed_precision_cfg,
             ),
         )
 
