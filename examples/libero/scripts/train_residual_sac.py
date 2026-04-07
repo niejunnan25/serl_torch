@@ -344,11 +344,6 @@ def main(cfg: DictConfig) -> None:
     has_offline_dataset_paths = bool(offline_dataset_paths_cfg) and len(
         offline_dataset_paths_cfg
     ) > 0
-    if offline_enabled and not has_offline_dataset_paths:
-        raise ValueError(
-            "offline.enabled=true requires offline.dataset_paths to be set "
-            "because offline bootstrap has been removed"
-        )
     offline_ratio = float(cfg.offline.ratio)
     if not (0.0 <= offline_ratio <= 1.0):
         raise ValueError(f"offline.ratio must be in [0,1], got {offline_ratio}")
@@ -596,6 +591,11 @@ def main(cfg: DictConfig) -> None:
         and (not async_agentlace_spawn_local_worker)
     )
     manage_learner_state_locally = not external_agentlace_actor_mode
+    if offline_enabled and manage_learner_state_locally and (not has_offline_dataset_paths):
+        raise ValueError(
+            "offline.enabled=true requires offline.dataset_paths to be set "
+            "because offline bootstrap has been removed"
+        )
     logger.info(
         "Async collection-learning: enabled=%s backend=%s update_frequency=%s "
         "idle_sleep_sec=%.4f actor_device=%s learner_device=%s batch_queue_size=%s "
