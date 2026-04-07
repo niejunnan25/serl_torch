@@ -9,7 +9,11 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 from tqdm.auto import tqdm
 
+from serl_launcher.residual.runtime.agentlace_bridge import advance_async_target_update_calls
 from serl_launcher.residual.runtime.agentlace_bridge import create_agentlace_async_learner
+from serl_launcher.residual.runtime.agentlace_bridge import maybe_send_agentlace_timer_stats
+from serl_launcher.residual.runtime.agentlace_bridge import maybe_wait_for_async_learner_budget
+from serl_launcher.residual.runtime.agentlace_bridge import sync_async_bounded_lag_baseline_from_learner
 from serl_launcher.residual.runtime.async_learning import _AsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
@@ -279,6 +283,76 @@ def save_checkpoint_at_step(
                 keep=ctx.checkpoint_keep,
             )
     return checkpoint_path
+
+
+def send_agentlace_timer_stats(
+    ctx: ActorRuntimeContext,
+    state: ActorLoopState,
+    *,
+    train_episode_id_value: Optional[int] = None,
+    force: bool = False,
+) -> None:
+    maybe_send_agentlace_timer_stats(
+        config=ctx.agentlace_bridge_config,
+        state=ctx.agentlace_bridge_state,
+        profiler=ctx.profiler,
+        replay_buffer=ctx.replay_buffer,
+        offline_buffer=ctx.offline_buffer,
+        async_learner=ctx.async_learner,
+        sync_replay_prefetcher=ctx.sync_replay_prefetcher,
+        train_env_step=int(state.train_env_step),
+        decision_step=int(state.decision_step),
+        train_episode_id=int(
+            state.train_episode_id
+            if train_episode_id_value is None
+            else train_episode_id_value
+        ),
+        force=bool(force),
+    )
+
+
+def advance_async_update_calls(
+    ctx: ActorRuntimeContext,
+    *,
+    phase_train_flag: bool,
+    train_step_before: int,
+    train_step_after: int,
+    replay_size_before: int,
+    replay_size_after: int,
+) -> int:
+    return advance_async_target_update_calls(
+        config=ctx.agentlace_bridge_config,
+        state=ctx.agentlace_bridge_state,
+        async_learner=ctx.async_learner,
+        phase_train_flag=bool(phase_train_flag),
+        train_step_before=int(train_step_before),
+        train_step_after=int(train_step_after),
+        replay_size_before=int(replay_size_before),
+        replay_size_after=int(replay_size_after),
+    )
+
+
+def wait_for_async_learner_budget(
+    ctx: ActorRuntimeContext,
+    state: ActorLoopState,
+) -> None:
+    maybe_wait_for_async_learner_budget(
+        config=ctx.agentlace_bridge_config,
+        state=ctx.agentlace_bridge_state,
+        async_learner=ctx.async_learner,
+        logger=ctx.logger,
+        train_env_step=int(state.train_env_step),
+        decision_step=int(state.decision_step),
+    )
+
+
+def sync_async_bounded_lag_baseline(ctx: ActorRuntimeContext) -> None:
+    sync_async_bounded_lag_baseline_from_learner(
+        config=ctx.agentlace_bridge_config,
+        state=ctx.agentlace_bridge_state,
+        async_learner=ctx.async_learner,
+        logger=ctx.logger,
+    )
 
 
 def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
