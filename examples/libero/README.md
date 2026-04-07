@@ -7,7 +7,7 @@ This folder now provides a fuller LIBERO residual RL pipeline in `serl_torch`:
 - online residual RL training / evaluation
 - HDF5 demo stats computation
 - HDF5 demo conversion to offline episode PKLs
-- offline replay mixing and base-policy bootstrap
+- offline replay mixing from expert PKLs
 
 The detailed runbook is in [`docs/usage.md`](./docs/usage.md).
 
@@ -134,7 +134,7 @@ bash tools/eval.sh \
 - `libero_datasets_root` is now configurable and auto-detects `/vla/users/niejunnan/datasets` in this workspace.
 - The expected raw demo layout is `<datasets_root>/libero_10/<task_name>_demo.hdf5`.
 - Offline training is opt-in via `offline.enabled=true`.
-- Bootstrap is opt-in via `offline.bootstrap_base.enabled=true`.
+- When offline training is enabled, `offline.dataset_paths` must point to materialized expert PKLs.
 - The default training config now runs a Cal-QL-style critic pretrain stage before online residual RL when offline data is available.
 - Normalization stats are saved under `data/stats/<suite>_task_<id>.json`.
 

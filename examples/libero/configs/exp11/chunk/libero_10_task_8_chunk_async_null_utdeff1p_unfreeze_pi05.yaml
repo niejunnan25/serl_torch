@@ -134,14 +134,6 @@ offline:
   expert_reference_scale: 1.0
   clip_residual_to_unit: true
   max_transitions: null
-  bootstrap_base:
-    enabled: false
-    success_episodes: 20
-    max_seed_attempts: 2000
-    seed_base: null
-    max_env_steps_per_episode: null
-    only_success: true
-
 # ---------------------------
 # Training Loop
 # ---------------------------

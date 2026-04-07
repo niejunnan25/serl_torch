@@ -26,19 +26,10 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.data.offline_bootstrap import (
-    _bootstrap_offline_with_base_success,
-)
 from serl_torch.examples.libero.data.training_config import (
     LIBERO_RESIDUAL_BASE_CONFIG,
 )
-from serl_torch.examples.libero.env_wrappers import (
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
-)
-from serl_torch.examples.libero.env_wrappers.factory import _create_env
 from serl_torch.examples.libero.policy import (
-    OpenPIChunkClient,
     build_residual_limits,
 )
 from serl_torch.examples.libero.utils import (
@@ -533,6 +524,15 @@ def main(cfg: DictConfig) -> None:
     }
     offline_enabled = bool(cfg.offline.enabled)
     if offline_enabled:
+        offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
+        has_offline_dataset_paths = bool(offline_dataset_paths_cfg) and len(
+            offline_dataset_paths_cfg
+        ) > 0
+        if not has_offline_dataset_paths:
+            raise ValueError(
+                "offline.enabled=true requires offline.dataset_paths to be set "
+                "because offline bootstrap has been removed"
+            )
         offline_buffer = _build_offline_replay(
             cfg,
             sample_obs=sample_obs,
@@ -543,98 +543,52 @@ def main(cfg: DictConfig) -> None:
             chunk_step_enabled=chunk_step_enabled,
             state_mode=state_mode,
         )
-        bootstrap_base_cfg = cfg.offline.get("bootstrap_base", None)
-        offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
-        bootstrap_base_enabled = bool(
-            bootstrap_base_cfg is not None
-            and bool(bootstrap_base_cfg.get("enabled", False))
+        offline_residual_alpha = _scheduled_alpha(
+            cfg,
+            base_alpha=float(cfg.residual.alpha),
+            schedule_step=0,
         )
-        has_offline_dataset_paths = (
-            bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
+        offline_stats = load_residual_training_buffer(
+            cfg.offline.dataset_paths,
+            sample_obs_template=sample_obs,
+            replay_buffer=offline_buffer,
+            action_dim=int(env_action_dim),
+            chunk_horizon=int(chunk_horizon),
+            image_keys=tuple(image_keys),
+            stack_horizon=int(cfg.sac.obs_stack_horizon),
+            chunk_step_enabled=bool(chunk_step_enabled),
+            logger=logger,
+            data_config=LIBERO_RESIDUAL_BASE_CONFIG,
+            normalizer=normalizer,
+            profiler=None,
+            state_mode=state_mode,
+            max_transitions=cfg.offline.max_transitions,
+            expected_task_key=task_key,
+            expected_alpha=float(offline_residual_alpha),
+            expected_projection={
+                "control_indices": control_indices,
+                "residual_limits": residual_limits,
+                "expert_reference_scale": float(
+                    cfg.offline.get("expert_reference_scale", 1.0)
+                ),
+                "clip_residual_to_unit": bool(
+                    cfg.offline.get("clip_residual_to_unit", True)
+                ),
+            },
+            dataset_label="offline residual training",
         )
-        if bootstrap_base_enabled or has_offline_dataset_paths:
-            openpi_root = resolve_openpi_root(cfg.get("openpi_root", None))
-            setup_openpi_client_pythonpath(openpi_root)
-            logger.info("openpi root: %s", openpi_root)
-            openpi_client = OpenPIChunkClient(
-                host=str(cfg.openpi.host),
-                port=int(cfg.openpi.port),
-                logger=logger,
-            )
-            offline_residual_alpha = _scheduled_alpha(
-                cfg,
-                base_alpha=float(cfg.residual.alpha),
-                schedule_step=0,
-            )
-            if bootstrap_base_enabled:
-                learner_env = _create_env(cfg, logger)
-                bootstrap_stats = _bootstrap_offline_with_base_success(
-                    cfg,
-                    env=learner_env,
-                    openpi_client=openpi_client,
-                    offline_buffer=offline_buffer,
-                    sample_obs_template=sample_obs,
-                    action_dim=int(env_action_dim),
-                    residual_alpha=float(offline_residual_alpha),
-                    image_keys=tuple(image_keys),
-                    stack_horizon=int(cfg.sac.obs_stack_horizon),
-                    chunk_horizon=int(chunk_horizon),
-                    chunk_step_enabled=bool(chunk_step_enabled),
-                    discount=float(cfg.sac.discount),
-                    logger=logger,
-                    normalizer=normalizer,
-                    profiler=None,
-                    state_mode=state_mode,
-                )
-                logger.info(
-                    "offline bootstrap: success_episodes=%s collected=%s inserted=%s attempts=%s",
-                    bootstrap_stats.get("success_episodes", 0),
-                    bootstrap_stats.get("episodes_collected", 0),
-                    bootstrap_stats.get("inserted", 0),
-                    bootstrap_stats.get("attempts", 0),
-                )
-            if has_offline_dataset_paths:
-                offline_stats = load_residual_training_buffer(
-                    cfg.offline.dataset_paths,
-                    sample_obs_template=sample_obs,
-                    replay_buffer=offline_buffer,
-                    action_dim=int(env_action_dim),
-                    chunk_horizon=int(chunk_horizon),
-                    image_keys=tuple(image_keys),
-                    stack_horizon=int(cfg.sac.obs_stack_horizon),
-                    chunk_step_enabled=bool(chunk_step_enabled),
-                    logger=logger,
-                    data_config=LIBERO_RESIDUAL_BASE_CONFIG,
-                    normalizer=normalizer,
-                    profiler=None,
-                    state_mode=state_mode,
-                    max_transitions=cfg.offline.max_transitions,
-                    expected_task_key=task_key,
-                    expected_alpha=float(offline_residual_alpha),
-                    expected_projection={
-                        "control_indices": control_indices,
-                        "residual_limits": residual_limits,
-                        "expert_reference_scale": float(
-                            cfg.offline.get("expert_reference_scale", 1.0)
-                        ),
-                        "clip_residual_to_unit": bool(
-                            cfg.offline.get("clip_residual_to_unit", True)
-                        ),
-                    },
-                    dataset_label="offline residual training",
-                )
-                logger.info(
-                    "offline preload: buffer=%s files_loaded=%s/%s candidates=%s inserted=%s "
-                    "skipped=%s clipped=%s errors=%s",
-                    len(offline_buffer),
-                    offline_stats.get("files_loaded", 0),
-                    offline_stats.get("files_total", 0),
-                    offline_stats.get("candidates", 0),
-                    offline_stats.get("inserted", 0),
-                    offline_stats.get("skipped", 0),
-                    offline_stats.get("clipped_values", 0),
-                    offline_stats.get("errors", 0),
-                )
+        logger.info(
+            "offline preload: buffer=%s files_loaded=%s/%s candidates=%s inserted=%s "
+            "skipped=%s clipped=%s errors=%s",
+            len(offline_buffer),
+            offline_stats.get("files_loaded", 0),
+            offline_stats.get("files_total", 0),
+            offline_stats.get("candidates", 0),
+            offline_stats.get("inserted", 0),
+            offline_stats.get("skipped", 0),
+            offline_stats.get("clipped_values", 0),
+            offline_stats.get("errors", 0),
+        )
 
     warmup_cfg = cfg.training.get("warmup", None)
     configured_warmup_episodes = (
