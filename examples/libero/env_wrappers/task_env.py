@@ -91,7 +91,6 @@ class LiberoTaskEnv:
         num_steps_wait: int = 10,
         max_episode_steps: Optional[int] = None,
         libero_root: Optional[str] = None,
-        openpi_root: Optional[str] = None,
         libero_config_dir: Optional[str] = None,
         libero_datasets_root: Optional[str] = None,
         env_seed_mode: str = "per_episode",
@@ -113,7 +112,7 @@ class LiberoTaskEnv:
             raise ValueError(
                 f"Unsupported init_state_index_mode: {init_state_index_mode}"
             )
-        self.libero_root = resolve_libero_root(libero_root, openpi_root=openpi_root)
+        self.libero_root = resolve_libero_root(libero_root)
         self.libero_config_dir = resolve_libero_config_dir(libero_config_dir)
         self.libero_datasets_root = resolve_libero_datasets_root(
             libero_datasets_root,

@@ -1,4 +1,4 @@
-"""OpenPI request encoding from canonical policy inputs."""
+"""Helpers for building OpenPI requests from canonical policy inputs."""
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -29,7 +29,7 @@ def _resolve_wrist_image(policy_input: PolicyInput) -> np.ndarray:
     return wrist_arr
 
 
-def encode_openpi_request(policy_input: PolicyInput) -> Dict[str, Any]:
+def build_openpi_request(policy_input: PolicyInput) -> Dict[str, Any]:
     return {
         "observation/image": _resolve_primary_image(policy_input),
         "observation/wrist_image": _resolve_wrist_image(policy_input),

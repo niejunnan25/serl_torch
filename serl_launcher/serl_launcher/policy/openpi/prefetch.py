@@ -9,10 +9,10 @@ from typing import Optional
 import numpy as np
 
 from serl_launcher.policy.base import PolicyInferInfo, PolicyInput
-from serl_launcher.policy.openpi.client import OpenPIChunkClient
+from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 
 
-class AsyncOpenPIChunkPrefetcher:
+class AsyncOpenPIPolicyPrefetcher:
     def __init__(self, *, host: str, port: int, logger: logging.Logger) -> None:
         self.host = str(host)
         self.port = int(port)
@@ -21,14 +21,14 @@ class AsyncOpenPIChunkPrefetcher:
             max_workers=1,
             thread_name_prefix="openpi-prefetch",
         )
-        self._client: Optional[OpenPIChunkClient] = None
+        self._client: Optional[OpenPIPolicyClient] = None
         self._lock = threading.Lock()
         self._closed = False
 
-    def _get_client(self) -> OpenPIChunkClient:
+    def _get_client(self) -> OpenPIPolicyClient:
         with self._lock:
             if self._client is None:
-                self._client = OpenPIChunkClient(
+                self._client = OpenPIPolicyClient(
                     host=self.host,
                     port=self.port,
                     logger=self.logger,

@@ -1,4 +1,4 @@
-"""Generic OpenPI chunk-policy client."""
+"""Generic OpenPI policy client."""
 from __future__ import annotations
 
 import logging
@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 
 from serl_launcher.policy.base import PolicyInferInfo, PolicyInput
-from serl_launcher.policy.openpi.codec import encode_openpi_request
+from serl_launcher.policy.openpi.request_builder import build_openpi_request
 
 
 def maybe_get_policy_infer_ms(pred: Dict[str, Any]) -> Optional[float]:
@@ -28,7 +28,7 @@ def maybe_get_server_infer_ms(pred: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-class OpenPIChunkClient:
+class OpenPIPolicyClient:
     def __init__(
         self,
         host: str,
@@ -83,7 +83,7 @@ class OpenPIChunkClient:
         return isinstance(err, (self._websocket_connection_closed_error, OSError))
 
     def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
-        send_data = encode_openpi_request(policy_input)
+        send_data = build_openpi_request(policy_input)
         for attempt_idx in range(self._reconnect_retry_count + 1):
             try:
                 start = time.time()

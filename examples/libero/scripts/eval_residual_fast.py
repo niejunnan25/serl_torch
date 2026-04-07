@@ -13,11 +13,7 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
-from serl_launcher.policy.openpi import (
-    OpenPIChunkClient,
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
-)
+from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.residual.action import (
     as_numpy_action,
     as_numpy_action_chunk,
@@ -78,7 +74,6 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
             else None
         ),
         libero_root=cfg.get("libero_root", None),
-        openpi_root=cfg.get("openpi_root", None),
         libero_config_dir=cfg.get("libero_config_dir", None),
         libero_datasets_root=cfg.get("libero_datasets_root", None),
         env_seed_mode=str(cfg.task.get("env_seed_mode", "per_episode")),
@@ -113,10 +108,6 @@ def main(cfg: DictConfig) -> None:
 
     set_global_seeds(int(cfg.seed))
 
-    openpi_root = resolve_openpi_root(cfg.get("openpi_root", None))
-    setup_openpi_client_pythonpath(openpi_root)
-    logger.info("openpi root: %s", openpi_root)
-
     env = _create_env(cfg, logger)
     logger.info(
         "LIBERO task: suite=%s task_id=%s prompt=%s",
@@ -145,7 +136,7 @@ def main(cfg: DictConfig) -> None:
         bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
     )
 
-    openpi_client = OpenPIChunkClient(
+    openpi_client = OpenPIPolicyClient(
         host=str(cfg.openpi.host),
         port=int(cfg.openpi.port),
         logger=logger,

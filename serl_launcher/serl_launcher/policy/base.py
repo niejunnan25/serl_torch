@@ -24,6 +24,6 @@ class PolicyOutput:
     info: PolicyInferInfo = field(default_factory=dict)
 
 
-class ChunkPolicyClient(Protocol):
+class PolicyClient(Protocol):
     def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
         """Run a chunked policy and return `(action_chunk, info)`."""

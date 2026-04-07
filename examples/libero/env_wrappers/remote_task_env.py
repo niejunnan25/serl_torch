@@ -34,7 +34,6 @@ class RemoteLiberoTaskEnv:
         num_steps_wait: int = 10,
         max_episode_steps: Optional[int] = None,
         libero_root: Optional[str] = None,
-        openpi_root: Optional[str] = None,
         libero_config_dir: Optional[str] = None,
         libero_datasets_root: Optional[str] = None,
         env_seed_mode: str = "per_episode",
@@ -57,7 +56,6 @@ class RemoteLiberoTaskEnv:
             None if max_episode_steps is None else int(max_episode_steps)
         )
         self.libero_root = None if libero_root is None else str(libero_root)
-        self.openpi_root = None if openpi_root is None else str(openpi_root)
         self.libero_config_dir = (
             None if libero_config_dir is None else str(libero_config_dir)
         )
@@ -86,7 +84,6 @@ class RemoteLiberoTaskEnv:
                 num_steps_wait=self.num_steps_wait,
                 max_episode_steps=self.max_episode_steps,
                 libero_root=self.libero_root,
-                openpi_root=self.openpi_root,
                 libero_config_dir=self.libero_config_dir,
                 libero_datasets_root=self.libero_datasets_root,
                 env_seed_mode=self.env_seed_mode,

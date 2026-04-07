@@ -39,11 +39,10 @@ def resolve_task_specs(
     suite_name: str,
     task_ids: Optional[Iterable[int]] = None,
     libero_root: Optional[str] = None,
-    openpi_root: Optional[str] = None,
     libero_config_dir: Optional[str] = None,
     libero_datasets_root: Optional[str] = None,
 ) -> List[LiberoTaskSpec]:
-    resolved_libero_root = resolve_libero_root(libero_root, openpi_root=openpi_root)
+    resolved_libero_root = resolve_libero_root(libero_root)
     resolved_config_dir = resolve_libero_config_dir(libero_config_dir)
     resolved_datasets_root = resolve_libero_datasets_root(
         libero_datasets_root,

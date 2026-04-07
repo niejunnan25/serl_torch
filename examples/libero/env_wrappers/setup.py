@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from serl_launcher.policy.openpi import resolve_openpi_root as _resolve_openpi_root
 from serl_launcher.utils.repo_paths import find_serl_repo_root, resolve_repo_candidate
 
 
@@ -24,9 +23,7 @@ def _is_complete_libero_root(libero_root: Path) -> bool:
     return all(path.exists() for path in required_paths)
 
 
-def resolve_libero_root(
-    libero_root: Optional[str], openpi_root: Optional[str] = None
-) -> Path:
+def resolve_libero_root(libero_root: Optional[str]) -> Path:
     candidates = []
     if libero_root:
         candidates.append(Path(libero_root).expanduser().resolve())
@@ -35,7 +32,6 @@ def resolve_libero_root(
         candidates.extend(
             [
                 resolve_repo_candidate("LIBERO"),
-                _resolve_openpi_root(openpi_root) / "third_party" / "LIBERO",
                 serl_root / "third_party" / "LIBERO",
             ]
         )

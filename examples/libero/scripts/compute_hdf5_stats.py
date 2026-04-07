@@ -106,7 +106,6 @@ def main() -> None:
     parser.add_argument("--task_id", type=int, default=None, help="Single task id to process")
     parser.add_argument("--all", action="store_true", help="Process all tasks in the suite")
     parser.add_argument("--libero_root", type=str, default=None)
-    parser.add_argument("--openpi_root", type=str, default=None)
     parser.add_argument("--libero_config_dir", type=str, default=None)
     parser.add_argument("--libero_datasets_root", type=str, default=None)
     parser.add_argument(
@@ -123,7 +122,6 @@ def main() -> None:
         suite_name=args.suite_name,
         task_ids=_task_id_list(args),
         libero_root=args.libero_root,
-        openpi_root=args.openpi_root,
         libero_config_dir=args.libero_config_dir,
         libero_datasets_root=args.libero_datasets_root,
     )

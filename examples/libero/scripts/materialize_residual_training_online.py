@@ -19,11 +19,7 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_launcher.policy.openpi import (
-    OpenPIChunkClient,
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
-)
+from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
@@ -216,8 +212,6 @@ def main() -> None:
             f"got {num_episodes}"
         )
 
-    openpi_root = resolve_openpi_root(cfg.get("openpi_root", None))
-    setup_openpi_client_pythonpath(openpi_root)
     task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
     chunk_step_enabled = bool(cfg.get("chunk_step", {}).get("enabled", False))
     mode = _resolve_collection_mode(chunk_step_enabled=chunk_step_enabled)
@@ -238,7 +232,7 @@ def main() -> None:
     )
 
     env = _create_env(cfg, logger)
-    openpi_client = OpenPIChunkClient(
+    openpi_client = OpenPIPolicyClient(
         host=str(cfg.openpi.host),
         port=int(cfg.openpi.port),
         logger=logger,

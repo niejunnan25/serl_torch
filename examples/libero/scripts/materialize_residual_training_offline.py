@@ -27,11 +27,7 @@ from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
     materialize_with_config,
 )
-from serl_launcher.policy.openpi import (
-    OpenPIChunkClient,
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
-)
+from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_torch.examples.libero.hdf5_utils import resolve_task_specs
 from serl_torch.examples.libero.training_config import (
     LIBERO_OFFLINE_TRAINING_CONFIG,
@@ -106,7 +102,7 @@ def _build_frame_obs(payload: dict, frame_idx: int) -> dict:
 def _precompute_base_chunks(
     payload: dict,
     *,
-    openpi_client: OpenPIChunkClient,
+    openpi_client: OpenPIPolicyClient,
     chunk_horizon: int,
     progress_desc: str | None = None,
 ) -> np.ndarray:
@@ -144,7 +140,7 @@ def _convert_demo(
     dataset_path: Path,
     episode_index: int,
     chunk_horizon: int,
-    openpi_client: OpenPIChunkClient,
+    openpi_client: OpenPIPolicyClient,
     demo_name: str,
     residual_alpha: float,
     action_mask: np.ndarray,
@@ -258,7 +254,6 @@ def main() -> None:
     )
     parser.add_argument("--all", action="store_true", help="Convert all tasks in the suite")
     parser.add_argument("--libero_root", type=str, default=None)
-    parser.add_argument("--openpi_root", type=str, default=None)
     parser.add_argument("--libero_config_dir", type=str, default=None)
     parser.add_argument("--libero_datasets_root", type=str, default=None)
     parser.add_argument(
@@ -315,9 +310,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    openpi_root = resolve_openpi_root(args.openpi_root)
-    setup_openpi_client_pythonpath(openpi_root)
-    openpi_client = OpenPIChunkClient(host=args.openpi_host, port=args.openpi_port)
+    openpi_client = OpenPIPolicyClient(host=args.openpi_host, port=args.openpi_port)
 
     output_root = Path(args.output_dir).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -327,7 +320,6 @@ def main() -> None:
         suite_name=args.suite_name,
         task_ids=task_ids,
         libero_root=args.libero_root,
-        openpi_root=args.openpi_root,
         libero_config_dir=args.libero_config_dir,
         libero_datasets_root=args.libero_datasets_root,
     )

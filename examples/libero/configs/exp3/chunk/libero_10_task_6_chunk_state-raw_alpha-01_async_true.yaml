@@ -5,7 +5,6 @@
 # Global / Paths
 # ---------------------------
 seed: 0
-openpi_root: null
 libero_root: null
 libero_config_dir: null
 libero_datasets_root: null
