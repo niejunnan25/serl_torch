@@ -31,8 +31,8 @@ def resolve_libero_root(libero_root: Optional[str]) -> Path:
         serl_root = find_serl_repo_root()
         candidates.extend(
             [
-                resolve_repo_candidate("LIBERO"),
                 serl_root / "third_party" / "LIBERO",
+                resolve_repo_candidate("LIBERO"),
             ]
         )
 

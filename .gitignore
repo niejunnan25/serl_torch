@@ -184,8 +184,6 @@ examples/libero/data/**
 examples/libero/training_logs/
 .codex/
 
-# Local third_party workspace content
-third_party/
 
 # NFS temporary files
 .nfs*

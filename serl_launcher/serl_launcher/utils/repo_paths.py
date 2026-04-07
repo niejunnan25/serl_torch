@@ -7,6 +7,9 @@ from pathlib import Path
 def find_serl_repo_root() -> Path:
     this_file = Path(__file__).resolve()
     for parent in this_file.parents:
+        if (parent / "serl_launcher").exists() and (parent / "examples").exists():
+            return parent
+    for parent in this_file.parents:
         if (parent / "serl_launcher").exists():
             return parent
     raise RuntimeError("Cannot locate serl_torch repo root from current file path")

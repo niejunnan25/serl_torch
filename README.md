@@ -21,14 +21,14 @@
 
 这套代码当前默认假设本机存在下面这些路径：
 
-- `LIBERO` checkout: `/vla/users/niejunnan/codebase/LIBERO`
+- `LIBERO` submodule: `/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO`
 - LIBERO datasets: `/vla/users/niejunnan/datasets`
 - OpenPI repo: `/vla/users/niejunnan/codebase/openpi`
 - OpenPI `pi05` checkpoint: `/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero`
 
 如果你的机器路径不同，就在命令行显式覆盖：
 
-- `libero_root=...`
+- `libero_root=...`  # only needed if you want to override the bundled `third_party/LIBERO`
 - `libero_datasets_root=...`
 - `OPENPI_ROOT=...`
 - `POLICY_DIR=...`
@@ -91,7 +91,6 @@ bash tools/convert_offline.sh \
   --task_id 8 \
   --chunk_horizon 5 \
   --residual_alpha 0.10 \
-  --libero_root /vla/users/niejunnan/codebase/LIBERO \
   --libero_datasets_root /vla/users/niejunnan/datasets \
   --openpi_host 127.0.0.1 \
   --openpi_port 40111 \
@@ -122,7 +121,6 @@ bash tools/collect_online_prefill.sh \
   /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_pi05.yaml \
   --episodes 100 \
   --output_dir data/residual_training/online_pi05 \
-  libero_root=/vla/users/niejunnan/codebase/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
   openpi.host=127.0.0.1 \
   openpi.port=40111 \
@@ -148,7 +146,6 @@ bash examples/libero/tools/launch_async_train.sh \
   launch.actor_gpu=1 \
   launch.learner_gpu=3 \
   launch.openpi_gpu=4 \
-  libero_root=/vla/users/niejunnan/codebase/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
 

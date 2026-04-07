@@ -49,6 +49,9 @@ POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero
 - `pi05` run 的 online warmup 目录：
   `/vla/users/niejunnan/codebase/serl_torch/examples/libero/data/residual_training/online_pi05/libero_10_task_8/stepchunk/manifest.json`
 
+默认情况下，LIBERO 会优先从 `serl_torch/third_party/LIBERO` 解析。
+如果你本机没有初始化这个 submodule，再通过 `libero_root=...` 显式覆盖。
+
 如果你改了下面任意一项，就应该重新生成对应数据：
 
 - `residual.alpha`
