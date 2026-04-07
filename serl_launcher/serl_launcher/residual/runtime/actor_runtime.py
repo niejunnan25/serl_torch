@@ -65,6 +65,10 @@ from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
 from serl_launcher.residual.runtime.async_learning import _sync_agent_modules_inplace
+from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
+from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
+from serl_launcher.residual.runtime.actor_support import initialize_actor_loop_state
+from serl_launcher.residual.runtime.actor_warmup import run_base_only_warmup
 from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
 from serl_launcher.residual.runtime.checkpoint import _CheckpointTask
 from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
@@ -1297,34 +1301,158 @@ def run_residual_actor_loop(
         )
         sync_replay_prefetcher.start()
     logger.info("Initialized DrQ agent, replay buffer, and offline pipeline")
-
-    train_env_step = 0
-    decision_step = 0
-    train_episode_id = 0
-    warmup_episode_id = int(online_prefill_loaded_episodes)
-    init_episode_idx = int(online_prefill_loaded_episodes)
-    eval_trigger_count = 0
-    train_total_success = 0
-    train_recent_successes: deque[int] = deque(maxlen=20)
-    warmup_total_success = int(online_prefill_stats.get("success_episodes", 0))
-    warmup_recent_successes: deque[int] = deque(
-        [
-            int(v)
-            for v in online_prefill_stats.get("recent_episode_successes", [])
-        ],
-        maxlen=20,
-    )
-    skipped_seeds = 0
-    seed_cursor = int(cfg.task.seed_base) + int(online_prefill_loaded_episodes)
-    stopped_by_env_budget = False
-    last_update_info: Dict[str, Any] = {}
-    saved_checkpoint_steps: set[int] = set()
-
     max_train_env_steps = int(cfg.training.get("max_train_env_steps", 0))
-    train_progress: Optional[Any] = None
-    warmup_progress: Optional[Any] = None
-    phase_progress: Optional[Any] = None
-    train_progress_last_step = 0
+    ctx = ActorRuntimeContext(
+        cfg=cfg,
+        run_dir=run_dir,
+        logger=logger,
+        bindings=bindings,
+        async_eval_watcher_path=async_eval_watcher_path,
+    )
+    ctx.update(
+        env=env,
+        normalizer=normalizer,
+        image_keys=image_keys,
+        obs_cache=obs_cache,
+        task_key=task_key,
+        data_config=data_config,
+        build_residual_step_obs_profiled=build_residual_step_obs_profiled,
+        build_residual_step_core=build_residual_step_core,
+        openpi_client=openpi_client,
+        openpi_prefetcher=openpi_prefetcher,
+        stack_horizon=stack_horizon,
+        obs_state_mode=obs_state_mode,
+        env_action_dim=env_action_dim,
+        control_indices=control_indices,
+        step_action_dim=step_action_dim,
+        chunk_horizon=chunk_horizon,
+        residual_alpha=residual_alpha,
+        chunk_step_enabled=chunk_step_enabled,
+        chunk_step_sample_stride=chunk_step_sample_stride,
+        chunk_step_require_full_horizon=chunk_step_require_full_horizon,
+        chunk_step_pad_action=chunk_step_pad_action,
+        chunk_step_scheduler_clock=chunk_step_scheduler_clock,
+        agent_action_dim=agent_action_dim,
+        critic_action_dim=critic_action_dim,
+        residual_limits=residual_limits,
+        action_mask=action_mask,
+        epsilon_gating_enabled=epsilon_gating_enabled,
+        epsilon_gating_clock=epsilon_gating_clock,
+        resolved_cfg_dict=resolved_cfg_dict,
+        offline_enabled=offline_enabled,
+        offline_ratio=offline_ratio,
+        symmetric_replay=symmetric_replay,
+        async_enabled=async_enabled,
+        async_update_frequency=async_update_frequency,
+        async_idle_sleep_sec=async_idle_sleep_sec,
+        async_backend=async_backend,
+        async_actor_device=async_actor_device,
+        async_learner_device=async_learner_device,
+        async_batch_queue_size=async_batch_queue_size,
+        async_trainer_host=async_trainer_host,
+        async_trainer_port=async_trainer_port,
+        async_broadcast_port=async_broadcast_port,
+        async_data_store_queue_size=async_data_store_queue_size,
+        async_stats_period_steps=async_stats_period_steps,
+        async_agentlace_spawn_local_worker=async_agentlace_spawn_local_worker,
+        async_agentlace_bootstrap_file=async_agentlace_bootstrap_file,
+        async_agentlace_connect_timeout_sec=async_agentlace_connect_timeout_sec,
+        async_bounded_lag_enabled=async_bounded_lag_enabled,
+        async_bounded_lag_max_update_calls=async_bounded_lag_max_update_calls,
+        async_bounded_lag_poll_sec=async_bounded_lag_poll_sec,
+        async_bounded_lag_timeout_sec=async_bounded_lag_timeout_sec,
+        async_bounded_lag_sync_on_wait=async_bounded_lag_sync_on_wait,
+        async_bounded_lag_log_period_steps=async_bounded_lag_log_period_steps,
+        async_bounded_lag_env_steps_per_update_call=async_bounded_lag_env_steps_per_update_call,
+        async_bounded_lag_manual_rate_enabled=async_bounded_lag_manual_rate_enabled,
+        async_bounded_lag_mode=async_bounded_lag_mode,
+        replay_prefetch_enabled=replay_prefetch_enabled,
+        replay_prefetch_queue_size=replay_prefetch_queue_size,
+        replay_prefetch_pin_memory=replay_prefetch_pin_memory,
+        replay_prefetch_to_device=replay_prefetch_to_device,
+        profiling_enabled=profiling_enabled,
+        profiling_window_size=profiling_window_size,
+        profiling_log_period_steps=profiling_log_period_steps,
+        profiling_log_file=profiling_log_file,
+        external_agentlace_actor_mode=external_agentlace_actor_mode,
+        manage_learner_state_locally=manage_learner_state_locally,
+        agentlace_bridge_config=agentlace_bridge_config,
+        agentlace_bridge_state=agentlace_bridge_state,
+        action_transform=action_transform,
+        action_space=action_space,
+        agent=agent,
+        learner_agent=learner_agent,
+        async_learner=async_learner,
+        sync_replay_lock=sync_replay_lock,
+        sync_replay_prefetcher=sync_replay_prefetcher,
+        checkpoint_writer=checkpoint_writer,
+        replay_buffer=replay_buffer,
+        offline_buffer=offline_buffer,
+        offline_stats=offline_stats,
+        warmstart_info=warmstart_info,
+        online_prefill_stats=online_prefill_stats,
+        checkpoint_every_steps=checkpoint_every_steps,
+        checkpoint_keep=checkpoint_keep,
+        checkpoint_dir=checkpoint_dir,
+        async_eval_enabled=async_eval_enabled,
+        async_eval_every_episodes=async_eval_every_episodes,
+        async_eval_alpha_mode=async_eval_alpha_mode,
+        async_eval_proc=async_eval_proc,
+        async_eval_log_fp=async_eval_log_fp,
+        async_eval_log_path=async_eval_log_path,
+        async_eval_summary_path=async_eval_summary_path,
+        async_eval_watcher_return_code=async_eval_watcher_return_code,
+        async_eval_dead_reported=async_eval_dead_reported,
+        profiler=profiler,
+        profiling_logger=profiling_logger,
+        profiling_last_flush_step=profiling_last_flush_step,
+        async_eval_queue_path=async_eval_queue_path,
+        step_logger=step_logger,
+        episode_logger=episode_logger,
+        tb_writer=tb_writer,
+        tb_step_period=tb_step_period,
+        tb_histogram_period=tb_histogram_period,
+        progress_enabled=progress_enabled,
+        progress_mininterval_sec=progress_mininterval_sec,
+        step_metric_window=step_metric_window,
+        async_eval_tb_sync_state=async_eval_tb_sync_state,
+        sample_obs=sample_obs,
+        sample_state_core=sample_state_core,
+        configured_warmup_episodes=configured_warmup_episodes,
+        online_prefill_enabled=online_prefill_enabled,
+        online_prefill_loaded_episodes=online_prefill_loaded_episodes,
+        warmup_episodes_cfg=warmup_episodes_cfg,
+        need_warmup_first=need_warmup_first,
+        max_train_env_steps=max_train_env_steps,
+    )
+    state = initialize_actor_loop_state(ctx)
+    if async_learner is None and not need_warmup_first:
+        ensure_training_runtime_started(ctx)
+        agent = ctx.agent
+        async_learner = ctx.async_learner
+        replay_buffer = ctx.replay_buffer
+        sync_replay_lock = ctx.sync_replay_lock
+        sync_replay_prefetcher = ctx.sync_replay_prefetcher
+
+    train_env_step = int(state.train_env_step)
+    decision_step = int(state.decision_step)
+    train_episode_id = int(state.train_episode_id)
+    warmup_episode_id = int(state.warmup_episode_id)
+    init_episode_idx = int(state.init_episode_idx)
+    eval_trigger_count = int(state.eval_trigger_count)
+    train_total_success = int(state.train_total_success)
+    train_recent_successes = state.train_recent_successes
+    warmup_total_success = int(state.warmup_total_success)
+    warmup_recent_successes = state.warmup_recent_successes
+    skipped_seeds = int(state.skipped_seeds)
+    seed_cursor = int(state.seed_cursor)
+    stopped_by_env_budget = bool(state.stopped_by_env_budget)
+    last_update_info = state.last_update_info
+    saved_checkpoint_steps = state.saved_checkpoint_steps
+    train_progress = state.train_progress
+    warmup_progress = state.warmup_progress
+    phase_progress = state.phase_progress
+    train_progress_last_step = int(state.train_progress_last_step)
 
     def _new_progress(
         *, desc: str, total: Optional[int], position: int, leave: bool
@@ -1405,551 +1533,30 @@ def run_residual_actor_loop(
 
     try:
         if need_warmup_first:
-            if online_prefill_loaded_episodes > 0:
-                logger.info(
-                    "Warmup phase: collecting remaining %s/%s base-only episodes "
-                    "after loading online prefill, no actor/critic updates",
-                    warmup_episodes_cfg,
-                    configured_warmup_episodes,
-                )
-            else:
-                logger.info(
-                    "Warmup phase: collecting %s base-only episodes, no actor/critic updates",
-                    warmup_episodes_cfg,
-                )
-            warmup_progress = _new_progress(
-                desc="warmup_episode",
-                total=int(warmup_episodes_cfg),
-                position=1,
-                leave=False,
-            )
-            for _ in range(warmup_episodes_cfg):
-                current_warmup_episode_id = int(warmup_episode_id + 1)
-                current_init_episode_idx = int(init_episode_idx)
-                init_episode_idx += 1
-
-                seed = int(seed_cursor)
-                seed_cursor += 1
-                obs_cache.clear()
-                obs_raw = _profile_call(
-                    profiler,
-                    "env_reset",
-                    env.reset,
-                    seed=seed,
-                    init_episode_idx=current_init_episode_idx,
-                )
-                max_episode_steps = int(env.step_limit)
-                if cfg.training.max_env_steps_per_episode is not None:
-                    max_episode_steps = min(
-                        max_episode_steps,
-                        int(cfg.training.max_env_steps_per_episode),
-                    )
-                episode_success = False
-                episode_return = 0.0
-                episode_steps = 0
-                episode_done = False
-                cached_base_chunk = None
-                cached_infer_info = None
-                while (episode_steps < max_episode_steps) and (not episode_done):
-                    if cached_base_chunk is None:
-                        openpi_chunk, infer_info = openpi_client.infer_chunk(
-                            _policy_input(obs_raw, env.current_instruction)
-                        )
-                        base_chunk = select_action_chunk_window(
-                            openpi_chunk,
-                            horizon=chunk_horizon,
-                            action_dim=env_action_dim,
-                        )
-                    else:
-                        base_chunk = cached_base_chunk
-                        infer_info = cached_infer_info or {
-                            "e2e_ms": None,
-                            "policy_ms": None,
-                            "server_ms": None,
-                        }
-                        cached_base_chunk = None
-                        cached_infer_info = None
-
-                    if chunk_step_enabled:
-                        alpha_step = 0.0
-                        execute_horizon = int(
-                            min(chunk_horizon, max_episode_steps - episode_steps)
-                        )
-                        executed_base_chunk = np.asarray(
-                            base_chunk[:execute_horizon], dtype=np.float32
-                        )
-                        chunk_result = _profile_call(
-                            profiler,
-                            "env_step_chunk",
-                            env.step_chunk,
-                            executed_base_chunk,
-                        )
-                        chunk_observations = list(chunk_result["observations"])
-                        next_obs_raw = chunk_result["obs"]
-                        chunk_rewards = [float(v) for v in chunk_result["rewards"]]
-                        chunk_infos = [dict(v) for v in chunk_result["infos"]]
-                        chunk_dones = [bool(v) for v in chunk_result["dones"]]
-                        actual_chunk_steps = int(len(chunk_rewards))
-                        if actual_chunk_steps <= 0:
-                            raise RuntimeError(
-                                "Warmup chunk execution returned zero steps"
-                            )
-                        executed_base_chunk = executed_base_chunk[:actual_chunk_steps]
-
-                        done = False
-                        current_step_obs_raw = obs_raw
-                        for chunk_step in range(actual_chunk_steps):
-                            current_episode_step = int(episode_steps)
-                            reward = float(chunk_rewards[chunk_step])
-                            info = chunk_infos[chunk_step]
-                            episode_steps += 1
-                            episode_return += float(reward)
-                            episode_success = bool(info.get("success", episode_success))
-                            timeout = bool(episode_steps >= max_episode_steps)
-                            done = bool(chunk_dones[chunk_step] or timeout)
-                            step_logger.write(
-                                {
-                                    "train_env_step": None,
-                                    "decision_step": None,
-                                    "warmup_episode_id": current_warmup_episode_id,
-                                    "train_episode_id": None,
-                                    "phase_episode_idx": current_warmup_episode_id,
-                                    "phase": "warmup_base_only",
-                                    "episode_step": episode_steps,
-                                    "seed": int(
-                                        env.last_seed
-                                        if env.last_seed is not None
-                                        else seed
-                                    ),
-                                    "init_state_idx": (
-                                        int(env.current_init_state_idx)
-                                        if env.current_init_state_idx is not None
-                                        else None
-                                    ),
-                                    "is_warmup": True,
-                                    "is_probing": False,
-                                    "replan_point": bool(chunk_step == 0),
-                                    "chunk_step": int(chunk_step),
-                                    "chunk_horizon": int(actual_chunk_steps),
-                                    "infer_e2e_ms": infer_info.get("e2e_ms")
-                                    if chunk_step == 0
-                                    else None,
-                                    "infer_policy_ms": infer_info.get("policy_ms")
-                                    if chunk_step == 0
-                                    else None,
-                                    "infer_server_ms": infer_info.get("server_ms")
-                                    if chunk_step == 0
-                                    else None,
-                                    "a_base": executed_base_chunk[chunk_step].tolist(),
-                                    "a_res_policy": np.zeros(
-                                        (step_action_dim,), dtype=np.float32
-                                    ).tolist(),
-                                    "a_res_policy_applied": np.zeros(
-                                        (step_action_dim,), dtype=np.float32
-                                    ).tolist(),
-                                    "a_res": np.zeros(
-                                        (env_action_dim,), dtype=np.float32
-                                    ).tolist(),
-                                    "a_final": executed_base_chunk[chunk_step].tolist(),
-                                    "alpha": 0.0,
-                                    "alpha_obs": float(alpha_step),
-                                    "alpha_exec": 0.0,
-                                    "reward": float(reward),
-                                    "done": bool(done),
-                                    "success": bool(episode_success),
-                                }
-                            )
-                            step_payload = _build_chunk_step_record(
-                                current_step_obs_raw,
-                                base_action=executed_base_chunk[chunk_step],
-                                final_action=executed_base_chunk[chunk_step],
-                                alpha_obs=float(alpha_step),
-                                episode_id=current_init_episode_idx,
-                                episode_step=current_episode_step,
-                                done=bool(done),
-                            )
-                            step_payload["rewards"] = float(reward)
-                            _insert_online_transition(
-                                replay_buffer,
-                                step_payload,
-                                chunk_step_enabled=chunk_step_enabled,
-                            )
-                            if chunk_step < (actual_chunk_steps - 1):
-                                current_step_obs_raw = chunk_observations[chunk_step]
-                            if done:
-                                episode_done = True
-                                break
-
-                        if not done:
-                            (
-                                next_openpi_chunk,
-                                next_infer_info,
-                            ) = openpi_client.infer_chunk(
-                                _policy_input(next_obs_raw, env.current_instruction)
-                            )
-                            next_base_chunk = select_action_chunk_window(
-                                next_openpi_chunk,
-                                horizon=chunk_horizon,
-                                action_dim=env_action_dim,
-                            )
-                            cached_base_chunk = next_base_chunk
-                            cached_infer_info = next_infer_info
-                        obs_raw = next_obs_raw
-                        continue
-
-                    next_obs_raw = obs_raw
-                    for chunk_step in range(chunk_horizon):
-                        if episode_steps >= max_episode_steps:
-                            episode_done = True
-                            break
-                        alpha_step = 0.0
-                        obs_input = build_residual_step_obs_profiled(
-                            profiler,
-                            next_obs_raw,
-                            base_chunk[chunk_step],
-                            image_keys=image_keys,
-                            stack_horizon=stack_horizon,
-                            normalizer=normalizer,
-                            obs_cache=obs_cache,
-                            alpha=float(alpha_step),
-                            state_mode=obs_state_mode,
-                        )
-                        residual_step_action = np.zeros(
-                            (step_action_dim,), dtype=np.float32
-                        )
-                        final_action = base_chunk[chunk_step].copy()
-                        next_obs_raw, reward, env_done, _, info = _profile_call(
-                            profiler,
-                            "env_step",
-                            env.step,
-                            final_action,
-                        )
-                        episode_steps += 1
-                        episode_return += float(reward)
-                        episode_success = bool(info["success"])
-                        timeout = bool(episode_steps >= max_episode_steps)
-                        done = bool(env_done or timeout)
-                        next_alpha_step = 0.0
-                        next_chunk_future = None
-                        if (
-                            (not done)
-                            and chunk_step == (chunk_horizon - 1)
-                            and openpi_prefetcher is not None
-                        ):
-                            next_chunk_future = openpi_prefetcher.submit(
-                                _policy_input(next_obs_raw, env.current_instruction)
-                            )
-                        if done:
-                            next_obs_input = _zero_obs_like(obs_input)
-                            mask = 0.0
-                        elif chunk_step < (chunk_horizon - 1):
-                            next_obs_input = build_residual_step_obs_profiled(
-                                profiler,
-                                next_obs_raw,
-                                base_chunk[chunk_step + 1],
-                                image_keys=image_keys,
-                                stack_horizon=stack_horizon,
-                                normalizer=normalizer,
-                                obs_cache=obs_cache,
-                                alpha=float(next_alpha_step),
-                                state_mode=obs_state_mode,
-                            )
-                            mask = 1.0
-                        else:
-                            if next_chunk_future is not None:
-                                (
-                                    next_openpi_chunk,
-                                    next_infer_info,
-                                ) = next_chunk_future.result()
-                            else:
-                                (
-                                    next_openpi_chunk,
-                                    next_infer_info,
-                                ) = openpi_client.infer_chunk(
-                                    _policy_input(next_obs_raw, env.current_instruction)
-                                )
-                            next_base_chunk = select_action_chunk_window(
-                                next_openpi_chunk,
-                                horizon=chunk_horizon,
-                                action_dim=env_action_dim,
-                            )
-                            next_obs_input = build_residual_step_obs_profiled(
-                                profiler,
-                                next_obs_raw,
-                                next_base_chunk[0],
-                                image_keys=image_keys,
-                                stack_horizon=stack_horizon,
-                                normalizer=normalizer,
-                                obs_cache=obs_cache,
-                                alpha=float(next_alpha_step),
-                                state_mode=obs_state_mode,
-                            )
-                            cached_base_chunk = next_base_chunk
-                            cached_infer_info = next_infer_info
-                            mask = 1.0
-                        transition_payload = {
-                            "observations": _clone_obs_dict(obs_input),
-                            "actions": final_action.astype(np.float32),
-                            "next_observations": _clone_obs_dict(next_obs_input),
-                            "rewards": np.float32(reward),
-                            "masks": np.float32(mask),
-                            "dones": bool(done),
-                            "episode_id": int(current_init_episode_idx),
-                            "episode_step": int(episode_steps - 1),
-                            "decision_id": int(chunk_step == 0),
-                            "is_decision_start": bool(chunk_step == 0),
-                        }
-                        _insert_online_transition(
-                            replay_buffer,
-                            transition_payload,
-                            chunk_step_enabled=chunk_step_enabled,
-                        )
-                        step_logger.write(
-                            {
-                                "train_env_step": None,
-                                "decision_step": None,
-                                "warmup_episode_id": current_warmup_episode_id,
-                                "train_episode_id": None,
-                                "phase_episode_idx": current_warmup_episode_id,
-                                "phase": "warmup_base_only",
-                                "episode_step": episode_steps,
-                                "seed": int(
-                                    env.last_seed if env.last_seed is not None else seed
-                                ),
-                                "init_state_idx": (
-                                    int(env.current_init_state_idx)
-                                    if env.current_init_state_idx is not None
-                                    else None
-                                ),
-                                "is_warmup": True,
-                                "is_probing": False,
-                                "replan_point": bool(chunk_step == 0),
-                                "chunk_step": int(chunk_step),
-                                "chunk_horizon": int(chunk_horizon),
-                                "infer_e2e_ms": infer_info.get("e2e_ms")
-                                if chunk_step == 0
-                                else None,
-                                "infer_policy_ms": infer_info.get("policy_ms")
-                                if chunk_step == 0
-                                else None,
-                                "infer_server_ms": infer_info.get("server_ms")
-                                if chunk_step == 0
-                                else None,
-                                "a_base": base_chunk[chunk_step].tolist(),
-                                "a_res_policy": residual_step_action.tolist(),
-                                "a_res_policy_applied": np.zeros(
-                                    (step_action_dim,), dtype=np.float32
-                                ).tolist(),
-                                "a_res": np.zeros_like(
-                                    base_chunk[chunk_step], dtype=np.float32
-                                ).tolist(),
-                                "a_final": final_action.tolist(),
-                                "alpha": 0.0,
-                                "alpha_obs": float(alpha_step),
-                                "alpha_exec": 0.0,
-                                "reward": float(reward),
-                                "done": bool(done),
-                                "success": bool(episode_success),
-                            }
-                        )
-                        if done:
-                            episode_done = True
-                            break
-                    obs_raw = next_obs_raw
-
-                warmup_total_success += int(episode_success)
-                warmup_recent_successes.append(int(episode_success))
-                warmup_running_success_rate = float(warmup_total_success) / float(
-                    current_warmup_episode_id
-                )
-                warmup_recent_success_rate = float(
-                    sum(warmup_recent_successes)
-                ) / float(len(warmup_recent_successes))
-                episode_logger.write(
-                    {
-                        "phase": "warmup_base_only",
-                        "warmup_episode_id": current_warmup_episode_id,
-                        "train_episode_id": None,
-                        "phase_episode_idx": current_warmup_episode_id,
-                        "seed": int(
-                            env.last_seed if env.last_seed is not None else seed
-                        ),
-                        "init_state_idx": (
-                            int(env.current_init_state_idx)
-                            if env.current_init_state_idx is not None
-                            else None
-                        ),
-                        "success": bool(episode_success),
-                        "episode_steps": int(episode_steps),
-                        "episode_return": float(episode_return),
-                        "train_env_step": None,
-                        "decision_step": None,
-                        "running_success_rate": warmup_running_success_rate,
-                        "recent_success_rate": warmup_recent_success_rate,
-                        "is_warmup": True,
-                    }
-                )
-                tb_writer.add_scalar(
-                    "warmup/episode/success",
-                    int(episode_success),
-                    current_warmup_episode_id,
-                )
-                tb_writer.add_scalar(
-                    "warmup/episode/return",
-                    float(episode_return),
-                    current_warmup_episode_id,
-                )
-                tb_writer.add_scalar(
-                    "warmup/episode/length",
-                    int(episode_steps),
-                    current_warmup_episode_id,
-                )
-                tb_writer.add_scalar(
-                    "warmup/episode/running_success_rate",
-                    warmup_running_success_rate,
-                    current_warmup_episode_id,
-                )
-                tb_writer.add_scalar(
-                    "warmup/episode/recent_success_rate_20",
-                    warmup_recent_success_rate,
-                    current_warmup_episode_id,
-                )
-                tb_writer.add_scalar(
-                    "warmup/system/online_buffer_size",
-                    int(len(replay_buffer)),
-                    current_warmup_episode_id,
-                )
-                logger.info(
-                    "warmup episode %s/%s success=%s steps=%s return=%.2f",
-                    current_warmup_episode_id,
-                    configured_warmup_episodes,
-                    episode_success,
-                    episode_steps,
-                    episode_return,
-                )
-                _flush_external_agentlace_actor()
-                warmup_episode_id = current_warmup_episode_id
-                if warmup_progress is not None:
-                    warmup_progress.update(1)
-                    warmup_progress.set_postfix(
-                        {"success": int(episode_success)},
-                        refresh=False,
-                    )
-
-            logger.info(
-                "Warmup complete. Warmup episodes=%s total_success=%s buffer_size=%s. "
-                "Starting residual training phase.",
-                warmup_episode_id,
-                warmup_total_success,
-                len(replay_buffer),
-            )
-            if warmup_progress is not None:
-                warmup_progress.close()
-                warmup_progress = None
-            if async_learner is None and async_enabled:
-                if async_backend == "agentlace":
-                    agentlace_replay_buffer = replay_buffer
-                    async_learner = create_agentlace_async_learner(
-                        config=agentlace_bridge_config,
-                        actor_agent=agent,
-                        replay_buffer=agentlace_replay_buffer,
-                        offline_buffer=(
-                            offline_buffer
-                            if offline_enabled and manage_learner_state_locally
-                            else None
-                        ),
-                        cfg_dict=resolved_cfg_dict,
-                        sample_obs=sample_obs,
-                        action_dim=agent_action_dim,
-                        critic_action_dim=critic_action_dim,
-                        image_keys=image_keys,
-                        action_transform=action_transform,
-                    )
-                    replay_buffer = async_learner.replay_proxy
-                elif async_backend == "process":
-                    async_learner = _ProcessAsyncLearner(
-                        actor_agent=agent,
-                        online_buffer=replay_buffer,
-                        offline_buffer=offline_buffer if offline_enabled else None,
-                        batch_size=int(cfg.replay.batch_size),
-                        offline_ratio=offline_ratio,
-                        symmetric_replay=symmetric_replay,
-                        training_starts=int(cfg.training.training_starts),
-                        update_frequency=async_update_frequency,
-                        idle_sleep_sec=async_idle_sleep_sec,
-                        cfg_dict=resolved_cfg_dict,
-                        sample_obs=sample_obs,
-                        action_dim=agent_action_dim,
-                        critic_action_dim=critic_action_dim,
-                        image_keys=image_keys,
-                        action_transform=action_transform,
-                        actor_device=async_actor_device,
-                        learner_device=async_learner_device,
-                        batch_queue_size=async_batch_queue_size,
-                    )
-                    async_learner.start()
-                else:
-                    agent = build_drq_agent(
-                        cfg,
-                        sample_obs=sample_obs,
-                        action_dim=agent_action_dim,
-                        image_keys=image_keys,
-                        critic_action_dim=critic_action_dim,
-                        action_transform=action_transform,
-                        device=async_actor_device,
-                    )
-                    _sync_agent_modules_inplace(agent, learner_agent)
-                    async_learner = _AsyncLearner(
-                        learner_agent=learner_agent,
-                        actor_agent=agent,
-                        online_buffer=replay_buffer,
-                        offline_buffer=offline_buffer if offline_enabled else None,
-                        batch_size=int(cfg.replay.batch_size),
-                        offline_ratio=offline_ratio,
-                        symmetric_replay=symmetric_replay,
-                        training_starts=int(cfg.training.training_starts),
-                        utd_ratio=int(cfg.sac.utd_ratio),
-                        update_frequency=async_update_frequency,
-                        idle_sleep_sec=async_idle_sleep_sec,
-                        replay_prefetch_enabled=replay_prefetch_enabled,
-                        replay_prefetch_queue_size=replay_prefetch_queue_size,
-                        replay_prefetch_pin_memory=replay_prefetch_pin_memory,
-                        replay_prefetch_to_device=replay_prefetch_to_device,
-                        checkpoint_writer=checkpoint_writer,
-                        profiler=profiler,
-                    )
-                    async_learner.start()
-            elif replay_prefetch_enabled:
-                sync_replay_lock = threading.Lock()
-
-                def _sample_sync_prefetch_batch() -> Optional[
-                    Tuple[Dict[str, Any], int, int]
-                ]:
-                    assert replay_buffer is not None
-                    assert sync_replay_lock is not None
-                    with sync_replay_lock:
-                        if _replay_progress_size(replay_buffer) < int(
-                            cfg.training.training_starts
-                        ):
-                            return None
-                        return _sample_mixed_batch(
-                            replay_buffer,
-                            offline_buffer if offline_enabled else None,
-                            batch_size=int(cfg.replay.batch_size),
-                            offline_ratio=offline_ratio,
-                            symmetric_replay=symmetric_replay,
-                        )
-
-                sync_replay_prefetcher = _MixedBatchPrefetcher(
-                    sample_fn=_sample_sync_prefetch_batch,
-                    queue_size=replay_prefetch_queue_size,
-                    idle_sleep_sec=async_idle_sleep_sec,
-                    device=learner_agent.device,
-                    pin_memory=replay_prefetch_pin_memory,
-                    to_device=replay_prefetch_to_device,
-                    profiler=profiler,
-                )
-                sync_replay_prefetcher.start()
+            run_base_only_warmup(ctx, state)
+            agent = ctx.agent
+            async_learner = ctx.async_learner
+            replay_buffer = ctx.replay_buffer
+            sync_replay_lock = ctx.sync_replay_lock
+            sync_replay_prefetcher = ctx.sync_replay_prefetcher
+            train_env_step = int(state.train_env_step)
+            decision_step = int(state.decision_step)
+            train_episode_id = int(state.train_episode_id)
+            warmup_episode_id = int(state.warmup_episode_id)
+            init_episode_idx = int(state.init_episode_idx)
+            eval_trigger_count = int(state.eval_trigger_count)
+            train_total_success = int(state.train_total_success)
+            train_recent_successes = state.train_recent_successes
+            warmup_total_success = int(state.warmup_total_success)
+            warmup_recent_successes = state.warmup_recent_successes
+            skipped_seeds = int(state.skipped_seeds)
+            seed_cursor = int(state.seed_cursor)
+            stopped_by_env_budget = bool(state.stopped_by_env_budget)
+            last_update_info = state.last_update_info
+            train_progress = state.train_progress
+            warmup_progress = state.warmup_progress
+            phase_progress = state.phase_progress
+            train_progress_last_step = int(state.train_progress_last_step)
 
         _sync_async_bounded_lag_baseline_from_learner()
 
