@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 from omegaconf import DictConfig
 from serl_launcher.data.normalizer import StateActionNormalizer
+from serl_launcher.residual.data.transitions import (
+    build_step_transition,
+    build_stepchunk_transition,
+)
 
 from ..policy import (
     LiberoObservationCache,
@@ -14,7 +18,7 @@ from ..policy import (
     build_residual_step_core,
     select_action_chunk_window,
 )
-from ..utils.obs_utils import _clone_obs_dict, _zero_obs_like
+from ..utils.obs_utils import _zero_obs_like
 from ..utils.profiling import (
     _RuntimeProfiler,
     _build_residual_step_obs_profiled,
@@ -80,12 +84,6 @@ def _bootstrap_offline_with_base_success(
     max_ep_steps_override = bootstrap_cfg.get("max_env_steps_per_episode", None)
     only_success = bool(bootstrap_cfg.get("only_success", True))
     obs_cache = LiberoObservationCache()
-
-    def _normalize_step_action(action: np.ndarray) -> np.ndarray:
-        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-        if normalizer is None:
-            return action_arr.astype(np.float32)
-        return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
 
     while (
         stats["attempts"] < max_seed_attempts
@@ -167,28 +165,22 @@ def _bootstrap_offline_with_base_success(
                     timeout = bool(episode_steps >= max_episode_steps)
                     done = bool(chunk_env_dones[step_idx] or timeout)
                     episode_transitions.append(
-                        {
-                            "obs_core": build_residual_step_core(
+                        build_stepchunk_transition(
+                            obs_core=build_residual_step_core(
                                 current_step_obs_raw,
                                 image_keys=image_keys,
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                             ),
-                            "base_action": np.asarray(
-                                executed_base_chunk[step_idx], dtype=np.float32
-                            ),
-                            "base_action_norm": _normalize_step_action(
-                                executed_base_chunk[step_idx]
-                            ),
-                            "actions": np.asarray(
-                                executed_base_chunk[step_idx], dtype=np.float32
-                            ),
-                            "rewards": float(reward),
-                            "dones": bool(done),
-                            "alpha": float(residual_alpha),
-                            "episode_id": int(seed),
-                            "episode_step": int(current_episode_step),
-                        }
+                            base_action=executed_base_chunk[step_idx],
+                            actions=executed_base_chunk[step_idx],
+                            reward=reward,
+                            done=done,
+                            alpha=float(residual_alpha),
+                            episode_id=int(seed),
+                            episode_step=int(current_episode_step),
+                            normalizer=normalizer,
+                        )
                     )
                     if step_idx < (actual_chunk_steps - 1):
                         current_step_obs_raw = chunk_observations[step_idx]
@@ -281,16 +273,16 @@ def _bootstrap_offline_with_base_success(
                     mask = 1.0
 
                 episode_transitions.append(
-                    {
-                        "observations": _clone_obs_dict(obs_input),
-                        "actions": np.asarray(
+                    build_step_transition(
+                        observations=obs_input,
+                        actions=np.asarray(
                             base_chunk[chunk_step], dtype=np.float32
                         ).reshape(action_dim),
-                        "next_observations": _clone_obs_dict(next_obs_input),
-                        "rewards": np.float32(reward),
-                        "masks": np.float32(mask),
-                        "dones": bool(done),
-                    }
+                        next_observations=next_obs_input,
+                        reward=reward,
+                        done=done,
+                        mask=mask,
+                    )
                 )
 
                 if done:

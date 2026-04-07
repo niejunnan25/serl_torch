@@ -1,15 +1,20 @@
 """Offline residual dataset conversion helpers."""
 from __future__ import annotations
 
-import json
 import logging
 import pickle
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import numpy as np
 from omegaconf import DictConfig
+from serl_launcher.data.episode_paths import resolve_episode_files
 from serl_launcher.data.normalizer import StateActionNormalizer
+from serl_launcher.residual.data.action_projection import project_expert_action
+from serl_launcher.residual.data.transitions import (
+    build_step_transition,
+    build_stepchunk_transition,
+)
 
 from ..policy import (
     LiberoObservationCache,
@@ -18,56 +23,11 @@ from ..policy import (
     select_action_chunk_window,
 )
 from ..utils.alpha_utils import validate_alpha
-from ..utils.obs_utils import _clone_obs_dict, _zero_obs_like
+from ..utils.obs_utils import _zero_obs_like
 from ..utils.profiling import _RuntimeProfiler, _build_residual_step_obs_profiled
 
 if TYPE_CHECKING:
     from serl_launcher.data.replay_buffer import ReplayBuffer
-
-
-def _resolve_offline_paths(dataset_paths: Any, base_dir: Path) -> List[Path]:
-    resolved: List[Path] = []
-    if dataset_paths is None:
-        return resolved
-
-    if isinstance(dataset_paths, (str, Path)):
-        items = [dataset_paths]
-    else:
-        items = list(dataset_paths)
-
-    for item in items:
-        candidate = Path(str(item)).expanduser()
-        if not candidate.is_absolute():
-            candidate = (base_dir / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-
-        if candidate.is_file():
-            if candidate.name == "manifest.json":
-                with open(candidate, "r", encoding="utf-8") as f:
-                    manifest = json.load(f)
-                for episode_file in manifest.get("episode_files", []):
-                    resolved.append(Path(str(episode_file)).expanduser().resolve())
-            elif candidate.suffix == ".pkl":
-                resolved.append(candidate)
-        elif candidate.is_dir():
-            manifest_path = candidate / "manifest.json"
-            if manifest_path.exists():
-                with open(manifest_path, "r", encoding="utf-8") as f:
-                    manifest = json.load(f)
-                for episode_file in manifest.get("episode_files", []):
-                    resolved.append(Path(str(episode_file)).expanduser().resolve())
-            else:
-                resolved.extend(sorted(candidate.glob("episode_*.pkl")))
-
-    deduped: List[Path] = []
-    seen = set()
-    for path in resolved:
-        key = str(path)
-        if key not in seen:
-            deduped.append(path)
-            seen.add(key)
-    return deduped
 
 
 def _build_offline_frame_obs(payload: Dict[str, Any], frame_idx: int) -> Dict[str, Any]:
@@ -89,41 +49,6 @@ def _build_offline_frame_obs(payload: Dict[str, Any], frame_idx: int) -> Dict[st
 def _get_episode_prompt(payload: Dict[str, Any], fallback_prompt: str) -> str:
     prompt = payload.get("task_description", payload.get("prompt", fallback_prompt))
     return str(prompt)
-
-
-def _normalize_step_action(
-    action: np.ndarray,
-    *,
-    normalizer: Optional[StateActionNormalizer],
-) -> np.ndarray:
-    action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-    if normalizer is None:
-        return action_arr.astype(np.float32)
-    return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
-
-
-def _project_expert_action(
-    *,
-    expert_action: np.ndarray,
-    base_action: np.ndarray,
-    control_indices: np.ndarray,
-    denom: np.ndarray,
-    clip_residual_to_unit: bool,
-) -> Tuple[np.ndarray, int]:
-    base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
-    expert_action_arr = np.asarray(expert_action, dtype=np.float32).reshape(-1)
-    raw_residual = (
-        expert_action_arr[control_indices] - base_action_arr[control_indices]
-    ) / denom
-    clipped_count = int(np.count_nonzero((raw_residual < -1.0) | (raw_residual > 1.0)))
-    if clip_residual_to_unit:
-        raw_residual = np.clip(raw_residual, -1.0, 1.0)
-
-    projected = np.asarray(base_action_arr, dtype=np.float32).copy()
-    projected[control_indices] = base_action_arr[control_indices] + (
-        raw_residual * denom
-    )
-    return projected.astype(np.float32), clipped_count
 
 
 def _get_base_chunk_for_start(
@@ -203,7 +128,7 @@ def _load_offline_residual_buffer(
         "errors": 0,
     }
 
-    offline_paths = _resolve_offline_paths(cfg.offline.dataset_paths, Path.cwd())
+    offline_paths = resolve_episode_files(cfg.offline.dataset_paths, base_dir=Path.cwd())
     stats["files_total"] = len(offline_paths)
     if not offline_paths:
         logger.warning("offline.enabled=true but offline.dataset_paths is empty")
@@ -315,7 +240,7 @@ def _load_offline_residual_buffer(
                     if step_idx < rewards.shape[0]
                     else float(done)
                 )
-                projected_expert_action, clipped_count = _project_expert_action(
+                projected_expert_action, clipped_count = project_expert_action(
                     expert_action=expert_action,
                     base_action=base_action,
                     control_indices=control_indices,
@@ -326,26 +251,23 @@ def _load_offline_residual_buffer(
 
                 if chunk_step_enabled:
                     offline_buffer.insert(
-                        {
-                            "obs_core": build_residual_step_core(
+                        build_stepchunk_transition(
+                            obs_core=build_residual_step_core(
                                 obs_raw,
                                 image_keys=image_keys,
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 cache_key=obs_cache_key,
                             ),
-                            "base_action": np.asarray(base_action, dtype=np.float32),
-                            "base_action_norm": _normalize_step_action(
-                                base_action,
-                                normalizer=normalizer,
-                            ),
-                            "actions": projected_expert_action.reshape(full_action_dim),
-                            "rewards": np.float32(reward),
-                            "dones": bool(done),
-                            "alpha": float(residual_alpha),
-                            "episode_id": int(stats["files_loaded"] - 1),
-                            "episode_step": int(step_idx),
-                        }
+                            base_action=base_action,
+                            actions=projected_expert_action.reshape(full_action_dim),
+                            reward=reward,
+                            done=done,
+                            alpha=float(residual_alpha),
+                            episode_id=int(stats["files_loaded"] - 1),
+                            episode_step=int(step_idx),
+                            normalizer=normalizer,
+                        )
                     )
                 else:
                     obs_input = _build_residual_step_obs_profiled(
@@ -403,14 +325,14 @@ def _load_offline_residual_buffer(
                         mask = 1.0
 
                     offline_buffer.insert(
-                        {
-                            "observations": _clone_obs_dict(obs_input),
-                            "actions": projected_expert_action.reshape(full_action_dim),
-                            "next_observations": _clone_obs_dict(next_obs_input),
-                            "rewards": np.float32(reward),
-                            "masks": np.float32(mask),
-                            "dones": bool(done),
-                        }
+                        build_step_transition(
+                            observations=obs_input,
+                            actions=projected_expert_action.reshape(full_action_dim),
+                            next_observations=next_obs_input,
+                            reward=reward,
+                            done=done,
+                            mask=mask,
+                        )
                     )
                 stats["inserted"] += 1
             except Exception as exc:  # noqa: BLE001

@@ -1,22 +1,26 @@
 """Online replay prefill helpers for LIBERO warmup reuse."""
 from __future__ import annotations
 
-import json
 import logging
 import pickle
 from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Deque, Dict, Optional, Tuple
 
 import numpy as np
 from omegaconf import DictConfig
+from serl_launcher.data.episode_paths import resolve_episode_files
+from serl_launcher.residual.data.transitions import (
+    build_step_transition,
+    build_stepchunk_transition,
+)
 
 from ..policy import (
     LiberoObservationCache,
     build_residual_step_core,
     select_action_chunk_window,
 )
-from ..utils.obs_utils import _clone_obs_dict, _zero_obs_like
+from ..utils.obs_utils import _zero_obs_like
 from ..utils.profiling import _RuntimeProfiler, _build_residual_step_obs_profiled
 
 if TYPE_CHECKING:
@@ -25,61 +29,6 @@ if TYPE_CHECKING:
 
 ONLINE_PREFILL_EPISODE_FORMAT = "libero_online_prefill_episode_v1"
 ONLINE_PREFILL_MANIFEST_FORMAT = "libero_online_prefill_manifest_v1"
-
-
-def _resolve_online_prefill_paths(dataset_paths: Any, base_dir: Path) -> List[Path]:
-    resolved: List[Path] = []
-    if dataset_paths is None:
-        return resolved
-
-    if isinstance(dataset_paths, (str, Path)):
-        items = [dataset_paths]
-    else:
-        items = list(dataset_paths)
-
-    for item in items:
-        candidate = Path(str(item)).expanduser()
-        if not candidate.is_absolute():
-            candidate = (base_dir / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-
-        if candidate.is_file():
-            if candidate.name == "manifest.json":
-                with open(candidate, "r", encoding="utf-8") as f:
-                    manifest = json.load(f)
-                for episode_file in manifest.get("episode_files", []):
-                    episode_path = Path(str(episode_file)).expanduser()
-                    if not episode_path.is_absolute():
-                        episode_path = (candidate.parent / episode_path).resolve()
-                    else:
-                        episode_path = episode_path.resolve()
-                    resolved.append(episode_path)
-            elif candidate.suffix == ".pkl":
-                resolved.append(candidate)
-        elif candidate.is_dir():
-            manifest_path = candidate / "manifest.json"
-            if manifest_path.exists():
-                with open(manifest_path, "r", encoding="utf-8") as f:
-                    manifest = json.load(f)
-                for episode_file in manifest.get("episode_files", []):
-                    episode_path = Path(str(episode_file)).expanduser()
-                    if not episode_path.is_absolute():
-                        episode_path = (manifest_path.parent / episode_path).resolve()
-                    else:
-                        episode_path = episode_path.resolve()
-                    resolved.append(episode_path)
-            else:
-                resolved.extend(sorted(candidate.glob("episode_*.pkl")))
-
-    deduped: List[Path] = []
-    seen = set()
-    for path in resolved:
-        key = str(path)
-        if key not in seen:
-            deduped.append(path)
-            seen.add(key)
-    return deduped
 
 
 def _build_prefill_frame_obs(
@@ -183,7 +132,7 @@ def _load_online_prefill_buffer(
     training_cfg = cfg.get("training", {})
     prefill_cfg = training_cfg.get("online_prefill", None)
     dataset_paths = None if prefill_cfg is None else prefill_cfg.get("dataset_paths", None)
-    prefill_paths = _resolve_online_prefill_paths(dataset_paths, Path.cwd())
+    prefill_paths = resolve_episode_files(dataset_paths, base_dir=Path.cwd())
     stats["files_total"] = len(prefill_paths)
     if not prefill_paths:
         logger.warning(
@@ -315,30 +264,23 @@ def _load_online_prefill_buffer(
 
                 if chunk_step_enabled:
                     replay_buffer.insert(
-                        {
-                            "obs_core": build_residual_step_core(
+                        build_stepchunk_transition(
+                            obs_core=build_residual_step_core(
                                 obs_raw,
                                 image_keys=image_keys,
                                 normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 cache_key=obs_cache_key,
                             ),
-                            "base_action": base_action,
-                            "base_action_norm": (
-                                base_action
-                                if normalizer is None
-                                else np.asarray(
-                                    normalizer.normalize_action(base_action),
-                                    dtype=np.float32,
-                                )
-                            ),
-                            "actions": final_action.reshape(action_dim),
-                            "rewards": np.float32(reward),
-                            "dones": bool(done),
-                            "alpha": np.float32(0.0),
-                            "episode_id": int(episode_id),
-                            "episode_step": int(step_idx),
-                        }
+                            base_action=base_action,
+                            actions=final_action.reshape(action_dim),
+                            reward=reward,
+                            done=done,
+                            alpha=0.0,
+                            episode_id=int(episode_id),
+                            episode_step=int(step_idx),
+                            normalizer=normalizer,
+                        )
                     )
                     stats["inserted"] += 1
                     continue
@@ -386,14 +328,14 @@ def _load_online_prefill_buffer(
                     mask = 1.0
 
                 replay_buffer.insert(
-                    {
-                        "observations": _clone_obs_dict(obs_input),
-                        "actions": final_action.reshape(action_dim),
-                        "next_observations": _clone_obs_dict(next_obs_input),
-                        "rewards": np.float32(reward),
-                        "masks": np.float32(mask),
-                        "dones": bool(done),
-                    }
+                    build_step_transition(
+                        observations=obs_input,
+                        actions=final_action.reshape(action_dim),
+                        next_observations=next_obs_input,
+                        reward=reward,
+                        done=done,
+                        mask=mask,
+                    )
                 )
                 stats["inserted"] += 1
 
