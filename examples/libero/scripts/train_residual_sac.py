@@ -1050,7 +1050,7 @@ def main(cfg: DictConfig) -> None:
         horizon=chunk_horizon,
         action_dim=env_action_dim,
     )
-    sample_obs = _build_residual_step_obs_profiled(
+    sample_obs = build_residual_step_obs_profiled(
         profiler,
         sample_obs_raw,
         sample_base_chunk[0],
@@ -1843,7 +1843,7 @@ def main(cfg: DictConfig) -> None:
                             episode_done = True
                             break
                         alpha_step = 0.0
-                        obs_input = _build_residual_step_obs_profiled(
+                        obs_input = build_residual_step_obs_profiled(
                             profiler,
                             next_obs_raw,
                             base_chunk[chunk_step],
@@ -1883,7 +1883,7 @@ def main(cfg: DictConfig) -> None:
                             next_obs_input = _zero_obs_like(obs_input)
                             mask = 0.0
                         elif chunk_step < (chunk_horizon - 1):
-                            next_obs_input = _build_residual_step_obs_profiled(
+                            next_obs_input = build_residual_step_obs_profiled(
                                 profiler,
                                 next_obs_raw,
                                 base_chunk[chunk_step + 1],
@@ -1913,7 +1913,7 @@ def main(cfg: DictConfig) -> None:
                                 horizon=chunk_horizon,
                                 action_dim=env_action_dim,
                             )
-                            next_obs_input = _build_residual_step_obs_profiled(
+                            next_obs_input = build_residual_step_obs_profiled(
                                 profiler,
                                 next_obs_raw,
                                 next_base_chunk[0],
@@ -2437,7 +2437,7 @@ def main(cfg: DictConfig) -> None:
                                 base_alpha=residual_alpha,
                                 schedule_step=schedule_step,
                             )
-                            obs_input = _build_residual_step_obs_profiled(
+                            obs_input = build_residual_step_obs_profiled(
                                 profiler,
                                 obs_raw,
                                 base_chunk[0],
@@ -3036,7 +3036,7 @@ def main(cfg: DictConfig) -> None:
                                     base_alpha=residual_alpha,
                                     schedule_step=train_env_step_before_step,
                                 )
-                                obs_input = _build_residual_step_obs_profiled(
+                                obs_input = build_residual_step_obs_profiled(
                                     profiler,
                                     next_obs_raw,
                                     base_chunk[chunk_step],
@@ -3222,7 +3222,7 @@ def main(cfg: DictConfig) -> None:
                                     next_obs_input = _zero_obs_like(obs_input)
                                     mask = 0.0
                                 elif chunk_step < (chunk_horizon - 1):
-                                    next_obs_input = _build_residual_step_obs_profiled(
+                                    next_obs_input = build_residual_step_obs_profiled(
                                         profiler,
                                         next_obs_raw,
                                         base_chunk[chunk_step + 1],
@@ -3252,7 +3252,7 @@ def main(cfg: DictConfig) -> None:
                                         horizon=chunk_horizon,
                                         action_dim=env_action_dim,
                                     )
-                                    next_obs_input = _build_residual_step_obs_profiled(
+                                    next_obs_input = build_residual_step_obs_profiled(
                                         profiler,
                                         next_obs_raw,
                                         next_base_chunk[0],

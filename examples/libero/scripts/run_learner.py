@@ -445,10 +445,10 @@ def main(cfg: DictConfig) -> None:
             clip_gripper=bool(cfg.residual.get("clip_gripper", True)),
         )
 
+    task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
     normalizer: StateActionNormalizer | None = None
     norm_cfg = cfg.get("normalization", None)
     if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
-        task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
         stats_dir = norm_cfg.get(
             "stats_dir",
             str(Path(__file__).resolve().parents[1] / "data" / "stats"),
