@@ -23,6 +23,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import Future
+from dataclasses import replace
 from pathlib import Path
 from typing import IO, Any, Dict, Optional, Tuple
 
@@ -51,7 +52,14 @@ from serl_launcher.residual.runtime.async_eval import _init_async_eval_tb_sync_s
 from serl_launcher.residual.runtime.async_eval import _start_async_eval_watcher
 from serl_launcher.residual.runtime.async_eval import _stop_async_eval_watcher
 from serl_launcher.residual.runtime.async_eval import _sync_async_eval_results_to_tb
-from serl_launcher.residual.runtime.async_learning import _AgentlaceAsyncLearner
+from serl_launcher.residual.runtime.agentlace_bridge import advance_async_target_update_calls
+from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeConfig
+from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeState
+from serl_launcher.residual.runtime.agentlace_bridge import create_agentlace_async_learner
+from serl_launcher.residual.runtime.agentlace_bridge import maybe_send_agentlace_timer_stats
+from serl_launcher.residual.runtime.agentlace_bridge import maybe_wait_for_async_learner_budget
+from serl_launcher.residual.runtime.agentlace_bridge import save_actor_bootstrap
+from serl_launcher.residual.runtime.agentlace_bridge import sync_async_bounded_lag_baseline_from_learner
 from serl_launcher.residual.runtime.async_learning import _AsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
@@ -90,8 +98,6 @@ from serl_launcher.residual.runtime.train_loop_utils import _count_env_step_upda
 from serl_launcher.residual.runtime.train_loop_utils import _insert_online_transition
 from serl_launcher.residual.runtime.train_loop_utils import _iter_period_hits
 from serl_launcher.residual.runtime.train_loop_utils import _remaining_train_budget_steps
-from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
-from serl_launcher.utils.agentlace_io import save_agentlace_bootstrap
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.alpha_utils import validate_alpha
 from serl_launcher.utils.logger import JsonlLogger
@@ -202,6 +208,7 @@ def run_residual_actor_loop(
     action_mask = resolve_action_mask_from_cfg(cfg, full_action_dim=env_action_dim)
     epsilon_gating_enabled = _epsilon_gating_enabled(cfg)
     epsilon_gating_clock = _epsilon_gating_clock(cfg)
+    resolved_cfg_dict = OmegaConf.to_container(cfg, resolve=True)
     logger.info(
         "Residual config: image_keys=%s step_action_dim=%s agent_action_dim=%s "
         "action_mask=%s control_indices=%s env_action_dim=%s chunk_horizon=%s alpha=%.4f "
@@ -514,6 +521,35 @@ def run_residual_actor_loop(
         and (not async_agentlace_spawn_local_worker)
     )
     manage_learner_state_locally = not external_agentlace_actor_mode
+    agentlace_bridge_config = AgentlaceBridgeConfig(
+        external_actor_mode=bool(external_agentlace_actor_mode),
+        host=str(async_trainer_host),
+        trainer_port=int(async_trainer_port),
+        broadcast_port=int(async_broadcast_port),
+        data_store_queue_size=int(async_data_store_queue_size),
+        spawn_local_worker=bool(async_agentlace_spawn_local_worker),
+        connect_timeout_sec=float(async_agentlace_connect_timeout_sec),
+        batch_size=int(cfg.replay.batch_size),
+        offline_ratio=float(offline_ratio),
+        symmetric_replay=bool(symmetric_replay),
+        training_starts=int(cfg.training.training_starts),
+        update_every=int(cfg.training.update_every),
+        updates_per_step=int(cfg.training.updates_per_step),
+        update_frequency=int(async_update_frequency),
+        idle_sleep_sec=float(async_idle_sleep_sec),
+        learner_device=async_learner_device,
+        stats_period_steps=int(async_stats_period_steps),
+        bounded_lag_enabled=bool(async_bounded_lag_enabled),
+        bounded_lag_mode=str(async_bounded_lag_mode),
+        bounded_lag_max_update_calls=int(async_bounded_lag_max_update_calls),
+        bounded_lag_poll_sec=async_bounded_lag_poll_sec,
+        bounded_lag_timeout_sec=async_bounded_lag_timeout_sec,
+        bounded_lag_sync_on_wait=bool(async_bounded_lag_sync_on_wait),
+        bounded_lag_log_period_steps=int(async_bounded_lag_log_period_steps),
+        bounded_lag_env_steps_per_update_call=async_bounded_lag_env_steps_per_update_call,
+        bounded_lag_manual_rate_enabled=bool(async_bounded_lag_manual_rate_enabled),
+    )
+    agentlace_bridge_state = AgentlaceBridgeState()
     if offline_enabled and manage_learner_state_locally and (not has_offline_dataset_paths):
         raise ValueError(
             "offline.enabled=true requires offline.dataset_paths to be set "
@@ -746,81 +782,6 @@ def run_residual_actor_loop(
     ):
         return bindings.build_policy_input(obs_raw, prompt, cache_key=cache_key)
 
-    agentlace_timer_last_sent_step = -1
-    async_target_update_calls = 0
-    async_bounded_lag_tracked_env_steps = 0
-    async_bounded_lag_wait_count = 0
-    async_bounded_lag_timeout_count = 0
-    async_bounded_lag_wait_total_sec = 0.0
-    async_bounded_lag_last_wait_sec = 0.0
-    async_bounded_lag_last_required_update_steps = 0
-    async_bounded_lag_last_lag_before_wait = 0
-    async_bounded_lag_last_lag_after_wait = 0
-
-    def _build_agentlace_timer_payload(
-        *,
-        train_env_step_value: int,
-        decision_step_value: int,
-        train_episode_id_value: int,
-    ) -> Optional[Dict[str, Any]]:
-        if profiler is None or (not profiler.enabled) or (not profiler.has_data()):
-            return None
-        snapshot = profiler.snapshot()
-        payload: Dict[str, Any] = {
-            "train_env_step": int(train_env_step_value),
-            "decision_step": int(decision_step_value),
-            "train_episode_id": int(train_episode_id_value),
-            "online_buffer_size": int(len(replay_buffer)) if replay_buffer is not None else 0,
-        }
-        if offline_buffer is not None:
-            payload["offline_buffer_size"] = int(len(offline_buffer))
-        if async_learner is not None:
-            payload["learner_update_steps"] = int(async_learner.get_update_steps())
-            payload["replay_prefetch_queue_size"] = int(
-                async_learner.get_prefetch_queue_size()
-            )
-            if async_bounded_lag_enabled:
-                payload["bounded_lag_mode"] = str(async_bounded_lag_mode)
-                payload["bounded_lag_target_update_calls"] = int(
-                    async_target_update_calls
-                )
-                payload["bounded_lag_tracked_env_steps"] = int(
-                    async_bounded_lag_tracked_env_steps
-                )
-                if async_bounded_lag_env_steps_per_update_call is not None:
-                    payload["bounded_lag_env_steps_per_update_call"] = float(
-                        async_bounded_lag_env_steps_per_update_call
-                    )
-                payload["bounded_lag_required_update_steps"] = int(
-                    async_bounded_lag_last_required_update_steps
-                )
-                payload["bounded_lag_lag_before_wait"] = int(
-                    async_bounded_lag_last_lag_before_wait
-                )
-                payload["bounded_lag_lag_after_wait"] = int(
-                    async_bounded_lag_last_lag_after_wait
-                )
-                payload["bounded_lag_wait_last_sec"] = float(
-                    async_bounded_lag_last_wait_sec
-                )
-        elif sync_replay_prefetcher is not None:
-            payload["replay_prefetch_queue_size"] = int(
-                sync_replay_prefetcher.get_queue_size()
-            )
-
-        def _safe_name(name: str) -> str:
-            return str(name).replace(".", "_").replace("/", "_").replace(" ", "_")
-
-        for name, stats in snapshot.get("durations", {}).items():
-            mean_ms = stats.get("mean_ms", None)
-            if mean_ms is not None:
-                payload[f"{_safe_name(name)}_mean_ms"] = float(mean_ms)
-        for name, stats in snapshot.get("values", {}).items():
-            mean_value = stats.get("mean", None)
-            if mean_value is not None:
-                payload[f"{_safe_name(name)}_mean"] = float(mean_value)
-        return payload
-
     def _maybe_send_agentlace_timer_stats(
         *,
         train_env_step_value: int,
@@ -828,23 +789,19 @@ def run_residual_actor_loop(
         train_episode_id_value: int,
         force: bool = False,
     ) -> None:
-        nonlocal agentlace_timer_last_sent_step
-        if (not external_agentlace_actor_mode) or async_learner is None:
-            return
-        current_step = int(train_env_step_value)
-        period = max(1, int(async_stats_period_steps))
-        if (not force) and agentlace_timer_last_sent_step >= 0:
-            if (current_step - agentlace_timer_last_sent_step) < period:
-                return
-        payload = _build_agentlace_timer_payload(
-            train_env_step_value=int(train_env_step_value),
-            decision_step_value=int(decision_step_value),
-            train_episode_id_value=int(train_episode_id_value),
+        maybe_send_agentlace_timer_stats(
+            config=agentlace_bridge_config,
+            state=agentlace_bridge_state,
+            profiler=profiler,
+            replay_buffer=replay_buffer,
+            offline_buffer=offline_buffer,
+            async_learner=async_learner,
+            sync_replay_prefetcher=sync_replay_prefetcher,
+            train_env_step=int(train_env_step_value),
+            decision_step=int(decision_step_value),
+            train_episode_id=int(train_episode_id_value),
+            force=bool(force),
         )
-        if payload is None:
-            return
-        async_learner.request_stats({"timer": payload})
-        agentlace_timer_last_sent_step = current_step
 
     def _advance_async_target_update_calls(
         *,
@@ -854,146 +811,38 @@ def run_residual_actor_loop(
         replay_size_before: int,
         replay_size_after: int,
     ) -> int:
-        nonlocal async_target_update_calls
-        nonlocal async_bounded_lag_tracked_env_steps
-        if (
-            (not async_bounded_lag_enabled)
-            or async_learner is None
-            or (not bool(phase_train_flag))
-        ):
-            return 0
-        if async_bounded_lag_manual_rate_enabled:
-            added_trainable_env_steps = _count_env_step_update_triggers(
-                train_step_before=int(train_step_before),
-                train_step_after=int(train_step_after),
-                replay_size_before=int(replay_size_before),
-                replay_size_after=int(replay_size_after),
-                training_starts=int(cfg.training.training_starts),
-                update_every=1,
-            )
-            if added_trainable_env_steps <= 0:
-                return 0
-            async_bounded_lag_tracked_env_steps += int(added_trainable_env_steps)
-            previous_target_update_calls = int(async_target_update_calls)
-            async_target_update_calls = int(
-                async_bounded_lag_tracked_env_steps
-                // float(async_bounded_lag_env_steps_per_update_call)
-            )
-            if async_target_update_calls < previous_target_update_calls:
-                async_target_update_calls = int(previous_target_update_calls)
-            return int(async_target_update_calls - previous_target_update_calls)
-        trigger_count = _count_env_step_update_triggers(
+        return advance_async_target_update_calls(
+            config=agentlace_bridge_config,
+            state=agentlace_bridge_state,
+            async_learner=async_learner,
+            phase_train_flag=bool(phase_train_flag),
             train_step_before=int(train_step_before),
             train_step_after=int(train_step_after),
             replay_size_before=int(replay_size_before),
             replay_size_after=int(replay_size_after),
-            training_starts=int(cfg.training.training_starts),
-            update_every=int(cfg.training.update_every),
         )
-        added_update_calls = int(trigger_count * int(cfg.training.updates_per_step))
-        if added_update_calls > 0:
-            async_target_update_calls += int(added_update_calls)
-        return int(added_update_calls)
 
     def _maybe_wait_for_async_learner_budget(
         *,
         train_env_step_value: int,
         decision_step_value: int,
     ) -> None:
-        nonlocal async_bounded_lag_wait_count
-        nonlocal async_bounded_lag_timeout_count
-        nonlocal async_bounded_lag_wait_total_sec
-        nonlocal async_bounded_lag_last_wait_sec
-        nonlocal async_bounded_lag_last_required_update_steps
-        nonlocal async_bounded_lag_last_lag_before_wait
-        nonlocal async_bounded_lag_last_lag_after_wait
-        if (not async_bounded_lag_enabled) or async_learner is None:
-            return
-        required_update_steps = max(
-            0,
-            int(async_target_update_calls) - int(async_bounded_lag_max_update_calls),
+        maybe_wait_for_async_learner_budget(
+            config=agentlace_bridge_config,
+            state=agentlace_bridge_state,
+            async_learner=async_learner,
+            logger=logger,
+            train_env_step=int(train_env_step_value),
+            decision_step=int(decision_step_value),
         )
-        async_bounded_lag_last_required_update_steps = int(required_update_steps)
-        current_update_steps = int(async_learner.get_update_steps())
-        lag_before_wait = max(0, required_update_steps - current_update_steps)
-        async_bounded_lag_last_lag_before_wait = int(lag_before_wait)
-        async_bounded_lag_last_lag_after_wait = int(lag_before_wait)
-        async_bounded_lag_last_wait_sec = 0.0
-        if lag_before_wait <= 0:
-            return
-
-        wait_start = time.perf_counter()
-        updated_steps = int(
-            async_learner.wait_for_update_steps(
-                required_update_steps,
-                poll_interval_sec=async_bounded_lag_poll_sec,
-                timeout_sec=async_bounded_lag_timeout_sec,
-            )
-        )
-        if async_bounded_lag_sync_on_wait:
-            async_learner.sync_now(timeout_sec=async_bounded_lag_timeout_sec)
-            updated_steps = int(async_learner.get_update_steps())
-        wait_sec = float(time.perf_counter() - wait_start)
-        lag_after_wait = max(0, required_update_steps - updated_steps)
-
-        async_bounded_lag_wait_count += 1
-        async_bounded_lag_wait_total_sec += wait_sec
-        async_bounded_lag_last_wait_sec = float(wait_sec)
-        async_bounded_lag_last_lag_after_wait = int(lag_after_wait)
-
-        if lag_after_wait > 0:
-            async_bounded_lag_timeout_count += 1
-            logger.warning(
-                "Bounded async lag timeout: train_env_step=%s decision_step=%s "
-                "required_update_steps=%s learner_update_steps=%s remaining_lag=%s "
-                "wait_sec=%.3f",
-                int(train_env_step_value),
-                int(decision_step_value),
-                int(required_update_steps),
-                int(updated_steps),
-                int(lag_after_wait),
-                float(wait_sec),
-            )
-            return
-
-        log_period = max(0, int(async_bounded_lag_log_period_steps))
-        if log_period > 0 and int(train_env_step_value) % log_period == 0:
-            logger.info(
-                "Bounded async lag wait complete: train_env_step=%s decision_step=%s "
-                "target_update_calls=%s required_update_steps=%s learner_update_steps=%s "
-                "wait_sec=%.3f",
-                int(train_env_step_value),
-                int(decision_step_value),
-                int(async_target_update_calls),
-                int(required_update_steps),
-                int(updated_steps),
-                float(wait_sec),
-            )
 
     def _sync_async_bounded_lag_baseline_from_learner() -> None:
-        nonlocal async_target_update_calls
-        nonlocal async_bounded_lag_tracked_env_steps
-        if (not async_bounded_lag_enabled) or async_learner is None:
-            return
-        learner_update_steps = int(async_learner.get_update_steps())
-        previous_target_update_calls = int(async_target_update_calls)
-        if learner_update_steps > int(async_target_update_calls):
-            async_target_update_calls = int(learner_update_steps)
-        if async_bounded_lag_manual_rate_enabled:
-            min_tracked_env_steps = int(async_target_update_calls) * int(
-                async_bounded_lag_env_steps_per_update_call
-            )
-            if min_tracked_env_steps > int(async_bounded_lag_tracked_env_steps):
-                async_bounded_lag_tracked_env_steps = int(min_tracked_env_steps)
-        if int(async_target_update_calls) != int(previous_target_update_calls):
-            logger.info(
-                "Aligned bounded-lag baseline to learner update steps: "
-                "target_update_calls %s -> %s learner_update_steps=%s mode=%s",
-                int(previous_target_update_calls),
-                int(async_target_update_calls),
-                int(learner_update_steps),
-                str(async_bounded_lag_mode),
-            )
+        sync_async_bounded_lag_baseline_from_learner(
+            config=agentlace_bridge_config,
+            state=agentlace_bridge_state,
+            async_learner=async_learner,
+            logger=logger,
+        )
 
     sample_obs_raw = _profile_call(
         profiler,
@@ -1194,70 +1043,41 @@ def run_residual_actor_loop(
 
     async_agentlace_bootstrap_path: Optional[Path] = None
     if async_enabled and async_backend == "agentlace":
-        async_agentlace_bootstrap_path = resolve_agentlace_bootstrap_path(
+        async_agentlace_bootstrap_path = save_actor_bootstrap(
             run_dir=run_dir,
             bootstrap_file=async_agentlace_bootstrap_file,
+            sample_obs=sample_obs,
+            state_core_dim=int(sample_state_core.shape[0]),
+            env_action_dim=int(env_action_dim),
+            step_action_dim=int(step_action_dim),
+            agent_action_dim=int(agent_action_dim),
+            critic_action_dim=int(critic_action_dim),
+            image_keys=tuple(image_keys),
+            action_transform=action_transform,
+            chunk_step_enabled=bool(chunk_step_enabled),
+            chunk_horizon=int(chunk_horizon),
+            state_mode=str(obs_state_mode),
+            learner_agent=learner_agent,
+            logger=logger,
         )
-        save_agentlace_bootstrap(
-            async_agentlace_bootstrap_path,
-            {
-                "sample_obs": sample_obs,
-                "state_core_dim": int(sample_state_core.shape[0]),
-                "env_action_dim": int(env_action_dim),
-                "step_action_dim": int(step_action_dim),
-                "agent_action_dim": int(agent_action_dim),
-                "critic_action_dim": int(critic_action_dim),
-                "image_keys": tuple(image_keys),
-                "action_transform": action_transform,
-                "chunk_step_enabled": bool(chunk_step_enabled),
-                "chunk_horizon": int(chunk_horizon),
-                "state_mode": str(obs_state_mode),
-                "initial_agent_payload": _snapshot_agent_checkpoint_payload(
-                    learner_agent,
-                    step=int(learner_agent.state.step),
-                ),
-                "saved_at_unix": float(time.time()),
-            },
-        )
-        logger.info("Agentlace bootstrap saved to %s", async_agentlace_bootstrap_path)
 
     if external_agentlace_actor_mode:
         if offline_enabled:
             logger.info(
                 "External agentlace actor mode: offline replay/pretrain will be owned by the external learner process."
             )
-        async_learner = _AgentlaceAsyncLearner(
+        async_learner = create_agentlace_async_learner(
+            config=replace(agentlace_bridge_config, spawn_local_worker=False),
             actor_agent=agent,
             replay_buffer=replay_buffer,
             offline_buffer=None,
-            batch_size=int(cfg.replay.batch_size),
-            offline_ratio=offline_ratio,
-            symmetric_replay=symmetric_replay,
-            training_starts=int(cfg.training.training_starts),
-            update_frequency=async_update_frequency,
-            idle_sleep_sec=async_idle_sleep_sec,
-            cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+            cfg_dict=resolved_cfg_dict,
             sample_obs=sample_obs,
             action_dim=agent_action_dim,
             critic_action_dim=critic_action_dim,
             image_keys=image_keys,
             action_transform=action_transform,
-            learner_device=async_learner_device,
-            host=async_trainer_host,
-            port_number=async_trainer_port,
-            broadcast_port=async_broadcast_port,
-            data_store_queue_size=async_data_store_queue_size,
-            replay_capacity=(
-                int(getattr(replay_buffer, "capacity"))
-                if hasattr(replay_buffer, "capacity")
-                else int(getattr(replay_buffer, "_capacity"))
-                if hasattr(replay_buffer, "_capacity")
-                else None
-            ),
-            spawn_local_worker=False,
-            connect_timeout_sec=async_agentlace_connect_timeout_sec,
         )
-        async_learner.start()
         replay_buffer = async_learner.replay_proxy
         logger.info(
             "Connected actor to external agentlace learner at %s:%s",
@@ -1377,7 +1197,8 @@ def run_residual_actor_loop(
     if async_learner is None and not need_warmup_first and async_enabled:
         if async_backend == "agentlace":
             agentlace_replay_buffer = replay_buffer
-            async_learner = _AgentlaceAsyncLearner(
+            async_learner = create_agentlace_async_learner(
+                config=agentlace_bridge_config,
                 actor_agent=agent,
                 replay_buffer=agentlace_replay_buffer,
                 offline_buffer=(
@@ -1385,34 +1206,13 @@ def run_residual_actor_loop(
                     if offline_enabled and manage_learner_state_locally
                     else None
                 ),
-                batch_size=int(cfg.replay.batch_size),
-                offline_ratio=offline_ratio,
-                symmetric_replay=symmetric_replay,
-                training_starts=int(cfg.training.training_starts),
-                update_frequency=async_update_frequency,
-                idle_sleep_sec=async_idle_sleep_sec,
-                cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                cfg_dict=resolved_cfg_dict,
                 sample_obs=sample_obs,
                 action_dim=agent_action_dim,
                 critic_action_dim=critic_action_dim,
                 image_keys=image_keys,
                 action_transform=action_transform,
-                learner_device=async_learner_device,
-                host=async_trainer_host,
-                port_number=async_trainer_port,
-                broadcast_port=async_broadcast_port,
-                data_store_queue_size=async_data_store_queue_size,
-                replay_capacity=(
-                    int(getattr(agentlace_replay_buffer, "capacity"))
-                    if hasattr(agentlace_replay_buffer, "capacity")
-                    else int(getattr(agentlace_replay_buffer, "_capacity"))
-                    if hasattr(agentlace_replay_buffer, "_capacity")
-                    else None
-                ),
-                spawn_local_worker=async_agentlace_spawn_local_worker,
-                connect_timeout_sec=async_agentlace_connect_timeout_sec,
             )
-            async_learner.start()
             replay_buffer = async_learner.replay_proxy
         elif async_backend == "process":
             async_learner = _ProcessAsyncLearner(
@@ -1425,7 +1225,7 @@ def run_residual_actor_loop(
                 training_starts=int(cfg.training.training_starts),
                 update_frequency=async_update_frequency,
                 idle_sleep_sec=async_idle_sleep_sec,
-                cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                cfg_dict=resolved_cfg_dict,
                 sample_obs=sample_obs,
                 action_dim=agent_action_dim,
                 critic_action_dim=critic_action_dim,
@@ -2049,7 +1849,8 @@ def run_residual_actor_loop(
             if async_learner is None and async_enabled:
                 if async_backend == "agentlace":
                     agentlace_replay_buffer = replay_buffer
-                    async_learner = _AgentlaceAsyncLearner(
+                    async_learner = create_agentlace_async_learner(
+                        config=agentlace_bridge_config,
                         actor_agent=agent,
                         replay_buffer=agentlace_replay_buffer,
                         offline_buffer=(
@@ -2057,34 +1858,13 @@ def run_residual_actor_loop(
                             if offline_enabled and manage_learner_state_locally
                             else None
                         ),
-                        batch_size=int(cfg.replay.batch_size),
-                        offline_ratio=offline_ratio,
-                        symmetric_replay=symmetric_replay,
-                        training_starts=int(cfg.training.training_starts),
-                        update_frequency=async_update_frequency,
-                        idle_sleep_sec=async_idle_sleep_sec,
-                        cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                        cfg_dict=resolved_cfg_dict,
                         sample_obs=sample_obs,
                         action_dim=agent_action_dim,
                         critic_action_dim=critic_action_dim,
                         image_keys=image_keys,
                         action_transform=action_transform,
-                        learner_device=async_learner_device,
-                        host=async_trainer_host,
-                        port_number=async_trainer_port,
-                        broadcast_port=async_broadcast_port,
-                        data_store_queue_size=async_data_store_queue_size,
-                        replay_capacity=(
-                            int(getattr(agentlace_replay_buffer, "capacity"))
-                            if hasattr(agentlace_replay_buffer, "capacity")
-                            else int(getattr(agentlace_replay_buffer, "_capacity"))
-                            if hasattr(agentlace_replay_buffer, "_capacity")
-                            else None
-                        ),
-                        spawn_local_worker=async_agentlace_spawn_local_worker,
-                        connect_timeout_sec=async_agentlace_connect_timeout_sec,
                     )
-                    async_learner.start()
                     replay_buffer = async_learner.replay_proxy
                 elif async_backend == "process":
                     async_learner = _ProcessAsyncLearner(
@@ -2097,7 +1877,7 @@ def run_residual_actor_loop(
                         training_starts=int(cfg.training.training_starts),
                         update_frequency=async_update_frequency,
                         idle_sleep_sec=async_idle_sleep_sec,
-                        cfg_dict=OmegaConf.to_container(cfg, resolve=True),
+                        cfg_dict=resolved_cfg_dict,
                         sample_obs=sample_obs,
                         action_dim=agent_action_dim,
                         critic_action_dim=critic_action_dim,
@@ -2869,12 +2649,16 @@ def run_residual_actor_loop(
                                     if async_bounded_lag_enabled:
                                         tb_writer.add_scalar(
                                             "system/async_target_update_calls",
-                                            float(async_target_update_calls),
+                                            float(
+                                                agentlace_bridge_state.target_update_calls
+                                            ),
                                             train_env_step,
                                         )
                                         tb_writer.add_scalar(
                                             "system/async_bounded_lag_tracked_env_steps",
-                                            float(async_bounded_lag_tracked_env_steps),
+                                            float(
+                                                agentlace_bridge_state.tracked_env_steps
+                                            ),
                                             train_env_step,
                                         )
                                         if (
@@ -2891,37 +2675,37 @@ def run_residual_actor_loop(
                                         tb_writer.add_scalar(
                                             "system/async_required_update_steps",
                                             float(
-                                                async_bounded_lag_last_required_update_steps
+                                                agentlace_bridge_state.last_required_update_steps
                                             ),
                                             train_env_step,
                                         )
                                         tb_writer.add_scalar(
                                             "system/async_update_lag_before_wait",
                                             float(
-                                                async_bounded_lag_last_lag_before_wait
+                                                agentlace_bridge_state.last_lag_before_wait
                                             ),
                                             train_env_step,
                                         )
                                         tb_writer.add_scalar(
                                             "system/async_update_lag_after_wait",
                                             float(
-                                                async_bounded_lag_last_lag_after_wait
+                                                agentlace_bridge_state.last_lag_after_wait
                                             ),
                                             train_env_step,
                                         )
                                         tb_writer.add_scalar(
                                             "system/async_wait_last_sec",
-                                            float(async_bounded_lag_last_wait_sec),
+                                            float(agentlace_bridge_state.last_wait_sec),
                                             train_env_step,
                                         )
                                         tb_writer.add_scalar(
                                             "system/async_wait_count",
-                                            float(async_bounded_lag_wait_count),
+                                            float(agentlace_bridge_state.wait_count),
                                             train_env_step,
                                         )
                                         tb_writer.add_scalar(
                                             "system/async_wait_timeout_count",
-                                            float(async_bounded_lag_timeout_count),
+                                            float(agentlace_bridge_state.timeout_count),
                                             train_env_step,
                                         )
                                 elif sync_replay_prefetcher is not None:
@@ -3432,12 +3216,16 @@ def run_residual_actor_loop(
                                         if async_bounded_lag_enabled:
                                             tb_writer.add_scalar(
                                                 "system/async_target_update_calls",
-                                                float(async_target_update_calls),
+                                                float(
+                                                    agentlace_bridge_state.target_update_calls
+                                                ),
                                                 train_env_step,
                                             )
                                             tb_writer.add_scalar(
                                                 "system/async_bounded_lag_tracked_env_steps",
-                                                float(async_bounded_lag_tracked_env_steps),
+                                                float(
+                                                    agentlace_bridge_state.tracked_env_steps
+                                                ),
                                                 train_env_step,
                                             )
                                             if (
@@ -3454,37 +3242,37 @@ def run_residual_actor_loop(
                                             tb_writer.add_scalar(
                                                 "system/async_required_update_steps",
                                                 float(
-                                                    async_bounded_lag_last_required_update_steps
+                                                    agentlace_bridge_state.last_required_update_steps
                                                 ),
                                                 train_env_step,
                                             )
                                             tb_writer.add_scalar(
                                                 "system/async_update_lag_before_wait",
                                                 float(
-                                                    async_bounded_lag_last_lag_before_wait
+                                                    agentlace_bridge_state.last_lag_before_wait
                                                 ),
                                                 train_env_step,
                                             )
                                             tb_writer.add_scalar(
                                                 "system/async_update_lag_after_wait",
                                                 float(
-                                                    async_bounded_lag_last_lag_after_wait
+                                                    agentlace_bridge_state.last_lag_after_wait
                                                 ),
                                                 train_env_step,
                                             )
                                             tb_writer.add_scalar(
                                                 "system/async_wait_last_sec",
-                                                float(async_bounded_lag_last_wait_sec),
+                                                float(agentlace_bridge_state.last_wait_sec),
                                                 train_env_step,
                                             )
                                             tb_writer.add_scalar(
                                                 "system/async_wait_count",
-                                                float(async_bounded_lag_wait_count),
+                                                float(agentlace_bridge_state.wait_count),
                                                 train_env_step,
                                             )
                                             tb_writer.add_scalar(
                                                 "system/async_wait_timeout_count",
-                                                float(async_bounded_lag_timeout_count),
+                                                float(agentlace_bridge_state.timeout_count),
                                                 train_env_step,
                                             )
                                     elif sync_replay_prefetcher is not None:
@@ -3893,17 +3681,17 @@ def run_residual_actor_loop(
                     else float(async_bounded_lag_timeout_sec)
                 ),
                 "sync_on_wait": bool(async_bounded_lag_sync_on_wait),
-                "target_update_calls": int(async_target_update_calls),
-                "tracked_env_steps": int(async_bounded_lag_tracked_env_steps),
+                "target_update_calls": int(agentlace_bridge_state.target_update_calls),
+                "tracked_env_steps": int(agentlace_bridge_state.tracked_env_steps),
                 "last_required_update_steps": int(
-                    async_bounded_lag_last_required_update_steps
+                    agentlace_bridge_state.last_required_update_steps
                 ),
-                "last_lag_before_wait": int(async_bounded_lag_last_lag_before_wait),
-                "last_lag_after_wait": int(async_bounded_lag_last_lag_after_wait),
-                "wait_count": int(async_bounded_lag_wait_count),
-                "wait_timeout_count": int(async_bounded_lag_timeout_count),
-                "wait_total_sec": float(async_bounded_lag_wait_total_sec),
-                "last_wait_sec": float(async_bounded_lag_last_wait_sec),
+                "last_lag_before_wait": int(agentlace_bridge_state.last_lag_before_wait),
+                "last_lag_after_wait": int(agentlace_bridge_state.last_lag_after_wait),
+                "wait_count": int(agentlace_bridge_state.wait_count),
+                "wait_timeout_count": int(agentlace_bridge_state.timeout_count),
+                "wait_total_sec": float(agentlace_bridge_state.wait_total_sec),
+                "last_wait_sec": float(agentlace_bridge_state.last_wait_sec),
             },
             "replay_prefetch_enabled": bool(replay_prefetch_enabled),
             "replay_prefetch_queue_size": int(replay_prefetch_queue_size),
