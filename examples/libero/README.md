@@ -54,21 +54,58 @@ cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
 bash tools/compute_stats.sh --suite_name libero_10 --all
 ```
 
-### 4. Convert HDF5 demos to offline PKLs
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-bash tools/convert_offline.sh --suite_name libero_10 --all
-```
-
-Optional: precompute `base_chunks` with OpenPI during conversion:
+### 4. Materialize offline residual-training PKLs
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
 bash tools/convert_offline.sh \
-  --openpi \
   --suite_name libero_10 \
-  --all
+  --all \
+  --residual_alpha 0.35 \
+  --output_dir data/residual_training/offline_alpha035
+```
+
+This step now always requires a running OpenPI server, because `base_chunks` and
+offline projected actions are materialized into the dataset itself.
+
+If you switch any of the following, you should regenerate the offline training PKLs:
+
+- `residual.alpha`
+- the OpenPI/base policy checkpoint
+- residual projection settings such as `action_indices`, `action_limits`, or `expert_reference_scale`
+
+For online warmup / prefill data, you should also recollect or rematerialize the
+episodes into the unified `libero_residual_training` format.
+
+Example online warmup collection:
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+bash tools/collect_online_prefill.sh \
+  train_residual_sac.yaml \
+  --episodes 100 \
+  --output_dir data/residual_training/online
+```
+
+Example for a separate `pi05` materialization root:
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+bash tools/convert_offline.sh \
+  --suite_name libero_10 \
+  --task_id 8 \
+  --residual_alpha 0.10 \
+  --output_dir data/residual_training/offline_pi05_alpha01
+```
+
+If the online warmup episodes are collected with `pi05`, store them in a separate root too:
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+bash tools/collect_online_prefill.sh \
+  train_residual_sac.yaml \
+  --episodes 100 \
+  --output_dir data/residual_training/online_pi05
 ```
 
 ### 5. Train with mixed online + offline replay
@@ -79,7 +116,7 @@ bash tools/train.sh \
   task.suite_name=libero_10 \
   task.task_id=0 \
   offline.enabled=true \
-  offline.dataset_paths='[data/offline/libero_10_task_0]' \
+  offline.dataset_paths='[data/residual_training/offline_alpha035/libero_10_task_0]' \
   normalization.enabled=true
 ```
 

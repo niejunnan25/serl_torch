@@ -152,15 +152,27 @@ def _convert_demo(
     ee_ori = np.asarray(obs["ee_ori"], dtype=np.float32)
     gripper_states = np.asarray(obs["gripper_states"], dtype=np.float32)
     expert_actions = np.asarray(demo["actions"], dtype=np.float32)
+    num_steps = int(expert_actions.shape[0])
     rewards = np.asarray(
-        demo.get("rewards", np.zeros((len(demo["actions"]),), dtype=np.float32)),
+        demo.get("rewards", np.zeros((num_steps,), dtype=np.float32)),
         dtype=np.float32,
     ).reshape(-1)
+    if rewards.shape[0] < num_steps:
+        padded_rewards = np.zeros((num_steps,), dtype=np.float32)
+        if rewards.shape[0] > 0:
+            padded_rewards[: rewards.shape[0]] = rewards
+        rewards = padded_rewards
     dones = np.asarray(
-        demo.get("dones", np.zeros((len(demo["actions"]),), dtype=bool)),
+        demo.get("dones", np.zeros((num_steps,), dtype=bool)),
         dtype=bool,
     ).reshape(-1)
-    if dones.shape[0] > 0:
+    if dones.shape[0] < num_steps:
+        padded_dones = np.zeros((num_steps,), dtype=bool)
+        if dones.shape[0] > 0:
+            padded_dones[: dones.shape[0]] = dones
+        dones = padded_dones
+    if num_steps > 0:
+        rewards[-1] = 1.0
         dones[-1] = True
 
     raw_payload = {
@@ -229,9 +241,9 @@ def _convert_demo(
         rewards=rewards,
         dones=dones,
         episode_index=int(episode_index),
-        episode_steps=int(expert_actions.shape[0]),
+        episode_steps=int(num_steps),
         episode_return=float(np.sum(rewards)) if rewards.size > 0 else 0.0,
-        episode_success=bool(np.any(rewards > 0.0)),
+        episode_success=bool(num_steps > 0),
         metadata={
             "source_episode_format": "libero_hdf5_demo",
             "task_name": str(task_name),
