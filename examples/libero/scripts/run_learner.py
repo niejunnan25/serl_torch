@@ -19,6 +19,7 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
+from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 from torch.utils.tensorboard import SummaryWriter
 
@@ -29,12 +30,8 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.training_config import (
     LIBERO_RESIDUAL_BASE_CONFIG,
 )
-from serl_torch.examples.libero.policy import (
-    build_residual_limits,
-)
 from serl_torch.examples.libero.utils import (
     JsonlLogger,
-    ensure_serl_launcher_importable,
 )
 from serl_torch.examples.libero.utils.agentlace_io import (
     resolve_agentlace_bootstrap_path,
@@ -61,8 +58,6 @@ from serl_torch.examples.libero.utils.profiling import _RuntimeProfiler
 from serl_torch.examples.libero.utils.schedules import _scheduled_alpha
 from serl_torch.examples.libero.utils.serialization import _to_jsonable
 from serl_torch.examples.libero.utils.step_chunk_replay import ChunkReplayBuffer
-
-ensure_serl_launcher_importable()
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
 

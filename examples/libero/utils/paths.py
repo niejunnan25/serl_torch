@@ -1,7 +1,6 @@
-"""Path helpers for locating serl_torch, openpi, and serl_launcher."""
+"""Path helpers for locating serl_torch and sibling repos."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 
@@ -13,12 +12,6 @@ def _find_serl_repo_root() -> Path:
     raise RuntimeError("Cannot locate serl_torch repo root from current file path")
 
 
-def ensure_serl_launcher_importable() -> None:
-    serl_launcher_root = _find_serl_repo_root() / "serl_launcher"
-    if str(serl_launcher_root) not in sys.path:
-        sys.path.append(str(serl_launcher_root))
-
-
 def resolve_repo_candidate(repo_name: str) -> Path:
     repo_root = _find_serl_repo_root()
     sibling = (repo_root.parent / repo_name).resolve()
@@ -28,4 +21,3 @@ def resolve_repo_candidate(repo_name: str) -> Path:
     if local.exists():
         return local
     return sibling
-

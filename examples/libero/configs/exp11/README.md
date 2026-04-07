@@ -53,7 +53,7 @@ POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero
 
 - `residual.alpha`
 - OpenPI / base policy checkpoint
-- residual 投影相关参数，例如 `action_indices`、`action_limits`、`expert_reference_scale`
+- residual 投影相关参数，例如 `action_mask`、`action_limits`、`expert_reference_scale`
 
 离线数据生成示例：
 

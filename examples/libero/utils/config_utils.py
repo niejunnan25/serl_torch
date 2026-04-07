@@ -10,9 +10,15 @@ import torch
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 
+from serl_launcher.residual.action_spec import (
+    resolve_action_mask,
+    resolve_control_indices,
+)
+from serl_launcher.residual.observation import (
+    normalize_residual_observation_state_mode,
+)
+
 from ..schema import resolve_libero_image_keys
-from ..policy.action import resolve_control_indices
-from ..policy.observation import normalize_residual_observation_state_mode
 
 
 def set_global_seeds(seed: int) -> None:
@@ -94,27 +100,29 @@ def resolve_residual_observation_state_mode(cfg: DictConfig) -> str:
     return normalize_residual_observation_state_mode(state_mode)
 
 
+def resolve_action_mask_from_cfg(
+    cfg: DictConfig, *, full_action_dim: int
+) -> np.ndarray:
+    action_mask_cfg = cfg.residual.get("action_mask", None)
+    action_mask = (
+        [bool(v) for v in action_mask_cfg] if action_mask_cfg is not None else None
+    )
+    return resolve_action_mask(
+        full_action_dim=int(full_action_dim),
+        action_mask=action_mask,
+    )
+
+
 def resolve_control_indices_from_cfg(
     cfg: DictConfig, *, full_action_dim: int
 ) -> np.ndarray:
-    action_dim_cfg = cfg.residual.get("action_dim", None)
-    action_dim = int(action_dim_cfg) if action_dim_cfg is not None else None
-
-    action_indices_cfg = cfg.residual.get("action_indices", None)
-    action_indices = (
-        [int(v) for v in action_indices_cfg] if action_indices_cfg is not None else None
+    action_mask = resolve_action_mask_from_cfg(
+        cfg,
+        full_action_dim=int(full_action_dim),
     )
-
-    control_gripper_cfg = cfg.residual.get("control_gripper", None)
-    control_gripper = (
-        bool(control_gripper_cfg) if control_gripper_cfg is not None else None
-    )
-
     return resolve_control_indices(
         full_action_dim=int(full_action_dim),
-        action_dim=action_dim,
-        action_indices=action_indices,
-        control_gripper=control_gripper,
+        action_mask=action_mask,
     )
 
 

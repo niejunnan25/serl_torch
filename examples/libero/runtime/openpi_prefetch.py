@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from .observation import LiberoObservationCache
+from .obs_adapter import LiberoObservationCache
 from .openpi_client import OpenPIChunkClient
 
 
@@ -17,7 +17,9 @@ class _AsyncOpenPIChunkPrefetcher:
         self.host = str(host)
         self.port = int(port)
         self.logger = logger
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="libero-openpi")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="libero-openpi"
+        )
         self._client: Optional[OpenPIChunkClient] = None
         self._lock = threading.Lock()
         self._closed = False
@@ -25,7 +27,9 @@ class _AsyncOpenPIChunkPrefetcher:
     def _get_client(self) -> OpenPIChunkClient:
         with self._lock:
             if self._client is None:
-                self._client = OpenPIChunkClient(host=self.host, port=self.port, logger=self.logger)
+                self._client = OpenPIChunkClient(
+                    host=self.host, port=self.port, logger=self.logger
+                )
             return self._client
 
     def _infer_chunk(

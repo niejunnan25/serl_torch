@@ -21,7 +21,7 @@ from serl_launcher.residual.data.transforms import (
     set_by_path,
 )
 
-from .policy.observation import build_libero_state, extract_residual_images
+from .runtime.obs_adapter import build_libero_state, extract_residual_images
 from .schema import LIBERO_IMAGE_SLOT_KEYS
 
 LIBERO_TRAINING_IMAGE_VIEWS = {

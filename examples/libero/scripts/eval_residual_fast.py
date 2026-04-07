@@ -13,6 +13,14 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
+from serl_launcher.residual.action import (
+    as_numpy_action,
+    as_numpy_action_chunk,
+    compose_residual_action,
+    compose_residual_action_chunk,
+    select_action_chunk_window,
+)
+from serl_launcher.residual.action_spec import build_residual_limits
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
@@ -24,20 +32,13 @@ from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
 )
-from serl_torch.examples.libero.policy import (
+from serl_torch.examples.libero.runtime import (
     LiberoObservationCache,
     OpenPIChunkClient,
-    as_numpy_action,
-    as_numpy_action_chunk,
-    build_residual_limits,
     build_residual_step_obs,
-    compose_residual_action,
-    compose_residual_action_chunk,
-    select_action_chunk_window,
 )
 from serl_torch.examples.libero.utils import (
     JsonlLogger,
-    ensure_serl_launcher_importable,
 )
 from serl_torch.examples.libero.utils.alpha_utils import require_residual_alpha
 from serl_torch.examples.libero.utils.config_utils import (
@@ -54,8 +55,6 @@ from serl_torch.examples.libero.utils.schedules import (
     _epsilon_gating_eval_force_on,
     _scheduled_epsilon_gating_probability,
 )
-
-ensure_serl_launcher_importable()
 
 from torch.utils.tensorboard import SummaryWriter
 

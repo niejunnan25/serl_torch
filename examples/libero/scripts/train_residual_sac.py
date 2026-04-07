@@ -40,6 +40,14 @@ from tqdm.auto import tqdm
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
+from serl_launcher.residual.action import (
+    as_numpy_action,
+    as_numpy_action_chunk,
+    compose_residual_action,
+    compose_residual_action_chunk,
+    select_action_chunk_window,
+)
+from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
@@ -54,18 +62,12 @@ from serl_torch.examples.libero.env_wrappers import (
     setup_openpi_client_pythonpath,
 )
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
-from serl_torch.examples.libero.policy import (
+from serl_torch.examples.libero.runtime import (
     LiberoObservationCache,
     OpenPIChunkClient,
-    as_numpy_action,
-    as_numpy_action_chunk,
     build_residual_step_core,
-    build_residual_limits,
-    compose_residual_action,
-    compose_residual_action_chunk,
-    select_action_chunk_window,
 )
-from serl_torch.examples.libero.policy.openpi_prefetch import (
+from serl_torch.examples.libero.runtime.openpi_prefetch import (
     _AsyncOpenPIChunkPrefetcher,
 )
 from serl_torch.examples.libero.utils.async_eval import (
@@ -85,7 +87,6 @@ from serl_torch.examples.libero.utils.async_learning import (
 )
 from serl_torch.examples.libero.utils import (
     JsonlLogger,
-    ensure_serl_launcher_importable,
 )
 from serl_torch.examples.libero.utils.checkpoint import (
     _AsyncCheckpointWriter,
@@ -96,6 +97,7 @@ from serl_torch.examples.libero.utils.checkpoint import (
 from serl_torch.examples.libero.utils.config_utils import (
     build_residual_action_transform,
     build_drq_agent,
+    resolve_action_mask_from_cfg,
     resolve_control_indices_from_cfg,
     resolve_image_keys,
     resolve_residual_observation_state_mode,
@@ -146,8 +148,6 @@ from serl_torch.examples.libero.utils.tb_metrics import (
     _log_update_metrics,
     _new_tb_step_window,
 )
-
-ensure_serl_launcher_importable()
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -274,15 +274,17 @@ def main(cfg: DictConfig) -> None:
         action_limits=residual_action_limits_cfg,
         full_action_dim=env_action_dim,
     )
+    action_mask = resolve_action_mask_from_cfg(cfg, full_action_dim=env_action_dim)
     epsilon_gating_enabled = _epsilon_gating_enabled(cfg)
     epsilon_gating_clock = _epsilon_gating_clock(cfg)
     logger.info(
         "Residual config: image_keys=%s step_action_dim=%s agent_action_dim=%s "
-        "action_indices=%s env_action_dim=%s chunk_horizon=%s alpha=%.4f "
+        "action_mask=%s control_indices=%s env_action_dim=%s chunk_horizon=%s alpha=%.4f "
         "chunk_step_enabled=%s stride=%s limits=%s",
         list(image_keys),
         step_action_dim,
         agent_action_dim,
+        action_mask.astype(bool).tolist(),
         control_indices.tolist(),
         env_action_dim,
         chunk_horizon,

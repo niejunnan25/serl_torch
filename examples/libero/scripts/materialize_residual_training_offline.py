@@ -18,6 +18,11 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
+from serl_launcher.residual.action import select_action_chunk_window
+from serl_launcher.residual.action_spec import (
+    build_residual_limits,
+    resolve_control_indices,
+)
 from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
     materialize_with_config,
@@ -30,12 +35,7 @@ from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
 )
-from serl_torch.examples.libero.policy import (
-    OpenPIChunkClient,
-    build_residual_limits,
-    resolve_control_indices,
-    select_action_chunk_window,
-)
+from serl_torch.examples.libero.runtime import OpenPIChunkClient
 
 _T = TypeVar("_T")
 
@@ -63,18 +63,33 @@ def _sorted_demo_names(dataset_file: h5py.File) -> list[str]:
     return sorted(names, key=lambda name: int(name.split("_")[-1]))
 
 
-def _parse_csv_ints(value: Optional[str]) -> Optional[Sequence[int]]:
-    if value is None:
-        return None
-    parts = [part.strip() for part in str(value).split(",")]
-    return [int(part) for part in parts if part]
-
-
 def _parse_csv_floats(value: Optional[str]) -> Optional[Sequence[float]]:
     if value is None:
         return None
     parts = [part.strip() for part in str(value).split(",")]
     return [float(part) for part in parts if part]
+
+
+def _parse_csv_bools(value: Optional[str]) -> Optional[Sequence[bool]]:
+    if value is None:
+        return None
+    parts = [part.strip() for part in str(value).split(",")]
+    parsed = []
+    for part in parts:
+        if not part:
+            continue
+        token = part.lower()
+        if token in {"1", "true", "t", "yes", "y", "on"}:
+            parsed.append(True)
+            continue
+        if token in {"0", "false", "f", "no", "n", "off"}:
+            parsed.append(False)
+            continue
+        raise ValueError(
+            "action_mask entries must be booleans like true/false or 1/0, "
+            f"got {part!r}"
+        )
+    return parsed
 
 
 def _build_frame_obs(payload: dict, frame_idx: int) -> dict:
@@ -128,6 +143,7 @@ def _convert_demo(
     openpi_client: OpenPIChunkClient,
     demo_name: str,
     residual_alpha: float,
+    action_mask: np.ndarray,
     control_indices: np.ndarray,
     residual_limits: np.ndarray,
     expert_reference_scale: float,
@@ -208,6 +224,9 @@ def _convert_demo(
                 "dataset_path": str(dataset_path),
                 "demo_name": str(demo_name),
                 "projection": {
+                    "action_mask": [
+                        bool(v) for v in np.asarray(action_mask, dtype=bool).tolist()
+                    ],
                     "control_indices": [
                         int(v)
                         for v in np.asarray(control_indices, dtype=np.int64).reshape(-1)
@@ -264,34 +283,19 @@ def main() -> None:
         help="Residual alpha baked into the exported training payload",
     )
     parser.add_argument(
-        "--residual_action_dim",
-        type=int,
-        default=None,
-        help="Controlled residual action dim when action_indices is not specified",
-    )
-    parser.add_argument(
-        "--action_indices",
+        "--action_mask",
         type=str,
         default=None,
-        help="Comma-separated residual control indices",
+        help=(
+            "Comma-separated boolean residual control mask, e.g. "
+            "true,true,true,true,true,true,false. Defaults to all env action dims."
+        ),
     )
     parser.add_argument(
         "--action_limits",
         type=str,
         default=None,
         help="Comma-separated residual limits. Defaults to 1.0 for every env action dim.",
-    )
-    parser.add_argument(
-        "--control_gripper",
-        dest="control_gripper",
-        action="store_true",
-        default=True,
-        help="Control the gripper dim when action_indices is not specified (default: true)",
-    )
-    parser.add_argument(
-        "--no_control_gripper",
-        dest="control_gripper",
-        action="store_false",
     )
     parser.add_argument("--expert_reference_scale", type=float, default=1.0)
     parser.add_argument(
@@ -327,6 +331,7 @@ def main() -> None:
     task_iter: Iterable = _progress(
         specs, total=len(specs), desc="Tasks", unit="task", leave=True
     )
+    parsed_action_mask = _parse_csv_bools(args.action_mask)
     for task_spec in task_iter:
         if not task_spec.dataset_path.exists():
             raise FileNotFoundError(f"Dataset file not found: {task_spec.dataset_path}")
@@ -362,17 +367,11 @@ def main() -> None:
                 full_action_dim = int(demo_actions.shape[1])
                 control_indices = resolve_control_indices(
                     full_action_dim=full_action_dim,
-                    action_dim=(
-                        int(args.residual_action_dim)
-                        if args.residual_action_dim is not None
-                        else None
-                    ),
-                    action_indices=(
-                        list(_parse_csv_ints(args.action_indices))
-                        if args.action_indices is not None
-                        else None
-                    ),
-                    control_gripper=bool(args.control_gripper),
+                    action_mask=parsed_action_mask,
+                )
+                resolved_action_mask = np.isin(
+                    np.arange(full_action_dim, dtype=np.int64),
+                    np.asarray(control_indices, dtype=np.int64),
                 )
                 action_limits = _parse_csv_floats(args.action_limits)
                 if action_limits is None:
@@ -394,6 +393,7 @@ def main() -> None:
                     openpi_client=openpi_client,
                     demo_name=demo_name,
                     residual_alpha=float(args.residual_alpha),
+                    action_mask=np.asarray(resolved_action_mask, dtype=bool),
                     control_indices=np.asarray(control_indices, dtype=np.int64),
                     residual_limits=np.asarray(residual_limits, dtype=np.float32),
                     expert_reference_scale=float(args.expert_reference_scale),

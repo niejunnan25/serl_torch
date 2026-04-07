@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
-from ..policy import build_residual_step_obs
+from ..runtime import build_residual_step_obs
 from .logger import JsonlLogger
 
 

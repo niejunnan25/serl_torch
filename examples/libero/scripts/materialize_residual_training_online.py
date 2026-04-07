@@ -19,6 +19,7 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
+from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
     materialize_with_config,
@@ -31,7 +32,7 @@ from serl_torch.examples.libero.env_wrappers import (
     setup_openpi_client_pythonpath,
 )
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
-from serl_torch.examples.libero.policy import OpenPIChunkClient, select_action_chunk_window
+from serl_torch.examples.libero.runtime import OpenPIChunkClient
 from serl_torch.examples.libero.utils.config_utils import set_global_seeds
 
 _T = TypeVar("_T")

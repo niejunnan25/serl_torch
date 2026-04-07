@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
-from ..policy import as_numpy_action
+from serl_launcher.residual.action import as_numpy_action
 from .checkpoint import (
     _AsyncCheckpointWriter,
     _CheckpointTask,

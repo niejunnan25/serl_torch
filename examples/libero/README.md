@@ -72,7 +72,7 @@ If you switch any of the following, you should regenerate the offline training P
 
 - `residual.alpha`
 - the OpenPI/base policy checkpoint
-- residual projection settings such as `action_indices`, `action_limits`, or `expert_reference_scale`
+- residual projection settings such as `action_mask`, `action_limits`, or `expert_reference_scale`
 
 For online warmup / prefill data, you should also recollect or rematerialize the
 episodes into the unified `libero_residual_training` format.

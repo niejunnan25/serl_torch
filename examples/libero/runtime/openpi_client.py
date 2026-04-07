@@ -1,4 +1,4 @@
-"""OpenPI base-policy client for LIBERO observations."""
+"""OpenPI base-policy client for LIBERO runtime observations."""
 from __future__ import annotations
 
 import logging
@@ -8,7 +8,7 @@ from typing import Any, Dict, Hashable, Optional, Tuple
 
 import numpy as np
 
-from .observation import (
+from .obs_adapter import (
     LiberoObservationCache,
     build_libero_state,
     extract_residual_images,
