@@ -7,19 +7,20 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import IO, Any, Dict, Optional, Tuple
+from typing import IO, Any, Dict, Optional
 
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
 
 def _start_async_eval_watcher(
-    cfg: DictConfig,
     *,
+    watcher_path: Path,
+    cfg: DictConfig,
     run_dir: Path,
     checkpoint_dir: Path,
     logger: logging.Logger,
-) -> Tuple[
+) -> tuple[
     Optional[subprocess.Popen],
     Optional[IO[str]],
     Optional[Path],
@@ -30,9 +31,6 @@ def _start_async_eval_watcher(
     if async_eval_cfg is None or (not bool(async_eval_cfg.get("enabled", False))):
         return None, None, None, None, None
 
-    watcher_path = (
-        Path(__file__).resolve().parents[1] / "scripts" / "async_eval_watch.py"
-    )
     if not watcher_path.exists():
         logger.warning(
             "training.async_eval.enabled=true but watcher script is missing: %s",
@@ -124,7 +122,7 @@ def _init_async_eval_tb_sync_state(
         try:
             with open(summary_jsonl_path, "r", encoding="utf-8") as f:
                 processed_lines = sum(1 for _ in f)
-        except Exception:  # noqa: BLE001
+        except Exception:
             processed_lines = 0
     return {"processed_lines": int(processed_lines)}
 
@@ -142,7 +140,7 @@ def _sync_async_eval_results_to_tb(
     try:
         with open(summary_jsonl_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("Failed to read async eval summary jsonl: %s", exc)
         return
 
@@ -171,14 +169,14 @@ def _sync_async_eval_results_to_tb(
             if train_env_step_raw is None:
                 continue
             train_env_step = int(train_env_step_raw)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         train_episode_id: Optional[int]
         try:
             train_episode_id = (
                 int(train_episode_id_raw) if train_episode_id_raw is not None else None
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             train_episode_id = None
 
         status = str(payload.get("status", "")).lower()

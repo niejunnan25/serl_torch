@@ -20,6 +20,12 @@ from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
+from serl_launcher.residual.runtime.config_utils import build_drq_agent
+from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
+from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
+from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
+from serl_launcher.residual.runtime.config_utils import sample_probing_steps
+from serl_launcher.residual.runtime.config_utils import set_global_seeds
 from serl_launcher.residual.runtime.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.runtime.schedules import _epsilon_gating_eval_force_on
 from serl_launcher.residual.runtime.schedules import _scheduled_epsilon_gating_probability
@@ -32,16 +38,10 @@ if str(REPO_PARENT) not in sys.path:
 
 from serl_torch.examples.libero.env_wrappers import LiberoTaskEnv
 from serl_torch.examples.libero.env_wrappers import RemoteLiberoTaskEnv
+from serl_torch.examples.libero.config import resolve_libero_cfg_image_keys
 from serl_torch.examples.libero.runtime import LiberoObservationCache
 from serl_torch.examples.libero.runtime import build_libero_policy_input
 from serl_torch.examples.libero.runtime import build_residual_step_obs
-from serl_torch.examples.libero.utils.config_utils import build_residual_action_transform
-from serl_torch.examples.libero.utils.config_utils import build_drq_agent
-from serl_torch.examples.libero.utils.config_utils import resolve_control_indices_from_cfg
-from serl_torch.examples.libero.utils.config_utils import resolve_image_keys
-from serl_torch.examples.libero.utils.config_utils import resolve_residual_observation_state_mode
-from serl_torch.examples.libero.utils.config_utils import sample_probing_steps
-from serl_torch.examples.libero.utils.config_utils import set_global_seeds
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -130,7 +130,7 @@ def main(cfg: DictConfig) -> None:
         logger=logger,
     )
 
-    image_keys = resolve_image_keys(cfg)
+    image_keys = resolve_libero_cfg_image_keys(cfg)
     stack_horizon = int(cfg.sac.obs_stack_horizon)
     if stack_horizon != 1:
         raise ValueError("Only obs_stack_horizon=1 is currently supported")

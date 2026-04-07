@@ -1,9 +1,9 @@
-"""Shared Hydra config helpers."""
+"""Shared residual runtime config helpers."""
 from __future__ import annotations
 
 import os
 import random
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 
 import numpy as np
 import torch
@@ -13,8 +13,6 @@ from omegaconf import DictConfig
 from serl_launcher.residual.action_spec import resolve_action_mask
 from serl_launcher.residual.action_spec import resolve_control_indices
 from serl_launcher.residual.observation import normalize_residual_observation_state_mode
-
-from ..schema import resolve_libero_image_keys
 
 
 def set_global_seeds(seed: int) -> None:
@@ -28,7 +26,9 @@ def to_hidden_dims(values) -> list[int]:
 
 
 def build_optimizer_kwargs(
-    cfg: DictConfig, *, for_temperature: bool = False
+    cfg: DictConfig,
+    *,
+    for_temperature: bool = False,
 ) -> Dict[str, Any]:
     opt_cfg = cfg.sac.get("optimizer", None)
     kwargs: Dict[str, Any] = {"learning_rate": float(cfg.sac.learning_rate)}
@@ -61,12 +61,6 @@ def build_optimizer_kwargs(
     return kwargs
 
 
-def resolve_image_keys(cfg: DictConfig) -> Tuple[str, ...]:
-    image_keys_cfg = cfg.residual.get("image_keys", None)
-    source = image_keys_cfg if image_keys_cfg is not None else cfg.sac.image_keys
-    return resolve_libero_image_keys(str(k) for k in source)
-
-
 def build_mixed_precision_kwargs(cfg: DictConfig) -> Dict[str, Any]:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", None)
@@ -97,7 +91,9 @@ def resolve_residual_observation_state_mode(cfg: DictConfig) -> str:
 
 
 def resolve_action_mask_from_cfg(
-    cfg: DictConfig, *, full_action_dim: int
+    cfg: DictConfig,
+    *,
+    full_action_dim: int,
 ) -> np.ndarray:
     action_mask_cfg = cfg.residual.get("action_mask", None)
     action_mask = (
@@ -110,7 +106,9 @@ def resolve_action_mask_from_cfg(
 
 
 def resolve_control_indices_from_cfg(
-    cfg: DictConfig, *, full_action_dim: int
+    cfg: DictConfig,
+    *,
+    full_action_dim: int,
 ) -> np.ndarray:
     action_mask = resolve_action_mask_from_cfg(
         cfg,
@@ -153,7 +151,7 @@ def build_drq_agent(
     cfg: DictConfig,
     sample_obs: Dict[str, np.ndarray],
     action_dim: int,
-    image_keys: Tuple[str, ...],
+    image_keys: tuple[str, ...],
     *,
     critic_action_dim: int | None = None,
     action_transform: Dict[str, Any] | None = None,
@@ -233,8 +231,6 @@ def build_drq_agent(
         action_transform=action_transform,
         mixed_precision=build_mixed_precision_kwargs(cfg),
     )
-    # Optional SAC knobs (YAML-only ablations). When unset, SAC uses defaults
-    # (e.g. target_entropy = -policy_dim/2).
     te = cfg.sac.get("target_entropy", None)
     if te is not None:
         kwargs["target_entropy"] = float(te)

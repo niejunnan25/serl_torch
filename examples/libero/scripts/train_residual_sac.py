@@ -49,6 +49,11 @@ from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
+from serl_launcher.residual.runtime.async_eval import _append_async_eval_request
+from serl_launcher.residual.runtime.async_eval import _init_async_eval_tb_sync_state
+from serl_launcher.residual.runtime.async_eval import _start_async_eval_watcher
+from serl_launcher.residual.runtime.async_eval import _stop_async_eval_watcher
+from serl_launcher.residual.runtime.async_eval import _sync_async_eval_results_to_tb
 from serl_launcher.residual.runtime.async_learning import _AgentlaceAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _AsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
@@ -59,6 +64,16 @@ from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
 from serl_launcher.residual.runtime.checkpoint import _CheckpointTask
 from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.residual.runtime.checkpoint import _write_checkpoint_payload
+from serl_launcher.residual.runtime.config_utils import build_drq_agent
+from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
+from serl_launcher.residual.runtime.config_utils import resolve_action_mask_from_cfg
+from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
+from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
+from serl_launcher.residual.runtime.config_utils import sample_probing_steps
+from serl_launcher.residual.runtime.config_utils import set_global_seeds
+from serl_launcher.residual.runtime.obs_utils import _clone_obs_dict
+from serl_launcher.residual.runtime.obs_utils import _obs_space_from_sample
+from serl_launcher.residual.runtime.obs_utils import _zero_obs_like
 from serl_launcher.residual.runtime.pretrain import _pretrain_critic_with_calql
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.profiling import _emit_profiling_snapshot
@@ -90,27 +105,12 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.libero.training_config import LIBERO_RESIDUAL_BASE_CONFIG
+from serl_torch.examples.libero.config import resolve_libero_cfg_image_keys
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
 from serl_torch.examples.libero.runtime import LiberoObservationCache
 from serl_torch.examples.libero.runtime import build_libero_policy_input
 from serl_torch.examples.libero.runtime import build_residual_step_obs_profiled
 from serl_torch.examples.libero.runtime import build_residual_step_core
-from serl_torch.examples.libero.utils.async_eval import _append_async_eval_request
-from serl_torch.examples.libero.utils.async_eval import _init_async_eval_tb_sync_state
-from serl_torch.examples.libero.utils.async_eval import _start_async_eval_watcher
-from serl_torch.examples.libero.utils.async_eval import _stop_async_eval_watcher
-from serl_torch.examples.libero.utils.async_eval import _sync_async_eval_results_to_tb
-from serl_torch.examples.libero.utils.config_utils import build_residual_action_transform
-from serl_torch.examples.libero.utils.config_utils import build_drq_agent
-from serl_torch.examples.libero.utils.config_utils import resolve_action_mask_from_cfg
-from serl_torch.examples.libero.utils.config_utils import resolve_control_indices_from_cfg
-from serl_torch.examples.libero.utils.config_utils import resolve_image_keys
-from serl_torch.examples.libero.utils.config_utils import resolve_residual_observation_state_mode
-from serl_torch.examples.libero.utils.config_utils import sample_probing_steps
-from serl_torch.examples.libero.utils.config_utils import set_global_seeds
-from serl_torch.examples.libero.utils.obs_utils import _clone_obs_dict
-from serl_torch.examples.libero.utils.obs_utils import _obs_space_from_sample
-from serl_torch.examples.libero.utils.obs_utils import _zero_obs_like
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -165,7 +165,7 @@ def main(cfg: DictConfig) -> None:
         logger=logger,
     )
 
-    image_keys = resolve_image_keys(cfg)
+    image_keys = resolve_libero_cfg_image_keys(cfg)
     stack_horizon = int(cfg.sac.obs_stack_horizon)
     if stack_horizon != 1:
         raise ValueError("Only obs_stack_horizon=1 is currently supported")
@@ -745,7 +745,8 @@ def main(cfg: DictConfig) -> None:
         async_eval_summary_path,
         async_eval_queue_path,
     ) = _start_async_eval_watcher(
-        cfg,
+        watcher_path=Path(__file__).resolve().with_name("async_eval_watch.py"),
+        cfg=cfg,
         run_dir=run_dir,
         checkpoint_dir=checkpoint_dir,
         logger=logger,

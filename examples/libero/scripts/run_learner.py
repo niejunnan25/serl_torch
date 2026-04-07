@@ -24,6 +24,12 @@ from serl_launcher.residual.data.training_loader import load_residual_training_b
 from serl_launcher.residual.runtime.async_learning import _apply_agent_snapshot_payload
 from serl_launcher.residual.runtime.async_learning import run_agentlace_learner_service
 from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
+from serl_launcher.residual.runtime.config_utils import build_drq_agent
+from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
+from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
+from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
+from serl_launcher.residual.runtime.config_utils import set_global_seeds
+from serl_launcher.residual.runtime.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.runtime.pretrain import _pretrain_critic_with_calql
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.schedules import _scheduled_alpha
@@ -38,14 +44,8 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
+from serl_torch.examples.libero.config import resolve_libero_cfg_image_keys
 from serl_torch.examples.libero.training_config import LIBERO_RESIDUAL_BASE_CONFIG
-from serl_torch.examples.libero.utils.config_utils import build_drq_agent
-from serl_torch.examples.libero.utils.config_utils import build_residual_action_transform
-from serl_torch.examples.libero.utils.config_utils import resolve_control_indices_from_cfg
-from serl_torch.examples.libero.utils.config_utils import resolve_image_keys
-from serl_torch.examples.libero.utils.config_utils import resolve_residual_observation_state_mode
-from serl_torch.examples.libero.utils.config_utils import set_global_seeds
-from serl_torch.examples.libero.utils.obs_utils import _obs_space_from_sample
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
 
@@ -417,7 +417,7 @@ def main(cfg: DictConfig) -> None:
     step_action_dim = int(bootstrap["step_action_dim"])
     agent_action_dim = int(bootstrap["agent_action_dim"])
     critic_action_dim = int(bootstrap["critic_action_dim"])
-    image_keys = tuple(bootstrap.get("image_keys", resolve_image_keys(cfg)))
+    image_keys = tuple(bootstrap.get("image_keys", resolve_libero_cfg_image_keys(cfg)))
     chunk_step_enabled = bool(bootstrap.get("chunk_step_enabled", False))
     chunk_horizon = int(bootstrap.get("chunk_horizon", int(cfg.residual.chunk_horizon)))
     state_mode = str(

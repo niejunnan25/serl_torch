@@ -23,10 +23,10 @@ from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.data.materialize import build_residual_training_manifest
 from serl_launcher.residual.data.materialize import materialize_with_config
+from serl_launcher.residual.runtime.config_utils import set_global_seeds
 from serl_torch.examples.libero.training_config import LIBERO_ONLINE_TRAINING_CONFIG
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
 from serl_torch.examples.libero.runtime import build_libero_policy_input
-from serl_torch.examples.libero.utils.config_utils import set_global_seeds
 
 _T = TypeVar("_T")
 DEFAULT_CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
