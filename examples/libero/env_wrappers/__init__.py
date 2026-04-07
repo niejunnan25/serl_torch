@@ -5,9 +5,7 @@ from .setup import (
     resolve_libero_datasets_root,
     resolve_libero_root,
     resolve_max_episode_steps,
-    resolve_openpi_root,
     setup_libero_pythonpath,
-    setup_openpi_client_pythonpath,
     write_libero_config,
 )
 from .task_env import LiberoTaskEnv
@@ -19,8 +17,6 @@ __all__ = [
     "resolve_libero_datasets_root",
     "resolve_libero_root",
     "resolve_max_episode_steps",
-    "resolve_openpi_root",
     "setup_libero_pythonpath",
-    "setup_openpi_client_pythonpath",
     "write_libero_config",
 ]

@@ -40,6 +40,12 @@ from tqdm.auto import tqdm
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
+from serl_launcher.policy.openpi import (
+    AsyncOpenPIChunkPrefetcher,
+    OpenPIChunkClient,
+    resolve_openpi_root,
+    setup_openpi_client_pythonpath,
+)
 from serl_launcher.residual.action import (
     as_numpy_action,
     as_numpy_action_chunk,
@@ -57,18 +63,11 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.training_config import (
     LIBERO_RESIDUAL_BASE_CONFIG,
 )
-from serl_torch.examples.libero.env_wrappers import (
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
-)
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
 from serl_torch.examples.libero.runtime import (
     LiberoObservationCache,
-    OpenPIChunkClient,
+    build_libero_policy_input,
     build_residual_step_core,
-)
-from serl_torch.examples.libero.runtime.openpi_prefetch import (
-    _AsyncOpenPIChunkPrefetcher,
 )
 from serl_torch.examples.libero.utils.async_eval import (
     _append_async_eval_request,
@@ -664,7 +663,7 @@ def main(cfg: DictConfig) -> None:
     sync_replay_lock: Optional[threading.Lock] = None
     sync_replay_prefetcher: Optional[_MixedBatchPrefetcher] = None
     checkpoint_writer: Optional[_AsyncCheckpointWriter] = None
-    openpi_prefetcher: Optional[_AsyncOpenPIChunkPrefetcher] = None
+    openpi_prefetcher: Optional[AsyncOpenPIChunkPrefetcher] = None
     replay_buffer = None
     offline_buffer = None
     offline_stats: Dict[str, Any] = {
@@ -794,7 +793,7 @@ def main(cfg: DictConfig) -> None:
 
     step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
     episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
-    openpi_prefetcher = _AsyncOpenPIChunkPrefetcher(
+    openpi_prefetcher = AsyncOpenPIChunkPrefetcher(
         host=str(cfg.openpi.host),
         port=int(cfg.openpi.port),
         logger=logger,
@@ -812,6 +811,20 @@ def main(cfg: DictConfig) -> None:
     step_metric_window = _new_tb_step_window()
     async_eval_tb_sync_state = _init_async_eval_tb_sync_state(async_eval_summary_path)
     obs_cache = LiberoObservationCache()
+
+    def _policy_input(
+        obs_raw: Dict[str, Any],
+        prompt: str,
+        *,
+        cache_key: Optional[Any] = None,
+    ):
+        return build_libero_policy_input(
+            obs_raw,
+            prompt,
+            obs_cache=obs_cache,
+            cache_key=cache_key,
+        )
+
     agentlace_timer_last_sent_step = -1
     async_target_update_calls = 0
     async_bounded_lag_tracked_env_steps = 0
@@ -1069,9 +1082,7 @@ def main(cfg: DictConfig) -> None:
         init_episode_idx=-1,
     )
     sample_openpi_chunk, _ = openpi_client.infer_chunk(
-        sample_obs_raw,
-        env.current_instruction,
-        obs_cache=obs_cache,
+        _policy_input(sample_obs_raw, env.current_instruction)
     )
     sample_base_chunk = select_action_chunk_window(
         sample_openpi_chunk,
@@ -1721,9 +1732,7 @@ def main(cfg: DictConfig) -> None:
                 while (episode_steps < max_episode_steps) and (not episode_done):
                     if cached_base_chunk is None:
                         openpi_chunk, infer_info = openpi_client.infer_chunk(
-                            obs_raw,
-                            env.current_instruction,
-                            obs_cache=obs_cache,
+                            _policy_input(obs_raw, env.current_instruction)
                         )
                         base_chunk = select_action_chunk_window(
                             openpi_chunk,
@@ -1855,9 +1864,7 @@ def main(cfg: DictConfig) -> None:
                                 next_openpi_chunk,
                                 next_infer_info,
                             ) = openpi_client.infer_chunk(
-                                next_obs_raw,
-                                env.current_instruction,
-                                obs_cache=obs_cache,
+                                _policy_input(next_obs_raw, env.current_instruction)
                             )
                             next_base_chunk = select_action_chunk_window(
                                 next_openpi_chunk,
@@ -1909,9 +1916,7 @@ def main(cfg: DictConfig) -> None:
                             and openpi_prefetcher is not None
                         ):
                             next_chunk_future = openpi_prefetcher.submit(
-                                next_obs_raw,
-                                env.current_instruction,
-                                obs_cache=obs_cache,
+                                _policy_input(next_obs_raw, env.current_instruction)
                             )
                         if done:
                             next_obs_input = _zero_obs_like(obs_input)
@@ -1940,9 +1945,7 @@ def main(cfg: DictConfig) -> None:
                                     next_openpi_chunk,
                                     next_infer_info,
                                 ) = openpi_client.infer_chunk(
-                                    next_obs_raw,
-                                    env.current_instruction,
-                                    obs_cache=obs_cache,
+                                    _policy_input(next_obs_raw, env.current_instruction)
                                 )
                             next_base_chunk = select_action_chunk_window(
                                 next_openpi_chunk,
@@ -2341,9 +2344,7 @@ def main(cfg: DictConfig) -> None:
                                 probe_future = None
                             else:
                                 probe_chunk, probe_info = openpi_client.infer_chunk(
-                                    obs_raw,
-                                    env.current_instruction,
-                                    obs_cache=obs_cache,
+                                    _policy_input(obs_raw, env.current_instruction)
                                 )
                             probe_base_chunk = select_action_chunk_window(
                                 probe_chunk,
@@ -2384,9 +2385,7 @@ def main(cfg: DictConfig) -> None:
                                     and openpi_prefetcher is not None
                                 ):
                                     probe_future = openpi_prefetcher.submit(
-                                        next_obs_raw,
-                                        env.current_instruction,
-                                        obs_cache=obs_cache,
+                                        _policy_input(next_obs_raw, env.current_instruction)
                                     )
                                 step_logger.write(
                                     {
@@ -2448,9 +2447,7 @@ def main(cfg: DictConfig) -> None:
                     while (episode_steps < max_episode_steps) and (not episode_done):
                         if cached_base_chunk is None:
                             openpi_chunk, infer_info = openpi_client.infer_chunk(
-                                obs_raw,
-                                env.current_instruction,
-                                obs_cache=obs_cache,
+                                _policy_input(obs_raw, env.current_instruction)
                             )
                             base_chunk = select_action_chunk_window(
                                 openpi_chunk,
@@ -2761,9 +2758,7 @@ def main(cfg: DictConfig) -> None:
                                     next_openpi_chunk,
                                     next_infer_info,
                                 ) = openpi_client.infer_chunk(
-                                    next_obs_raw,
-                                    env.current_instruction,
-                                    obs_cache=obs_cache,
+                                    _policy_input(next_obs_raw, env.current_instruction)
                                 )
                                 next_base_chunk = select_action_chunk_window(
                                     next_openpi_chunk,
@@ -3186,9 +3181,7 @@ def main(cfg: DictConfig) -> None:
                                     and openpi_prefetcher is not None
                                 ):
                                     next_chunk_future = openpi_prefetcher.submit(
-                                        next_obs_raw,
-                                        env.current_instruction,
-                                        obs_cache=obs_cache,
+                                        _policy_input(next_obs_raw, env.current_instruction)
                                     )
 
                                 step_logger.write(
@@ -3291,9 +3284,7 @@ def main(cfg: DictConfig) -> None:
                                             next_openpi_chunk,
                                             next_infer_info,
                                         ) = openpi_client.infer_chunk(
-                                            next_obs_raw,
-                                            env.current_instruction,
-                                            obs_cache=obs_cache,
+                                            _policy_input(next_obs_raw, env.current_instruction)
                                         )
                                     next_base_chunk = select_action_chunk_window(
                                         next_openpi_chunk,

@@ -1,35 +1,15 @@
-"""OpenPI base-policy client for LIBERO runtime observations."""
+"""Generic OpenPI chunk-policy client."""
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from typing import Any, Dict, Hashable, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from .obs_adapter import (
-    LiberoObservationCache,
-    build_libero_state,
-    extract_residual_images,
-)
-
-
-def encode_obs_for_openpi(
-    obs: Dict[str, Any],
-    prompt: str,
-    *,
-    obs_cache: Optional[LiberoObservationCache] = None,
-    cache_key: Optional[Hashable] = None,
-) -> Dict[str, Any]:
-    images = extract_residual_images(obs, obs_cache=obs_cache, cache_key=cache_key)
-    state = build_libero_state(obs, obs_cache=obs_cache, cache_key=cache_key)
-    return {
-        "observation/image": images["image_rgb_0"],
-        "observation/wrist_image": images["image_rgb_1"],
-        "observation/state": state,
-        "prompt": prompt,
-    }
+from serl_launcher.policy.base import PolicyInferInfo, PolicyInput
+from serl_launcher.policy.openpi.codec import encode_openpi_request
 
 
 def maybe_get_policy_infer_ms(pred: Dict[str, Any]) -> Optional[float]:
@@ -94,27 +74,16 @@ class OpenPIChunkClient:
                 close_fn()
             except Exception:
                 self._logger.debug(
-                    "Ignored OpenPI client close error during reconnect", exc_info=True
+                    "Ignored OpenPI client close error during reconnect",
+                    exc_info=True,
                 )
         self._client = self._make_client()
 
     def _is_retryable_connection_error(self, err: BaseException) -> bool:
         return isinstance(err, (self._websocket_connection_closed_error, OSError))
 
-    def infer_chunk(
-        self,
-        obs: Dict[str, Any],
-        prompt: str,
-        *,
-        obs_cache: Optional[LiberoObservationCache] = None,
-        cache_key: Optional[Hashable] = None,
-    ) -> Tuple[np.ndarray, Dict[str, Optional[float]]]:
-        send_data = encode_obs_for_openpi(
-            obs,
-            prompt,
-            obs_cache=obs_cache,
-            cache_key=cache_key,
-        )
+    def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
+        send_data = encode_openpi_request(policy_input)
         for attempt_idx in range(self._reconnect_retry_count + 1):
             try:
                 start = time.time()
@@ -122,7 +91,7 @@ class OpenPIChunkClient:
                     pred = self._client.infer(send_data)
                 e2e_ms = (time.time() - start) * 1000.0
                 chunk = np.asarray(pred["actions"], dtype=np.float32)
-                info = {
+                info: PolicyInferInfo = {
                     "e2e_ms": float(e2e_ms),
                     "policy_ms": maybe_get_policy_infer_ms(pred),
                     "server_ms": maybe_get_server_infer_ms(pred),

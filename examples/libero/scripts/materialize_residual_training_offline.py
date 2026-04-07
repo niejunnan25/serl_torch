@@ -27,15 +27,16 @@ from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
     materialize_with_config,
 )
+from serl_launcher.policy.openpi import (
+    OpenPIChunkClient,
+    resolve_openpi_root,
+    setup_openpi_client_pythonpath,
+)
 from serl_torch.examples.libero.hdf5_utils import resolve_task_specs
 from serl_torch.examples.libero.training_config import (
     LIBERO_OFFLINE_TRAINING_CONFIG,
 )
-from serl_torch.examples.libero.env_wrappers import (
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
-)
-from serl_torch.examples.libero.runtime import OpenPIChunkClient
+from serl_torch.examples.libero.runtime import build_libero_policy_input
 
 _T = TypeVar("_T")
 
@@ -124,7 +125,10 @@ def _precompute_base_chunks(
     for chunk_start in chunk_starts:
         obs_raw = _build_frame_obs(payload, chunk_start)
         action_chunk, _ = openpi_client.infer_chunk(
-            obs_raw, str(payload["task_description"])
+            build_libero_policy_input(
+                obs_raw,
+                str(payload["task_description"]),
+            )
         )
         chunks.append(select_action_chunk_window(action_chunk, horizon=chunk_horizon))
     return np.asarray(chunks, dtype=np.float32)

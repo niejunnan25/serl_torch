@@ -19,6 +19,11 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
+from serl_launcher.policy.openpi import (
+    OpenPIChunkClient,
+    resolve_openpi_root,
+    setup_openpi_client_pythonpath,
+)
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
@@ -27,12 +32,8 @@ from serl_launcher.residual.data.materialize import (
 from serl_torch.examples.libero.training_config import (
     LIBERO_ONLINE_TRAINING_CONFIG,
 )
-from serl_torch.examples.libero.env_wrappers import (
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
-)
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
-from serl_torch.examples.libero.runtime import OpenPIChunkClient
+from serl_torch.examples.libero.runtime import build_libero_policy_input
 from serl_torch.examples.libero.utils.config_utils import set_global_seeds
 
 _T = TypeVar("_T")
@@ -293,8 +294,10 @@ def main() -> None:
 
             while (episode_steps < max_episode_steps) and (not episode_done):
                 openpi_chunk, _ = openpi_client.infer_chunk(
-                    obs_raw,
-                    env.current_instruction,
+                    build_libero_policy_input(
+                        obs_raw,
+                        env.current_instruction,
+                    )
                 )
                 base_chunk = select_action_chunk_window(
                     openpi_chunk,

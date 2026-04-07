@@ -13,6 +13,11 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
+from serl_launcher.policy.openpi import (
+    OpenPIChunkClient,
+    resolve_openpi_root,
+    setup_openpi_client_pythonpath,
+)
 from serl_launcher.residual.action import (
     as_numpy_action,
     as_numpy_action_chunk,
@@ -29,12 +34,10 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.env_wrappers import (
     LiberoTaskEnv,
     RemoteLiberoTaskEnv,
-    resolve_openpi_root,
-    setup_openpi_client_pythonpath,
 )
 from serl_torch.examples.libero.runtime import (
     LiberoObservationCache,
-    OpenPIChunkClient,
+    build_libero_policy_input,
     build_residual_step_obs,
 )
 from serl_torch.examples.libero.utils import (
@@ -234,6 +237,13 @@ def main(cfg: DictConfig) -> None:
     total_probing_steps = 0
     obs_cache = LiberoObservationCache()
 
+    def _policy_input(obs_raw: Dict[str, Any], prompt: str):
+        return build_libero_policy_input(
+            obs_raw,
+            prompt,
+            obs_cache=obs_cache,
+        )
+
     eval_seed = int(cfg.eval.get("seed", 7))
     logger.info("Evaluation uses fixed seed=%s for all episodes", eval_seed)
 
@@ -275,9 +285,7 @@ def main(cfg: DictConfig) -> None:
                 )
                 while probing_remaining > 0 and episode_steps < max_episode_steps:
                     probe_chunk, probe_info = openpi_client.infer_chunk(
-                        obs_raw,
-                        env.current_instruction,
-                        obs_cache=obs_cache,
+                        _policy_input(obs_raw, env.current_instruction)
                     )
                     probe_base_chunk = select_action_chunk_window(
                         probe_chunk,
@@ -340,9 +348,7 @@ def main(cfg: DictConfig) -> None:
                 if decision_done:
                     break
                 openpi_chunk, infer_info = openpi_client.infer_chunk(
-                    obs_raw,
-                    env.current_instruction,
-                    obs_cache=obs_cache,
+                    _policy_input(obs_raw, env.current_instruction)
                 )
                 base_chunk = select_action_chunk_window(
                     openpi_chunk,

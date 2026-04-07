@@ -7,12 +7,12 @@ from .obs_adapter import (
     build_residual_step_obs,
     extract_residual_images,
 )
-from .openpi_client import OpenPIChunkClient
+from .policy_adapter import build_libero_policy_input
 
 __all__ = [
     "LiberoObservationCache",
-    "OpenPIChunkClient",
     "build_libero_state",
+    "build_libero_policy_input",
     "build_residual_step_core",
     "build_residual_step_obs",
     "extract_residual_images",
