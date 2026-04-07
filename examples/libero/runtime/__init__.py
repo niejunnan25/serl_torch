@@ -9,6 +9,8 @@ from .obs_adapter import build_residual_step_core
 from .obs_adapter import build_residual_step_obs
 from .obs_adapter import extract_residual_images
 from .policy_adapter import build_libero_policy_input
+from .runtime_bindings import LiberoRuntimeBindings
+from .runtime_bindings import build_libero_runtime_bindings
 
 
 def build_residual_step_obs_profiled(
@@ -27,7 +29,9 @@ def build_residual_step_obs_profiled(
 
 __all__ = [
     "LiberoObservationCache",
+    "LiberoRuntimeBindings",
     "build_libero_state",
+    "build_libero_runtime_bindings",
     "build_libero_policy_input",
     "build_residual_step_core",
     "build_residual_step_obs",
