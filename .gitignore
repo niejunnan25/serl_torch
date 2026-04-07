@@ -184,6 +184,9 @@ examples/libero/data/offline/
 examples/libero/data/online_prefill/
 examples/libero/training_logs/
 
+# Example datasets / generated data directories
+examples/**/data/**
+
 # Local third_party workspace content
 third_party/
 
