@@ -5,7 +5,7 @@ import dataclasses
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from ..env_wrappers import (
+from .env_wrappers import (
     resolve_libero_config_dir,
     resolve_libero_datasets_root,
     resolve_libero_root,
@@ -26,7 +26,9 @@ class LiberoTaskSpec:
         return f"{self.suite_name}_task_{self.task_id}"
 
 
-def _candidate_dataset_paths(datasets_root: Path, suite_name: str, task_name: str) -> Iterable[Path]:
+def _candidate_dataset_paths(
+    datasets_root: Path, suite_name: str, task_name: str
+) -> Iterable[Path]:
     filename = f"{task_name}_demo.hdf5"
     yield (datasets_root / suite_name / filename).resolve()
     yield (datasets_root / filename).resolve()
@@ -67,12 +69,20 @@ def resolve_task_specs(
     for task_id in selected_task_ids:
         task = task_suite.get_task(task_id)
         dataset_path = None
-        for candidate in _candidate_dataset_paths(resolved_datasets_root, str(suite_name), str(task.name)):
+        for candidate in _candidate_dataset_paths(
+            resolved_datasets_root, str(suite_name), str(task.name)
+        ):
             if candidate.exists():
                 dataset_path = candidate
                 break
         if dataset_path is None:
-            dataset_path = next(_candidate_dataset_paths(resolved_datasets_root, str(suite_name), str(task.name)))
+            dataset_path = next(
+                _candidate_dataset_paths(
+                    resolved_datasets_root,
+                    str(suite_name),
+                    str(task.name),
+                )
+            )
 
         specs.append(
             LiberoTaskSpec(
@@ -84,4 +94,3 @@ def resolve_task_specs(
             )
         )
     return specs
-

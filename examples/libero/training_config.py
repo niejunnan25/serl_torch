@@ -21,12 +21,11 @@ from serl_launcher.residual.data.transforms import (
     set_by_path,
 )
 
-from ..policy.observation import build_libero_state, extract_residual_images
+from .policy.observation import build_libero_state, extract_residual_images
+from .schema import LIBERO_IMAGE_SLOT_KEYS
 
 LIBERO_TRAINING_IMAGE_VIEWS = {
-    "image": "image_rgb_0",
-    "wrist_image": "image_rgb_1",
-    "image_rgb_2": "image_rgb_2",
+    slot_key: slot_key for slot_key in LIBERO_IMAGE_SLOT_KEYS
 }
 
 LIBERO_IMAGE_RAW_MAPPING = {
@@ -76,6 +75,7 @@ def _build_libero_observation(data: Dict[str, Any]) -> Dict[str, Any]:
 
     image_rgb_0 = []
     image_rgb_1 = []
+    image_rgb_2 = []
     state = []
     num_steps = int(agentview_rgb.shape[0])
     for frame_idx in range(num_steps):
@@ -87,8 +87,9 @@ def _build_libero_observation(data: Dict[str, Any]) -> Dict[str, Any]:
             "gripper_states": gripper_states[frame_idx],
         }
         images = extract_residual_images(obs_frame)
-        image_rgb_0.append(np.asarray(images["image"], dtype=np.uint8))
-        image_rgb_1.append(np.asarray(images["wrist_image"], dtype=np.uint8))
+        image_rgb_0.append(np.asarray(images["image_rgb_0"], dtype=np.uint8))
+        image_rgb_1.append(np.asarray(images["image_rgb_1"], dtype=np.uint8))
+        image_rgb_2.append(np.asarray(images["image_rgb_2"], dtype=np.uint8))
         state.append(np.asarray(build_libero_state(obs_frame), dtype=np.float32))
 
     set_by_path(
@@ -104,7 +105,7 @@ def _build_libero_observation(data: Dict[str, Any]) -> Dict[str, Any]:
     set_by_path(
         data,
         "observation/image/image_rgb_2",
-        np.zeros_like(np.asarray(image_rgb_0, dtype=np.uint8)),
+        np.asarray(image_rgb_2, dtype=np.uint8),
     )
     set_by_path(
         data,
@@ -156,11 +157,7 @@ def _project_offline_expert_actions(data: Dict[str, Any]) -> Dict[str, Any]:
         clipped_total += int(clipped_count)
 
     projection["clipped_values"] = int(clipped_total)
-    set_by_path(
-        data,
-        "metadata/projection",
-        projection,
-    )
+    set_by_path(data, "metadata/projection", projection)
     set_by_path(
         data,
         "action/final",

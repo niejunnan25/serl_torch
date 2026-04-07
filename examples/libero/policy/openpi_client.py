@@ -25,8 +25,8 @@ def encode_obs_for_openpi(
     images = extract_residual_images(obs, obs_cache=obs_cache, cache_key=cache_key)
     state = build_libero_state(obs, obs_cache=obs_cache, cache_key=cache_key)
     return {
-        "observation/image": images["image"],
-        "observation/wrist_image": images["wrist_image"],
+        "observation/image": images["image_rgb_0"],
+        "observation/wrist_image": images["image_rgb_1"],
         "observation/state": state,
         "prompt": prompt,
     }

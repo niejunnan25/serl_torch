@@ -8,26 +8,15 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+import h5py
 import numpy as np
-
-try:
-    import h5py
-except ImportError as exc:  # pragma: no cover - runtime dependency check
-    raise SystemExit(
-        "h5py is required for compute_hdf5_stats.py. "
-        "Please run this script in an environment with h5py installed."
-    ) from exc
-
-try:
-    from tqdm.auto import tqdm
-except ImportError:  # pragma: no cover - optional progress dependency
-    tqdm = None
+from tqdm.auto import tqdm
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.data.hdf5_utils import LiberoTaskSpec, resolve_task_specs
+from serl_torch.examples.libero.hdf5_utils import LiberoTaskSpec, resolve_task_specs
 
 
 def _sorted_demo_names(dataset_file: h5py.File) -> list[str]:
@@ -42,15 +31,13 @@ def _stack_task_arrays(task_spec: LiberoTaskSpec) -> tuple[np.ndarray, np.ndarra
 
     with h5py.File(task_spec.dataset_path, "r") as dataset_file:
         demo_names = _sorted_demo_names(dataset_file)
-        demo_iter = demo_names
-        if tqdm is not None:
-            demo_iter = tqdm(
-                demo_names,
-                desc=f"{task_spec.task_key} demos",
-                unit="ep",
-                dynamic_ncols=True,
-                leave=False,
-            )
+        demo_iter = tqdm(
+            demo_names,
+            desc=f"{task_spec.task_key} demos",
+            unit="ep",
+            dynamic_ncols=True,
+            leave=False,
+        )
         for demo_name in demo_iter:
             demo = dataset_file["data"][demo_name]
             obs = demo["obs"]
@@ -110,10 +97,7 @@ def _task_id_list(args: argparse.Namespace) -> Iterable[int] | None:
 
 
 def _log_line(message: str) -> None:
-    if tqdm is not None:
-        tqdm.write(message)
-    else:
-        print(message)
+    tqdm.write(message)
 
 
 def main() -> None:
@@ -145,7 +129,7 @@ def main() -> None:
     )
 
     task_iter = specs
-    if tqdm is not None and len(specs) > 1:
+    if len(specs) > 1:
         task_iter = tqdm(specs, desc="Tasks", unit="task", dynamic_ncols=True)
 
     for task_spec in task_iter:

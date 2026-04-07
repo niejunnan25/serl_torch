@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 from serl_launcher.data.normalizer import StateActionNormalizer
 
+from ..schema import resolve_libero_image_keys
 from ..utils.alpha_utils import validate_alpha
 
 RESIDUAL_IMAGE_HEIGHT = 224
@@ -114,23 +115,26 @@ def _preprocess_rgb(rgb: np.ndarray) -> np.ndarray:
 
 
 def _compute_residual_images(obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    image_rgb_0 = _preprocess_rgb(
+        _find_first_key(
+            obs, ("agentview_image", "agentview_rgb", "image", "front_rgb")
+        )
+    )
+    image_rgb_1 = _preprocess_rgb(
+        _find_first_key(
+            obs,
+            (
+                "robot0_eye_in_hand_image",
+                "eye_in_hand_rgb",
+                "wrist_image",
+                "hand_rgb",
+            ),
+        )
+    )
     return {
-        "image": _preprocess_rgb(
-            _find_first_key(
-                obs, ("agentview_image", "agentview_rgb", "image", "front_rgb")
-            )
-        ),
-        "wrist_image": _preprocess_rgb(
-            _find_first_key(
-                obs,
-                (
-                    "robot0_eye_in_hand_image",
-                    "eye_in_hand_rgb",
-                    "wrist_image",
-                    "hand_rgb",
-                ),
-            )
-        ),
+        "image_rgb_0": image_rgb_0,
+        "image_rgb_1": image_rgb_1,
+        "image_rgb_2": np.zeros_like(image_rgb_0, dtype=np.uint8),
     }
 
 
@@ -241,12 +245,13 @@ def build_residual_step_core(
         cache_key=cache_key,
         normalizer=normalizer,
     )
+    resolved_image_keys = resolve_libero_image_keys(image_keys)
     images_all = extract_residual_images(
         obs,
         obs_cache=obs_cache,
         cache_key=cache_key,
     )
-    missing_keys = [key for key in image_keys if key not in images_all]
+    missing_keys = [key for key in resolved_image_keys if key not in images_all]
     if missing_keys:
         raise KeyError(
             f"Unsupported image key(s): {missing_keys}. "
@@ -255,7 +260,7 @@ def build_residual_step_core(
     payload: Dict[str, np.ndarray] = {
         "state_core": np.asarray(state_core, dtype=np.float32)
     }
-    for key in image_keys:
+    for key in resolved_image_keys:
         payload[key] = np.array(images_all[key], copy=True)
     return payload
 
@@ -418,7 +423,7 @@ class LiberoObservationCache:
     ) -> Dict[str, np.ndarray]:
         with self._lock:
             residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
-            image_keys = tuple(image_keys)
+            image_keys = resolve_libero_image_keys(image_keys)
             normalized_state_mode = normalize_residual_observation_state_mode(state_mode)
             if stack_horizon != 1:
                 raise ValueError(
@@ -530,6 +535,7 @@ def build_residual_step_obs(
     state_mode: str = "fused",
 ) -> Dict[str, np.ndarray]:
     residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
+    image_keys = resolve_libero_image_keys(image_keys)
     normalized_state_mode = normalize_residual_observation_state_mode(state_mode)
     if obs_cache is not None:
         return obs_cache.build_residual_step_obs(

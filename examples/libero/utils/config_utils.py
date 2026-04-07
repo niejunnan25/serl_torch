@@ -10,6 +10,7 @@ import torch
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 
+from ..schema import resolve_libero_image_keys
 from ..policy.action import resolve_control_indices
 from ..policy.observation import normalize_residual_observation_state_mode
 
@@ -61,10 +62,7 @@ def build_optimizer_kwargs(
 def resolve_image_keys(cfg: DictConfig) -> Tuple[str, ...]:
     image_keys_cfg = cfg.residual.get("image_keys", None)
     source = image_keys_cfg if image_keys_cfg is not None else cfg.sac.image_keys
-    image_keys = tuple(str(k) for k in source)
-    if not image_keys:
-        raise ValueError("At least one residual image key is required")
-    return image_keys
+    return resolve_libero_image_keys(str(k) for k in source)
 
 
 def build_mixed_precision_kwargs(cfg: DictConfig) -> Dict[str, Any]:

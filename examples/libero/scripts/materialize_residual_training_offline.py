@@ -10,20 +10,9 @@ import time
 from pathlib import Path
 from typing import Iterable, Iterator, Optional, Sequence, TypeVar
 
+import h5py
 import numpy as np
-
-try:
-    import h5py
-except ImportError as exc:  # pragma: no cover - runtime dependency check
-    raise SystemExit(
-        "h5py is required for materialize_residual_training_offline.py. "
-        "Please run this script in an environment with h5py installed."
-    ) from exc
-
-try:
-    from tqdm.auto import tqdm
-except ImportError:  # pragma: no cover - optional progress dependency
-    tqdm = None
+from tqdm.auto import tqdm
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
@@ -33,8 +22,8 @@ from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
     materialize_with_config,
 )
-from serl_torch.examples.libero.data.hdf5_utils import resolve_task_specs
-from serl_torch.examples.libero.data.training_config import (
+from serl_torch.examples.libero.hdf5_utils import resolve_task_specs
+from serl_torch.examples.libero.training_config import (
     LIBERO_OFFLINE_TRAINING_CONFIG,
 )
 from serl_torch.examples.libero.env_wrappers import (
@@ -59,8 +48,6 @@ def _progress(
     unit: str,
     leave: bool = True,
 ) -> Iterable[_T]:
-    if tqdm is None:
-        return iterable
     return tqdm(
         iterable,
         total=total,

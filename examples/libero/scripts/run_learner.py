@@ -26,7 +26,7 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.data.training_config import (
+from serl_torch.examples.libero.training_config import (
     LIBERO_RESIDUAL_BASE_CONFIG,
 )
 from serl_torch.examples.libero.policy import (

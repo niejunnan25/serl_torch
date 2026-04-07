@@ -5,13 +5,9 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from omegaconf import DictConfig
+from tqdm.auto import tqdm
 
 from .tb_metrics import _log_info_scalars
-
-try:
-    from tqdm.auto import tqdm
-except ImportError:  # pragma: no cover
-    tqdm = None
 
 if TYPE_CHECKING:
     from serl_launcher.data.replay_buffer import ReplayBuffer
@@ -44,9 +40,12 @@ def _pretrain_critic_with_calql(
         }
 
     info_last: Dict[str, Any] = {}
-    progress = range(warm_steps)
-    if tqdm is not None:
-        progress = tqdm(progress, desc="Cal-QL critic pretrain", unit="step", dynamic_ncols=True)
+    progress = tqdm(
+        range(warm_steps),
+        desc="Cal-QL critic pretrain",
+        unit="step",
+        dynamic_ncols=True,
+    )
 
     for step in progress:
         batch = offline_buffer.sample(batch_size=warm_batch_size)
@@ -56,7 +55,7 @@ def _pretrain_critic_with_calql(
             calql_n_actions=calql_n_actions,
             calql_temperature=calql_temperature,
         )
-        if tqdm is not None and (step % 50 == 0 or step == warm_steps - 1):
+        if step % 50 == 0 or step == warm_steps - 1:
             loss_str = f"loss={info_last.get('critic_loss', 0):.3f}"
             if "predicted_qs" in info_last:
                 loss_str += f" Q={info_last['predicted_qs']:.2f}"

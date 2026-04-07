@@ -36,21 +36,17 @@ except ModuleNotFoundError:
 import hydra
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 
-try:
-    from tqdm.auto import tqdm
-except Exception:  # noqa: BLE001
-    tqdm = None
-
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.data.training_config import (
+from serl_torch.examples.libero.training_config import (
     LIBERO_RESIDUAL_BASE_CONFIG,
 )
 from serl_torch.examples.libero.env_wrappers import (
@@ -811,11 +807,6 @@ def main(cfg: DictConfig) -> None:
     )
     progress_enabled = bool(cfg.logging.get("progress_bar", True))
     progress_mininterval_sec = float(cfg.logging.get("progress_mininterval_sec", 1.0))
-    if progress_enabled and tqdm is None:
-        logger.warning(
-            "progress_bar=true but tqdm is unavailable; progress bars are disabled"
-        )
-        progress_enabled = False
     step_metric_window = _new_tb_step_window()
     async_eval_tb_sync_state = _init_async_eval_tb_sync_state(async_eval_summary_path)
     obs_cache = LiberoObservationCache()
@@ -1604,7 +1595,7 @@ def main(cfg: DictConfig) -> None:
     def _new_progress(
         *, desc: str, total: Optional[int], position: int, leave: bool
     ) -> Optional[Any]:
-        if (not progress_enabled) or tqdm is None:
+        if not progress_enabled:
             return None
         return tqdm(
             total=total,
