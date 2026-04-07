@@ -292,10 +292,10 @@ else
     wait_for_port "OpenPI server" "$OPENPI_HOST" "$OPENPI_PORT" 300 | tee -a "$LAUNCH_LOG"
 fi
 
-echo "Starting online prefill collection..." | tee -a "$LAUNCH_LOG"
+echo "Starting online residual-training collection..." | tee -a "$LAUNCH_LOG"
 RUN_CMD=(
     "$PYTHON_BIN"
-    "$ROOT_DIR/scripts/collect_online_prefill.py"
+    "$ROOT_DIR/scripts/materialize_residual_training_online.py"
     "$CONFIG_PATH"
 )
 RUN_CMD+=("${COLLECT_ARGS[@]}")

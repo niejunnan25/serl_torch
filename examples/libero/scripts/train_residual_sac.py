@@ -39,6 +39,7 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
+from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 
 try:
     from tqdm.auto import tqdm
@@ -51,12 +52,6 @@ if str(REPO_PARENT) not in sys.path:
 
 from serl_torch.examples.libero.data.offline_bootstrap import (
     _bootstrap_offline_with_base_success,
-)
-from serl_torch.examples.libero.data.online_prefill_dataset import (
-    _load_online_prefill_buffer,
-)
-from serl_torch.examples.libero.data.offline_residual import (
-    _load_offline_residual_buffer,
 )
 from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
@@ -1239,17 +1234,12 @@ def main(cfg: DictConfig) -> None:
             bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
         )
         if has_offline_dataset_paths:
-            offline_stats = _load_offline_residual_buffer(
-                cfg,
+            offline_stats = load_residual_training_buffer(
+                cfg.offline.dataset_paths,
                 sample_obs_template=sample_obs,
-                offline_buffer=offline_buffer,
-                action_dim=step_action_dim,
-                full_action_dim=env_action_dim,
+                replay_buffer=offline_buffer,
+                action_dim=env_action_dim,
                 chunk_horizon=chunk_horizon,
-                control_indices=control_indices,
-                residual_limits=residual_limits,
-                residual_alpha=offline_residual_alpha,
-                openpi_client=openpi_client,
                 image_keys=image_keys,
                 stack_horizon=stack_horizon,
                 chunk_step_enabled=chunk_step_enabled,
@@ -1257,6 +1247,20 @@ def main(cfg: DictConfig) -> None:
                 normalizer=normalizer,
                 profiler=profiler,
                 state_mode=obs_state_mode,
+                max_transitions=cfg.offline.max_transitions,
+                expected_task_key=task_key,
+                expected_alpha=float(offline_residual_alpha),
+                expected_projection={
+                    "control_indices": control_indices,
+                    "residual_limits": residual_limits,
+                    "expert_reference_scale": float(
+                        cfg.offline.get("expert_reference_scale", 1.0)
+                    ),
+                    "clip_residual_to_unit": bool(
+                        cfg.offline.get("clip_residual_to_unit", True)
+                    ),
+                },
+                dataset_label="offline residual training",
             )
         logger.info(
             "offline bootstrap: success_episodes=%s collected=%s inserted=%s attempts=%s",
@@ -1265,17 +1269,18 @@ def main(cfg: DictConfig) -> None:
             bootstrap_stats.get("inserted", 0),
             bootstrap_stats.get("attempts", 0),
         )
-        logger.info(
-            "offline preload: buffer=%s files_loaded=%s/%s candidates=%s inserted=%s skipped=%s clipped=%s errors=%s",
-            len(offline_buffer),
-            offline_stats.get("files_loaded", 0),
-            offline_stats.get("files_total", 0),
-            offline_stats.get("candidates", 0),
-            offline_stats.get("inserted", 0),
-            offline_stats.get("skipped", 0),
-            offline_stats.get("clipped_values", 0),
-            offline_stats.get("errors", 0),
-        )
+        if has_offline_dataset_paths:
+            logger.info(
+                "offline preload: buffer=%s files_loaded=%s/%s candidates=%s inserted=%s skipped=%s clipped=%s errors=%s",
+                len(offline_buffer),
+                offline_stats.get("files_loaded", 0),
+                offline_stats.get("files_total", 0),
+                offline_stats.get("candidates", 0),
+                offline_stats.get("inserted", 0),
+                offline_stats.get("skipped", 0),
+                offline_stats.get("clipped_values", 0),
+                offline_stats.get("errors", 0),
+            )
         warmstart_info = _pretrain_critic_with_calql(
             cfg,
             agent=learner_agent,
@@ -1404,8 +1409,8 @@ def main(cfg: DictConfig) -> None:
                 "training.online_prefill.dataset_paths to be set when "
                 "training.warmup.episodes > 0"
             )
-        online_prefill_stats = _load_online_prefill_buffer(
-            cfg,
+        online_prefill_stats = load_residual_training_buffer(
+            online_prefill_dataset_paths,
             replay_buffer=replay_buffer,
             sample_obs_template=sample_obs,
             action_dim=env_action_dim,
@@ -1418,6 +1423,9 @@ def main(cfg: DictConfig) -> None:
             profiler=profiler,
             max_episodes=configured_warmup_episodes,
             state_mode=obs_state_mode,
+            expected_task_key=task_key,
+            expected_alpha=0.0,
+            dataset_label="online residual training",
         )
         online_prefill_loaded_episodes = int(
             online_prefill_stats.get("episodes_loaded", 0)

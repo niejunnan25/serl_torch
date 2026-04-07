@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect compact online replay prefill episodes for LIBERO warmup reuse."""
+"""Materialize unified residual-training episode PKLs from online LIBERO rollouts."""
 from __future__ import annotations
 
 import argparse
@@ -23,11 +23,11 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.data.online_prefill_dataset import (
-    ONLINE_PREFILL_EPISODE_FORMAT,
-    ONLINE_PREFILL_MANIFEST_FORMAT,
-    _resolve_online_prefill_mode,
+from serl_launcher.residual.data.formats import (
+    build_libero_residual_training_payload,
+    build_residual_training_manifest,
 )
+from serl_torch.examples.libero.data.training_schema import build_libero_training_arrays
 from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
@@ -67,6 +67,10 @@ def _resolve_config_path(config_arg: str) -> Path:
     if candidate.is_absolute() or "/" in str(config_arg):
         return candidate.resolve()
     return (DEFAULT_CONF_DIR / candidate).resolve()
+
+
+def _resolve_collection_mode(*, chunk_step_enabled: bool) -> str:
+    return "stepchunk" if bool(chunk_step_enabled) else "step"
 
 
 def _compose_config(config_path: Path, overrides: List[str]):
@@ -161,7 +165,7 @@ def _canonicalize_obs_frame(obs_raw: Dict[str, Any]) -> Dict[str, np.ndarray]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Collect compact LIBERO online replay prefill episodes",
+        description="Collect unified LIBERO residual-training episodes",
     )
     parser.add_argument(
         "config",
@@ -177,37 +181,40 @@ def main() -> None:
     parser.add_argument(
         "--output_dir",
         type=str,
-        default=str(Path(__file__).resolve().parents[1] / "data" / "online_prefill"),
-        help="Root output directory for online prefill manifests and episode PKLs",
+        default=str(
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "residual_training"
+            / "online"
+        ),
+        help="Root output directory for unified residual-training manifests and episode PKLs",
     )
-    # NOTE:
-    # Python 3.8 argparse cannot reliably parse a trailing positional nargs='*'
-    # after optional arguments (e.g. "... --episodes 100 openpi.port=30011").
-    # We therefore parse known args first and treat remaining tokens as Hydra overrides.
     args, unknown = parser.parse_known_args()
     invalid_flags = [token for token in unknown if token.startswith("-")]
     if invalid_flags:
-        parser.error(
-            "unrecognized arguments: " + " ".join(invalid_flags)
-        )
+        parser.error("unrecognized arguments: " + " ".join(invalid_flags))
     overrides = list(unknown)
 
     logging.basicConfig(
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s %(message)s",
     )
-    logger = logging.getLogger("libero_collect_online_prefill")
+    logger = logging.getLogger("libero_collect_residual_training")
 
     config_path = _resolve_config_path(args.config)
     cfg = _compose_config(config_path, overrides)
     set_global_seeds(int(cfg.seed))
 
     warmup_cfg = cfg.training.get("warmup", None)
-    default_episodes = int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
-    num_episodes = int(args.episodes) if args.episodes is not None else int(default_episodes)
+    default_episodes = (
+        int(warmup_cfg.get("episodes", 0)) if warmup_cfg is not None else 0
+    )
+    num_episodes = (
+        int(args.episodes) if args.episodes is not None else int(default_episodes)
+    )
     if num_episodes <= 0:
         raise ValueError(
-            "online prefill collection requires a positive episode count; "
+            "online residual-training collection requires a positive episode count; "
             f"got {num_episodes}"
         )
 
@@ -215,7 +222,7 @@ def main() -> None:
     setup_openpi_client_pythonpath(openpi_root)
     task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
     chunk_step_enabled = bool(cfg.get("chunk_step", {}).get("enabled", False))
-    mode = _resolve_online_prefill_mode(chunk_step_enabled=chunk_step_enabled)
+    mode = _resolve_collection_mode(chunk_step_enabled=chunk_step_enabled)
     chunk_horizon = int(cfg.residual.chunk_horizon)
     action_dim = int(cfg.env.action_dim)
 
@@ -225,7 +232,7 @@ def main() -> None:
 
     logger.info("Config path: %s", config_path)
     logger.info(
-        "Collecting online prefill: task=%s mode=%s episodes=%s output=%s",
+        "Collecting residual training episodes: task=%s mode=%s episodes=%s output=%s",
         task_key,
         mode,
         num_episodes,
@@ -316,7 +323,7 @@ def main() -> None:
                     actual_chunk_steps = int(len(chunk_rewards))
                     if actual_chunk_steps <= 0:
                         raise RuntimeError(
-                            "env.step_chunk returned zero executed steps during online prefill collection"
+                            "env.step_chunk returned zero executed steps during online residual-training collection"
                         )
                     current_step_obs_raw = obs_raw
                     for chunk_step in range(actual_chunk_steps):
@@ -329,7 +336,9 @@ def main() -> None:
                         timeout = bool(episode_steps >= max_episode_steps)
                         done = bool(chunk_dones[chunk_step] or timeout)
                         actions.append(
-                            np.asarray(executed_base_chunk[chunk_step], dtype=np.float32)
+                            np.asarray(
+                                executed_base_chunk[chunk_step], dtype=np.float32
+                            )
                         )
                         rewards.append(reward)
                         dones.append(done)
@@ -365,39 +374,54 @@ def main() -> None:
             if dones:
                 dones[-1] = True
 
-            payload = {
-                "format": ONLINE_PREFILL_EPISODE_FORMAT,
-                "mode": mode,
-                "task_key": task_key,
-                "suite_name": str(cfg.task.suite_name),
-                "task_id": int(cfg.task.task_id),
-                "task_description": str(env.current_instruction),
-                "chunk_horizon": int(chunk_horizon),
-                "action_dim": int(action_dim),
-                "episode_index": int(episode_index),
-                "seed": int(seed),
-                "applied_seed": (
-                    int(env.last_seed) if env.last_seed is not None else int(seed)
+            canonical = build_libero_training_arrays(
+                agentview_rgb=np.asarray(frame_buffers["agentview_rgb"], dtype=np.uint8),
+                eye_in_hand_rgb=np.asarray(
+                    frame_buffers["eye_in_hand_rgb"], dtype=np.uint8
                 ),
-                "init_episode_idx": int(current_init_episode_idx),
-                "init_state_idx": (
-                    int(env.current_init_state_idx)
-                    if env.current_init_state_idx is not None
-                    else None
+                ee_pos=np.asarray(frame_buffers["ee_pos"], dtype=np.float32),
+                ee_ori=np.asarray(frame_buffers["ee_ori"], dtype=np.float32),
+                gripper_states=np.asarray(
+                    frame_buffers["gripper_states"], dtype=np.float32
                 ),
-                "episode_success": bool(episode_success),
-                "episode_return": float(episode_return),
-                "episode_steps": int(episode_steps),
-                "agentview_rgb": np.asarray(frame_buffers["agentview_rgb"], dtype=np.uint8),
-                "eye_in_hand_rgb": np.asarray(frame_buffers["eye_in_hand_rgb"], dtype=np.uint8),
-                "ee_pos": np.asarray(frame_buffers["ee_pos"], dtype=np.float32),
-                "ee_ori": np.asarray(frame_buffers["ee_ori"], dtype=np.float32),
-                "gripper_states": np.asarray(frame_buffers["gripper_states"], dtype=np.float32),
-                "actions": np.asarray(actions, dtype=np.float32),
-                "rewards": np.asarray(rewards, dtype=np.float32),
-                "dones": np.asarray(dones, dtype=bool),
-                "base_chunks": np.asarray(base_chunks, dtype=np.float32),
-            }
+            )
+            payload = build_libero_residual_training_payload(
+                source="online",
+                suite_name=str(cfg.task.suite_name),
+                task_id=int(cfg.task.task_id),
+                task_key=task_key,
+                task_description=str(env.current_instruction),
+                prompt=str(env.current_instruction),
+                chunk_horizon=int(chunk_horizon),
+                action_dim=int(action_dim),
+                alpha=0.0,
+                state=canonical["state"],
+                image_rgb_0=canonical["image_rgb_0"],
+                image_rgb_1=canonical["image_rgb_1"],
+                image_rgb_2=canonical["image_rgb_2"],
+                image_mask=canonical["image_mask"],
+                base_chunks=np.asarray(base_chunks, dtype=np.float32),
+                actions=np.asarray(actions, dtype=np.float32),
+                rewards=np.asarray(rewards, dtype=np.float32),
+                dones=np.asarray(dones, dtype=bool),
+                episode_index=int(episode_index),
+                episode_steps=int(episode_steps),
+                episode_return=float(episode_return),
+                episode_success=bool(episode_success),
+                metadata={
+                    "collection_mode": mode,
+                    "seed": int(seed),
+                    "applied_seed": (
+                        int(env.last_seed) if env.last_seed is not None else int(seed)
+                    ),
+                    "init_episode_idx": int(current_init_episode_idx),
+                    "init_state_idx": (
+                        int(env.current_init_state_idx)
+                        if env.current_init_state_idx is not None
+                        else None
+                    ),
+                },
+            )
             episode_path = task_output_dir / f"episode_{episode_index:06d}.pkl"
             with open(episode_path, "wb") as f:
                 pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -411,41 +435,47 @@ def main() -> None:
     finally:
         env.close()
 
-    manifest = {
-        "format": ONLINE_PREFILL_MANIFEST_FORMAT,
-        "task_key": task_key,
-        "suite_name": str(cfg.task.suite_name),
-        "task_id": int(cfg.task.task_id),
-        "task_description": str(env.task_description),
-        "mode": mode,
-        "chunk_horizon": int(chunk_horizon),
-        "action_dim": int(action_dim),
-        "config_path": str(config_path),
-        "overrides": list(overrides),
-        "openpi_host": str(cfg.openpi.host),
-        "openpi_port": int(cfg.openpi.port),
-        "env_backend": str(cfg.env.backend),
-        "env_host": str(cfg.env.get("remote", {}).get("host", "127.0.0.1"))
-        if str(cfg.env.backend).lower() == "remote"
-        else None,
-        "env_port": int(cfg.env.get("remote", {}).get("port", 30000))
-        if str(cfg.env.backend).lower() == "remote"
-        else None,
-        "num_episodes": len(manifest_files),
-        "total_frames": int(total_frames),
-        "success_episodes": int(success_episodes),
-        "success_rate": float(success_episodes / max(1, len(manifest_files))),
-        "mean_episode_return": float(episode_return_sum / max(1, len(manifest_files))),
-        "mean_episode_steps": float(episode_step_sum / max(1, len(manifest_files))),
-        "episode_files": manifest_files,
-        "elapsed_sec": float(time.time() - t0),
-    }
+    manifest = build_residual_training_manifest(
+        source="online",
+        task_key=task_key,
+        suite_name=str(cfg.task.suite_name),
+        task_id=int(cfg.task.task_id),
+        task_description=str(env.task_description),
+        chunk_horizon=int(chunk_horizon),
+        action_dim=int(action_dim),
+        num_episodes=len(manifest_files),
+        total_frames=int(total_frames),
+        episode_files=manifest_files,
+        metadata={
+            "collection_mode": mode,
+            "config_path": str(config_path),
+            "overrides": list(overrides),
+            "openpi_host": str(cfg.openpi.host),
+            "openpi_port": int(cfg.openpi.port),
+            "env_backend": str(cfg.env.backend),
+            "env_host": str(cfg.env.get("remote", {}).get("host", "127.0.0.1"))
+            if str(cfg.env.backend).lower() == "remote"
+            else None,
+            "env_port": int(cfg.env.get("remote", {}).get("port", 30000))
+            if str(cfg.env.backend).lower() == "remote"
+            else None,
+            "success_episodes": int(success_episodes),
+            "success_rate": float(success_episodes / max(1, len(manifest_files))),
+            "mean_episode_return": float(
+                episode_return_sum / max(1, len(manifest_files))
+            ),
+            "mean_episode_steps": float(
+                episode_step_sum / max(1, len(manifest_files))
+            ),
+            "elapsed_sec": float(time.time() - t0),
+        },
+    )
     manifest_path = task_output_dir / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     logger.info(
-        "Collected online prefill: task=%s mode=%s episodes=%s frames=%s manifest=%s",
+        "Collected residual training episodes: task=%s mode=%s episodes=%s frames=%s manifest=%s",
         task_key,
         mode,
         manifest["num_episodes"],

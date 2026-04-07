@@ -12,6 +12,8 @@ Usage:
 Examples:
   bash tools/collect_online_prefill.sh train_residual_sac.yaml --episodes 100
   bash tools/collect_online_prefill.sh /abs/path/to/train.yaml openpi.port=30011 env.remote.port=30010
+
+This collector now writes unified `libero_residual_training` episode PKLs.
 EOF
 }
 
@@ -66,4 +68,4 @@ then
     exit 1
 fi
 
-"$PYTHON_BIN" scripts/collect_online_prefill.py "$@"
+"$PYTHON_BIN" scripts/materialize_residual_training_online.py "$@"
