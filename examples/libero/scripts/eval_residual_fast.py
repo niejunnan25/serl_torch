@@ -20,6 +20,11 @@ from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
+from serl_launcher.residual.runtime.schedules import _epsilon_gating_enabled
+from serl_launcher.residual.runtime.schedules import _epsilon_gating_eval_force_on
+from serl_launcher.residual.runtime.schedules import _scheduled_epsilon_gating_probability
+from serl_launcher.utils.alpha_utils import require_residual_alpha
+from serl_launcher.utils.logger import JsonlLogger
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
@@ -30,8 +35,6 @@ from serl_torch.examples.libero.env_wrappers import RemoteLiberoTaskEnv
 from serl_torch.examples.libero.runtime import LiberoObservationCache
 from serl_torch.examples.libero.runtime import build_libero_policy_input
 from serl_torch.examples.libero.runtime import build_residual_step_obs
-from serl_torch.examples.libero.utils import JsonlLogger
-from serl_torch.examples.libero.utils.alpha_utils import require_residual_alpha
 from serl_torch.examples.libero.utils.config_utils import build_residual_action_transform
 from serl_torch.examples.libero.utils.config_utils import build_drq_agent
 from serl_torch.examples.libero.utils.config_utils import resolve_control_indices_from_cfg
@@ -39,9 +42,6 @@ from serl_torch.examples.libero.utils.config_utils import resolve_image_keys
 from serl_torch.examples.libero.utils.config_utils import resolve_residual_observation_state_mode
 from serl_torch.examples.libero.utils.config_utils import sample_probing_steps
 from serl_torch.examples.libero.utils.config_utils import set_global_seeds
-from serl_torch.examples.libero.utils.schedules import _epsilon_gating_enabled
-from serl_torch.examples.libero.utils.schedules import _epsilon_gating_eval_force_on
-from serl_torch.examples.libero.utils.schedules import _scheduled_epsilon_gating_probability
 
 from torch.utils.tensorboard import SummaryWriter
 

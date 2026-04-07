@@ -21,6 +21,17 @@ from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
+from serl_launcher.residual.runtime.async_learning import _apply_agent_snapshot_payload
+from serl_launcher.residual.runtime.async_learning import run_agentlace_learner_service
+from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
+from serl_launcher.residual.runtime.pretrain import _pretrain_critic_with_calql
+from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
+from serl_launcher.residual.runtime.schedules import _scheduled_alpha
+from serl_launcher.residual.runtime.step_chunk_replay import ChunkReplayBuffer
+from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
+from serl_launcher.utils.agentlace_io import wait_for_agentlace_bootstrap
+from serl_launcher.utils.logger import JsonlLogger
+from serl_launcher.utils.serialization import _to_jsonable
 from torch.utils.tensorboard import SummaryWriter
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
@@ -28,12 +39,6 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.libero.training_config import LIBERO_RESIDUAL_BASE_CONFIG
-from serl_torch.examples.libero.utils import JsonlLogger
-from serl_torch.examples.libero.utils.agentlace_io import resolve_agentlace_bootstrap_path
-from serl_torch.examples.libero.utils.agentlace_io import wait_for_agentlace_bootstrap
-from serl_torch.examples.libero.utils.async_learning import _apply_agent_snapshot_payload
-from serl_torch.examples.libero.utils.async_learning import run_agentlace_learner_service
-from serl_torch.examples.libero.utils.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_torch.examples.libero.utils.config_utils import build_drq_agent
 from serl_torch.examples.libero.utils.config_utils import build_residual_action_transform
 from serl_torch.examples.libero.utils.config_utils import resolve_control_indices_from_cfg
@@ -41,11 +46,6 @@ from serl_torch.examples.libero.utils.config_utils import resolve_image_keys
 from serl_torch.examples.libero.utils.config_utils import resolve_residual_observation_state_mode
 from serl_torch.examples.libero.utils.config_utils import set_global_seeds
 from serl_torch.examples.libero.utils.obs_utils import _obs_space_from_sample
-from serl_torch.examples.libero.utils.pretrain import _pretrain_critic_with_calql
-from serl_torch.examples.libero.utils.profiling import _RuntimeProfiler
-from serl_torch.examples.libero.utils.schedules import _scheduled_alpha
-from serl_torch.examples.libero.utils.serialization import _to_jsonable
-from serl_torch.examples.libero.utils.step_chunk_replay import ChunkReplayBuffer
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
 

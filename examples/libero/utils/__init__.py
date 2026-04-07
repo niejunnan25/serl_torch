@@ -1,6 +1,1 @@
-"""Shared helpers for LIBERO examples."""
-from .logger import JsonlLogger
-
-__all__ = [
-    "JsonlLogger",
-]
+"""LIBERO-specific helpers that remain local to the example package."""

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from omegaconf import DictConfig
 
-from .alpha_utils import validate_alpha
+from serl_launcher.utils.alpha_utils import validate_alpha
 
 
 def _scheduled_alpha(cfg: DictConfig, base_alpha: float, schedule_step: int) -> float:

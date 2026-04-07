@@ -7,8 +7,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 
 from serl_launcher.residual.observation import normalize_residual_observation_state_mode
-
-from .alpha_utils import validate_alpha
+from serl_launcher.utils.alpha_utils import validate_alpha
 
 
 _OBS_SPECIAL_KEYS = {"state", "base_action", "base_action_chunk", "alpha"}

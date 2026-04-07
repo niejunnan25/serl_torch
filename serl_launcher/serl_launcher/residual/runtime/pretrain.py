@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from omegaconf import DictConfig
 from tqdm.auto import tqdm
 
-from .tb_metrics import _log_info_scalars
+from serl_launcher.residual.runtime.tb_metrics import _log_info_scalars
 
 if TYPE_CHECKING:
     from serl_launcher.data.replay_buffer import ReplayBuffer

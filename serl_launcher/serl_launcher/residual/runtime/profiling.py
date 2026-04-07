@@ -1,4 +1,4 @@
-"""Runtime profiling helpers for LIBERO training scripts."""
+"""Runtime profiling helpers for residual training scripts."""
 from __future__ import annotations
 
 import logging
@@ -10,8 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
-from ..runtime import build_residual_step_obs
-from .logger import JsonlLogger
+from serl_launcher.utils.logger import JsonlLogger
 
 
 class _RuntimeProfiler:
@@ -128,16 +127,6 @@ def _profile_call(
     if profiler is not None:
         profiler.record_duration(metric_name, (time.perf_counter() - start) * 1000.0)
     return result
-
-
-def _build_residual_step_obs_profiled(
-    profiler: Optional[_RuntimeProfiler],
-    *args,
-    **kwargs,
-) -> Dict[str, np.ndarray]:
-    return _profile_call(
-        profiler, "build_residual_step_obs", build_residual_step_obs, *args, **kwargs
-    )
 
 
 def _tb_safe_metric_name(name: str) -> str:

@@ -19,8 +19,8 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.utils.alpha_utils import require_residual_alpha
-from serl_torch.examples.libero.utils.alpha_utils import validate_alpha
+from serl_launcher.utils.alpha_utils import require_residual_alpha
+from serl_launcher.utils.alpha_utils import validate_alpha
 
 
 def _as_bool(value: Any) -> bool:
