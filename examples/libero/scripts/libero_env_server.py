@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import argparse
 import logging
-import pickle
 import sys
-import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_PARENT = REPO_ROOT.parent
+SERL_LAUNCHER_ROOT = REPO_ROOT / "serl_launcher"
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 from serl_torch.examples.libero.env_wrappers.task_env import LiberoTaskEnv
+from serl_launcher.envs.remote_http import make_pickle_rpc_handler
 
 LOGGER = logging.getLogger("libero_env_server")
 
@@ -109,48 +112,11 @@ class _EnvState:
 
 
 STATE = _EnvState()
-
-
-class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def _should_keep_alive(self) -> bool:
-        return str(self.headers.get("Connection", "")).lower() != "close"
-
-    def _write(self, status: int, payload: Dict[str, Any]) -> None:
-        keep_alive = self._should_keep_alive()
-        body = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
-        self.send_response(status)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "keep-alive" if keep_alive else "close")
-        self.end_headers()
-        self.wfile.write(body)
-        self.wfile.flush()
-        self.close_connection = not keep_alive
-
-    def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/rpc":
-            self._write(404, {"ok": False, "error": "not found"})
-            return
-
-        try:
-            content_len = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(content_len)
-            req = pickle.loads(raw)
-            method = str(req["method"])
-            kwargs = req.get("kwargs", {})
-            fn = getattr(STATE, method, None)
-            if fn is None:
-                raise RuntimeError(f"unknown method: {method}")
-            result = fn(**kwargs)
-            self._write(200, {"ok": True, "result": result})
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.error("rpc error: %s\n%s", exc, traceback.format_exc())
-            self._write(200, {"ok": False, "error": str(exc)})
-
-    def log_message(self, format: str, *args: Any) -> None:
-        LOGGER.info("%s - %s", self.address_string(), format % args)
+Handler: type[BaseHTTPRequestHandler] = make_pickle_rpc_handler(
+    STATE,
+    LOGGER,
+    keep_alive=True,
+)
 
 
 def main() -> None:
