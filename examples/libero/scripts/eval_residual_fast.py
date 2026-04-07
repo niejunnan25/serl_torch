@@ -12,12 +12,12 @@ import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.data import StateActionNormalizer, load_normalizer
 from serl_torch.examples.libero.env_wrappers import (
     LiberoTaskEnv,
     RemoteLiberoTaskEnv,
@@ -127,8 +127,12 @@ def main(cfg: DictConfig) -> None:
     norm_cfg = cfg.get("normalization", None)
     if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
         task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
+        stats_dir = norm_cfg.get(
+            "stats_dir",
+            str(Path(__file__).resolve().parents[1] / "data" / "stats"),
+        )
         normalizer = load_normalizer(
-            task_key, stats_dir=norm_cfg.get("stats_dir", None)
+            task_key, stats_dir=stats_dir
         )
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)

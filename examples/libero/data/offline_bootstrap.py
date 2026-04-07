@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from omegaconf import DictConfig
+from serl_launcher.data.normalizer import StateActionNormalizer
 
-from ..data import StateActionNormalizer
 from ..policy import (
     LiberoObservationCache,
     OpenPIChunkClient,

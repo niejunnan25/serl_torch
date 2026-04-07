@@ -8,8 +8,8 @@ from typing import Any, Dict, Hashable, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+from serl_launcher.data.normalizer import StateActionNormalizer
 
-from ..data.normalizer import StateActionNormalizer
 from ..utils.alpha_utils import validate_alpha
 
 RESIDUAL_IMAGE_HEIGHT = 224

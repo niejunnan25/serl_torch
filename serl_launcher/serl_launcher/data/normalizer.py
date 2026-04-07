@@ -33,18 +33,32 @@ class StateActionNormalizer:
         self.fused_std = np.concatenate([self.state_std, self.action_std], axis=-1)
 
     def normalize_state(self, state: np.ndarray) -> np.ndarray:
-        return (np.asarray(state, dtype=np.float32) - self.state_mean) / (self.state_std + self._EPS)
+        return (np.asarray(state, dtype=np.float32) - self.state_mean) / (
+            self.state_std + self._EPS
+        )
 
     def normalize_action(self, action: np.ndarray) -> np.ndarray:
-        return (np.asarray(action, dtype=np.float32) - self.action_mean) / (self.action_std + self._EPS)
+        return (np.asarray(action, dtype=np.float32) - self.action_mean) / (
+            self.action_std + self._EPS
+        )
 
     def normalize_fused(self, fused_state: np.ndarray) -> np.ndarray:
-        return (np.asarray(fused_state, dtype=np.float32) - self.fused_mean) / (self.fused_std + self._EPS)
+        return (np.asarray(fused_state, dtype=np.float32) - self.fused_mean) / (
+            self.fused_std + self._EPS
+        )
 
 
-def load_normalizer(task_key: str, stats_dir: str | Path | None = None) -> Optional[StateActionNormalizer]:
+def load_normalizer(
+    task_key: str,
+    stats_dir: str | Path | None = None,
+) -> Optional[StateActionNormalizer]:
     if stats_dir is None:
-        stats_dir = Path(__file__).resolve().parent / "stats"
+        logging.getLogger(__name__).warning(
+            "No normalization stats_dir provided for task_key=%s; running without normalization",
+            task_key,
+        )
+        return None
+
     stats_dir = Path(stats_dir)
     stats_path = stats_dir / f"{task_key}.json"
     if not stats_path.exists():
@@ -54,4 +68,3 @@ def load_normalizer(task_key: str, stats_dir: str | Path | None = None) -> Optio
         )
         return None
     return StateActionNormalizer(stats_path)
-

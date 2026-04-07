@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from omegaconf import DictConfig
+from serl_launcher.data.normalizer import StateActionNormalizer
 
 from ..policy import (
     LiberoObservationCache,
@@ -16,7 +17,6 @@ from ..policy import (
     build_residual_step_core,
     select_action_chunk_window,
 )
-from .normalizer import StateActionNormalizer
 from ..utils.alpha_utils import validate_alpha
 from ..utils.obs_utils import _clone_obs_dict, _zero_obs_like
 from ..utils.profiling import _RuntimeProfiler, _build_residual_step_obs_profiled
