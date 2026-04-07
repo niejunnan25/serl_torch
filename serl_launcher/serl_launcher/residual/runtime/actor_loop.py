@@ -67,9 +67,21 @@ from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
 from serl_launcher.residual.runtime.async_learning import _sync_agent_modules_inplace
 from serl_launcher.residual.runtime.actor_support import ActorLoopState
 from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
+from serl_launcher.residual.runtime.actor_support import advance_async_update_calls
+from serl_launcher.residual.runtime.actor_support import build_chunk_step_record
+from serl_launcher.residual.runtime.actor_support import build_policy_input
 from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
+from serl_launcher.residual.runtime.actor_support import flush_external_agentlace_actor
 from serl_launcher.residual.runtime.actor_support import initialize_actor_loop_state
+from serl_launcher.residual.runtime.actor_support import new_progress
+from serl_launcher.residual.runtime.actor_support import replay_progress_size
+from serl_launcher.residual.runtime.actor_support import resolve_train_gate
 from serl_launcher.residual.runtime.actor_warmup import run_base_only_warmup
+from serl_launcher.residual.runtime.actor_support import save_checkpoint_at_step
+from serl_launcher.residual.runtime.actor_support import send_agentlace_timer_stats
+from serl_launcher.residual.runtime.actor_support import sync_async_bounded_lag_baseline
+from serl_launcher.residual.runtime.actor_support import update_train_progress
+from serl_launcher.residual.runtime.actor_support import wait_for_async_learner_budget
 from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
 from serl_launcher.residual.runtime.checkpoint import _CheckpointTask
 from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
@@ -257,40 +269,24 @@ def run_actor_loop(
     phase_progress = state.phase_progress
     train_progress_last_step = int(state.train_progress_last_step)
 
-    def _resolve_train_gate(
-        *,
-        phase_train_flag: bool,
-        alpha_value: float,
-        env_step_value: int,
-        decision_step_value: int,
-    ) -> tuple[float, bool]:
-        if (not phase_train_flag) or (not epsilon_gating_enabled):
-            return 1.0, bool(alpha_value > 0.0)
-
-        schedule_step = (
-            int(env_step_value)
-            if epsilon_gating_clock == "env_step"
-            else int(decision_step_value)
-        )
-        gate_prob = _scheduled_epsilon_gating_probability(
-            cfg, schedule_step=schedule_step
-        )
-        if alpha_value <= 0.0:
-            return float(gate_prob), False
-        gate_on = bool(np.random.random() < float(gate_prob))
-        return float(gate_prob), gate_on
-
-    def _flush_external_agentlace_actor() -> None:
-        if external_agentlace_actor_mode and async_learner is not None:
-            async_learner.flush()
-
-    def _policy_input(
-        obs_raw: Dict[str, Any],
-        prompt: str,
-        *,
-        cache_key: Optional[Any] = None,
-    ):
-        return bindings.build_policy_input(obs_raw, prompt, cache_key=cache_key)
+    def _sync_shared_state() -> None:
+        state.train_env_step = int(train_env_step)
+        state.decision_step = int(decision_step)
+        state.train_episode_id = int(train_episode_id)
+        state.warmup_episode_id = int(warmup_episode_id)
+        state.init_episode_idx = int(init_episode_idx)
+        state.eval_trigger_count = int(eval_trigger_count)
+        state.train_total_success = int(train_total_success)
+        state.warmup_total_success = int(warmup_total_success)
+        state.skipped_seeds = int(skipped_seeds)
+        state.seed_cursor = int(seed_cursor)
+        state.stopped_by_env_budget = bool(stopped_by_env_budget)
+        state.last_update_info = last_update_info
+        state.saved_checkpoint_steps = saved_checkpoint_steps
+        state.train_progress = train_progress
+        state.warmup_progress = warmup_progress
+        state.phase_progress = phase_progress
+        state.train_progress_last_step = int(train_progress_last_step)
 
     def _maybe_send_agentlace_timer_stats(
         *,
@@ -299,37 +295,14 @@ def run_actor_loop(
         train_episode_id_value: int,
         force: bool = False,
     ) -> None:
-        maybe_send_agentlace_timer_stats(
-            config=agentlace_bridge_config,
-            state=agentlace_bridge_state,
-            profiler=profiler,
-            replay_buffer=replay_buffer,
-            offline_buffer=offline_buffer,
-            async_learner=async_learner,
-            sync_replay_prefetcher=sync_replay_prefetcher,
-            train_env_step=int(train_env_step_value),
-            decision_step=int(decision_step_value),
-            train_episode_id=int(train_episode_id_value),
+        _sync_shared_state()
+        state.train_env_step = int(train_env_step_value)
+        state.decision_step = int(decision_step_value)
+        send_agentlace_timer_stats(
+            ctx,
+            state,
+            train_episode_id_value=int(train_episode_id_value),
             force=bool(force),
-        )
-
-    def _advance_async_target_update_calls(
-        *,
-        phase_train_flag: bool,
-        train_step_before: int,
-        train_step_after: int,
-        replay_size_before: int,
-        replay_size_after: int,
-    ) -> int:
-        return advance_async_target_update_calls(
-            config=agentlace_bridge_config,
-            state=agentlace_bridge_state,
-            async_learner=async_learner,
-            phase_train_flag=bool(phase_train_flag),
-            train_step_before=int(train_step_before),
-            train_step_after=int(train_step_after),
-            replay_size_before=int(replay_size_before),
-            replay_size_after=int(replay_size_after),
         )
 
     def _maybe_wait_for_async_learner_budget(
@@ -337,138 +310,24 @@ def run_actor_loop(
         train_env_step_value: int,
         decision_step_value: int,
     ) -> None:
-        maybe_wait_for_async_learner_budget(
-            config=agentlace_bridge_config,
-            state=agentlace_bridge_state,
-            async_learner=async_learner,
-            logger=logger,
-            train_env_step=int(train_env_step_value),
-            decision_step=int(decision_step_value),
-        )
-
-    def _sync_async_bounded_lag_baseline_from_learner() -> None:
-        sync_async_bounded_lag_baseline_from_learner(
-            config=agentlace_bridge_config,
-            state=agentlace_bridge_state,
-            async_learner=async_learner,
-            logger=logger,
-        )
-
-    def _normalize_step_action(action: np.ndarray) -> np.ndarray:
-        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-        if normalizer is None:
-            return action_arr.astype(np.float32)
-        return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
-
-    def _build_chunk_step_record(
-        current_obs_raw: Dict[str, Any],
-        *,
-        base_action: np.ndarray,
-        final_action: np.ndarray,
-        alpha_obs: float,
-        episode_id: int,
-        episode_step: int,
-        done: bool,
-    ) -> Dict[str, Any]:
-        obs_core = build_residual_step_core(
-            current_obs_raw,
-            image_keys=image_keys,
-            normalizer=normalizer,
-            obs_cache=obs_cache,
-        )
-        base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
-        final_action_arr = np.asarray(final_action, dtype=np.float32).reshape(-1)
-        return {
-            "obs_core": obs_core,
-            "base_action": base_action_arr,
-            "base_action_norm": _normalize_step_action(base_action_arr),
-            "actions": final_action_arr,
-            "rewards": 0.0,
-            "dones": bool(done),
-            "alpha": float(alpha_obs),
-            "episode_id": int(episode_id),
-            "episode_step": int(episode_step),
-        }
-
-    def _replay_progress_size(buffer: Any) -> int:
-        return int(getattr(buffer, "num_steps", len(buffer)))
-
-    def _new_progress(
-        *, desc: str, total: Optional[int], position: int, leave: bool
-    ) -> Optional[Any]:
-        if not progress_enabled:
-            return None
-        return tqdm(
-            total=total,
-            desc=desc,
-            dynamic_ncols=True,
-            mininterval=progress_mininterval_sec,
-            position=position,
-            leave=leave,
-        )
-
-    if max_train_env_steps > 0:
-        train_progress = _new_progress(
-            desc="train_env_step",
-            total=int(max_train_env_steps),
-            position=0,
-            leave=True,
-        )
+        _sync_shared_state()
+        state.train_env_step = int(train_env_step_value)
+        state.decision_step = int(decision_step_value)
+        wait_for_async_learner_budget(ctx, state)
 
     def _update_train_progress(*, force_postfix: bool = False) -> None:
         nonlocal train_progress_last_step
-        if train_progress is None:
-            return
-        delta = int(train_env_step) - int(train_progress_last_step)
-        if delta > 0:
-            train_progress.update(delta)
-            train_progress_last_step = int(train_env_step)
-        if force_postfix:
-            completed_eval = int(async_eval_tb_sync_state.get("processed_lines", 0))
-            pending_eval = max(0, int(eval_trigger_count) - int(completed_eval))
-            train_progress.set_postfix(
-                {"episode": int(train_episode_id), "eval_q": int(pending_eval)},
-                refresh=False,
-            )
+        _sync_shared_state()
+        update_train_progress(ctx, state, force_postfix=force_postfix)
+        train_progress_last_step = int(state.train_progress_last_step)
+
+    def _save_checkpoint_at_step(checkpoint_step: int) -> Path:
+        _sync_shared_state()
+        return save_checkpoint_at_step(ctx, state, checkpoint_step)
 
     assert agent is not None
     assert learner_agent is not None
     assert replay_buffer is not None
-
-    def _save_checkpoint_at_step(checkpoint_step: int) -> Path:
-        checkpoint_path = checkpoint_dir / f"checkpoint_{int(checkpoint_step)}.pt"
-        if int(checkpoint_step) in saved_checkpoint_steps:
-            return checkpoint_path
-        saved_checkpoint_steps.add(int(checkpoint_step))
-        if async_learner is not None:
-            async_learner.save_checkpoint(
-                str(checkpoint_dir),
-                step=int(checkpoint_step),
-                keep=checkpoint_keep,
-            )
-        else:
-            checkpoint_payload = _snapshot_agent_checkpoint_payload(
-                learner_agent,
-                step=int(checkpoint_step),
-            )
-            if checkpoint_writer is not None:
-                checkpoint_writer.submit(
-                    _CheckpointTask(
-                        checkpoint_dir=str(checkpoint_dir),
-                        payload=checkpoint_payload,
-                        step=int(checkpoint_step),
-                        keep=checkpoint_keep,
-                    )
-                )
-            else:
-                _write_checkpoint_payload(
-                    profiler,
-                    str(checkpoint_dir),
-                    checkpoint_payload,
-                    step=int(checkpoint_step),
-                    keep=checkpoint_keep,
-                )
-        return checkpoint_path
 
     try:
         if need_warmup_first:
@@ -497,7 +356,7 @@ def run_actor_loop(
             phase_progress = state.phase_progress
             train_progress_last_step = int(state.train_progress_last_step)
 
-        _sync_async_bounded_lag_baseline_from_learner()
+        sync_async_bounded_lag_baseline(ctx)
 
         for phase in cfg.training.phases:
             if max_train_env_steps > 0 and train_env_step >= max_train_env_steps:
@@ -514,7 +373,7 @@ def run_actor_loop(
             )
 
             phase_episode_count = 0
-            phase_progress = _new_progress(
+            phase_progress = new_progress(ctx,
                 desc=f"{phase_name}:episode",
                 total=int(phase_episodes),
                 position=1,
@@ -591,7 +450,7 @@ def run_actor_loop(
                                 probe_future = None
                             else:
                                 probe_chunk, probe_info = openpi_client.infer_chunk(
-                                    _policy_input(obs_raw, env.current_instruction)
+                                    build_policy_input(ctx, obs_raw, env.current_instruction)
                                 )
                             probe_base_chunk = select_action_chunk_window(
                                 probe_chunk,
@@ -632,7 +491,7 @@ def run_actor_loop(
                                     and openpi_prefetcher is not None
                                 ):
                                     probe_future = openpi_prefetcher.submit(
-                                        _policy_input(next_obs_raw, env.current_instruction)
+                                        build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                     )
                                 step_logger.write(
                                     {
@@ -694,7 +553,7 @@ def run_actor_loop(
                     while (episode_steps < max_episode_steps) and (not episode_done):
                         if cached_base_chunk is None:
                             openpi_chunk, infer_info = openpi_client.infer_chunk(
-                                _policy_input(obs_raw, env.current_instruction)
+                                build_policy_input(ctx, obs_raw, env.current_instruction)
                             )
                             base_chunk = select_action_chunk_window(
                                 openpi_chunk,
@@ -735,7 +594,7 @@ def run_actor_loop(
                                 alpha=float(alpha_step),
                                 state_mode=obs_state_mode,
                             )
-                            gate_prob, gate_on = _resolve_train_gate(
+                            gate_prob, gate_on = resolve_train_gate(ctx,
                                 phase_train_flag=bool(phase_train),
                                 alpha_value=float(alpha_step),
                                 env_step_value=int(train_env_step_before_chunk),
@@ -817,7 +676,7 @@ def run_actor_loop(
                                 int(decision_step + 1) if phase_train else None
                             )
                             replay_size_before = int(
-                                _replay_progress_size(replay_buffer)
+                                replay_progress_size(replay_buffer)
                             )
                             executed_base_chunk = np.asarray(
                                 base_chunk[:execute_horizon], dtype=np.float32
@@ -950,7 +809,7 @@ def run_actor_loop(
                                         "success": bool(episode_success),
                                     }
                                 )
-                                step_payload = _build_chunk_step_record(
+                                step_payload = build_chunk_step_record(ctx,
                                     current_step_obs_raw,
                                     base_action=executed_base_chunk[chunk_step],
                                     final_action=final_chunk[chunk_step],
@@ -1005,7 +864,7 @@ def run_actor_loop(
                                     next_openpi_chunk,
                                     next_infer_info,
                                 ) = openpi_client.infer_chunk(
-                                    _policy_input(next_obs_raw, env.current_instruction)
+                                    build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                 )
                                 next_base_chunk = select_action_chunk_window(
                                     next_openpi_chunk,
@@ -1040,7 +899,7 @@ def run_actor_loop(
                                     )
 
                             replay_size_after = int(
-                                _replay_progress_size(replay_buffer)
+                                replay_progress_size(replay_buffer)
                             )
                             if async_learner is None:
                                 if phase_train:
@@ -1136,7 +995,7 @@ def run_actor_loop(
                                         )
                                     agent = learner_agent
                             else:
-                                _advance_async_target_update_calls(
+                                advance_async_update_calls(ctx,
                                     phase_train_flag=bool(phase_train),
                                     train_step_before=int(train_env_step_before_chunk),
                                     train_step_after=int(train_env_step_after_chunk),
@@ -1337,7 +1196,7 @@ def run_actor_loop(
                                     alpha=float(alpha_step),
                                     state_mode=obs_state_mode,
                                 )
-                                gate_prob, gate_on = _resolve_train_gate(
+                                gate_prob, gate_on = resolve_train_gate(ctx,
                                     phase_train_flag=bool(phase_train),
                                     alpha_value=float(alpha_step),
                                     env_step_value=int(train_env_step_before_step),
@@ -1432,7 +1291,7 @@ def run_actor_loop(
                                     and openpi_prefetcher is not None
                                 ):
                                     next_chunk_future = openpi_prefetcher.submit(
-                                        _policy_input(next_obs_raw, env.current_instruction)
+                                        build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                     )
 
                                 step_logger.write(
@@ -1535,7 +1394,7 @@ def run_actor_loop(
                                             next_openpi_chunk,
                                             next_infer_info,
                                         ) = openpi_client.infer_chunk(
-                                            _policy_input(next_obs_raw, env.current_instruction)
+                                            build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                         )
                                     next_base_chunk = select_action_chunk_window(
                                         next_openpi_chunk,
@@ -1570,7 +1429,7 @@ def run_actor_loop(
                                     "episode_step": int(episode_steps - 1),
                                 }
                                 replay_size_before = int(
-                                    _replay_progress_size(replay_buffer)
+                                    replay_progress_size(replay_buffer)
                                 )
                                 if async_learner is not None:
                                     with async_learner.replay_lock:
@@ -1593,13 +1452,13 @@ def run_actor_loop(
                                         chunk_step_enabled=chunk_step_enabled,
                                     )
                                 replay_size_after = int(
-                                    _replay_progress_size(replay_buffer)
+                                    replay_progress_size(replay_buffer)
                                 )
 
                                 if async_learner is None:
                                     if (
                                         phase_train
-                                        and _replay_progress_size(replay_buffer)
+                                        and replay_progress_size(replay_buffer)
                                         >= int(cfg.training.training_starts)
                                         and train_env_step_before_step
                                         % int(cfg.training.update_every)
@@ -1699,7 +1558,7 @@ def run_actor_loop(
                                             )
                                         agent = learner_agent
                                 else:
-                                    _advance_async_target_update_calls(
+                                    advance_async_update_calls(ctx,
                                         phase_train_flag=bool(phase_train),
                                         train_step_before=int(train_env_step_before_step),
                                         train_step_after=int(train_env_step_after_step),
