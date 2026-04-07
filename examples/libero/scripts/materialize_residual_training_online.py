@@ -23,11 +23,13 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_launcher.residual.data.formats import (
-    build_libero_residual_training_payload,
+from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
+    materialize_with_config,
 )
-from serl_torch.examples.libero.data.training_schema import build_libero_training_arrays
+from serl_torch.examples.libero.data.training_config import (
+    LIBERO_ONLINE_TRAINING_CONFIG,
+)
 from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
@@ -374,60 +376,56 @@ def main() -> None:
             if dones:
                 dones[-1] = True
 
-            canonical = build_libero_training_arrays(
-                agentview_rgb=np.asarray(frame_buffers["agentview_rgb"], dtype=np.uint8),
-                eye_in_hand_rgb=np.asarray(
-                    frame_buffers["eye_in_hand_rgb"], dtype=np.uint8
-                ),
-                ee_pos=np.asarray(frame_buffers["ee_pos"], dtype=np.float32),
-                ee_ori=np.asarray(frame_buffers["ee_ori"], dtype=np.float32),
-                gripper_states=np.asarray(
-                    frame_buffers["gripper_states"], dtype=np.float32
-                ),
-            )
-            payload = build_libero_residual_training_payload(
-                source="online",
-                suite_name=str(cfg.task.suite_name),
-                task_id=int(cfg.task.task_id),
-                task_key=task_key,
-                task_description=str(env.current_instruction),
-                prompt=str(env.current_instruction),
-                chunk_horizon=int(chunk_horizon),
-                action_dim=int(action_dim),
-                alpha=0.0,
-                state=canonical["state"],
-                image_rgb_0=canonical["image_rgb_0"],
-                image_rgb_1=canonical["image_rgb_1"],
-                image_rgb_2=canonical["image_rgb_2"],
-                image_mask=canonical["image_mask"],
-                base_chunks=np.asarray(base_chunks, dtype=np.float32),
-                actions=np.asarray(actions, dtype=np.float32),
-                rewards=np.asarray(rewards, dtype=np.float32),
-                dones=np.asarray(dones, dtype=bool),
-                episode_index=int(episode_index),
-                episode_steps=int(episode_steps),
-                episode_return=float(episode_return),
-                episode_success=bool(episode_success),
-                metadata={
-                    "collection_mode": mode,
-                    "seed": int(seed),
-                    "applied_seed": (
-                        int(env.last_seed) if env.last_seed is not None else int(seed)
+            payload = materialize_with_config(
+                {
+                    "source": "online",
+                    "suite_name": str(cfg.task.suite_name),
+                    "task_id": int(cfg.task.task_id),
+                    "task_key": task_key,
+                    "task_description": str(env.current_instruction),
+                    "prompt": str(env.current_instruction),
+                    "alpha": 0.0,
+                    "agentview_rgb": np.asarray(
+                        frame_buffers["agentview_rgb"], dtype=np.uint8
                     ),
-                    "init_episode_idx": int(current_init_episode_idx),
-                    "init_state_idx": (
-                        int(env.current_init_state_idx)
-                        if env.current_init_state_idx is not None
-                        else None
+                    "eye_in_hand_rgb": np.asarray(
+                        frame_buffers["eye_in_hand_rgb"], dtype=np.uint8
                     ),
+                    "ee_pos": np.asarray(frame_buffers["ee_pos"], dtype=np.float32),
+                    "ee_ori": np.asarray(frame_buffers["ee_ori"], dtype=np.float32),
+                    "gripper_states": np.asarray(
+                        frame_buffers["gripper_states"], dtype=np.float32
+                    ),
+                    "base_chunks": np.asarray(base_chunks, dtype=np.float32),
+                    "actions": np.asarray(actions, dtype=np.float32),
+                    "rewards": np.asarray(rewards, dtype=np.float32),
+                    "dones": np.asarray(dones, dtype=bool),
+                    "episode_index": int(episode_index),
+                    "episode_steps": int(episode_steps),
+                    "episode_return": float(episode_return),
+                    "episode_success": bool(episode_success),
+                    "metadata": {
+                        "collection_mode": mode,
+                        "seed": int(seed),
+                        "applied_seed": (
+                            int(env.last_seed) if env.last_seed is not None else int(seed)
+                        ),
+                        "init_episode_idx": int(current_init_episode_idx),
+                        "init_state_idx": (
+                            int(env.current_init_state_idx)
+                            if env.current_init_state_idx is not None
+                            else None
+                        ),
+                    },
                 },
+                data_config=LIBERO_ONLINE_TRAINING_CONFIG,
             )
             episode_path = task_output_dir / f"episode_{episode_index:06d}.pkl"
             with open(episode_path, "wb") as f:
                 pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
             manifest_files.append(str(episode_path))
-            total_frames += int(payload["actions"].shape[0])
+            total_frames += int(payload["action"]["final"].shape[0])
             success_episodes += int(episode_success)
             episode_return_sum += float(episode_return)
             episode_step_sum += int(episode_steps)
@@ -436,6 +434,7 @@ def main() -> None:
         env.close()
 
     manifest = build_residual_training_manifest(
+        schema=LIBERO_ONLINE_TRAINING_CONFIG.schema,
         source="online",
         task_key=task_key,
         suite_name=str(cfg.task.suite_name),

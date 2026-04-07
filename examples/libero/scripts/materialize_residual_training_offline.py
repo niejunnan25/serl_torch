@@ -29,13 +29,14 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_launcher.residual.data.action_projection import project_expert_action
-from serl_launcher.residual.data.formats import (
-    build_libero_residual_training_payload,
+from serl_launcher.residual.data.materialize import (
     build_residual_training_manifest,
+    materialize_with_config,
 )
 from serl_torch.examples.libero.data.hdf5_utils import resolve_task_specs
-from serl_torch.examples.libero.data.training_schema import build_libero_training_arrays
+from serl_torch.examples.libero.data.training_config import (
+    LIBERO_OFFLINE_TRAINING_CONFIG,
+)
 from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
@@ -191,79 +192,49 @@ def _convert_demo(
         progress_desc=f"{task_name} ep={episode_index:03d}",
     )
 
-    denom = (
-        np.asarray(residual_limits, dtype=np.float32)
-        * float(residual_alpha)
-        * float(expert_reference_scale)
-    )
-    projected_actions = []
-    clipped_total = 0
-    for step_idx in range(expert_actions.shape[0]):
-        chunk_start = int((step_idx // chunk_horizon) * chunk_horizon)
-        chunk_index = int(chunk_start // chunk_horizon)
-        step_in_chunk = int(step_idx - chunk_start)
-        base_action = np.asarray(base_chunks[chunk_index][step_in_chunk], dtype=np.float32)
-        projected_action, clipped_count = project_expert_action(
-            expert_action=np.asarray(expert_actions[step_idx], dtype=np.float32),
-            base_action=base_action,
-            control_indices=np.asarray(control_indices, dtype=np.int64),
-            denom=denom,
-            clip_residual_to_unit=bool(clip_residual_to_unit),
-        )
-        projected_actions.append(projected_action)
-        clipped_total += int(clipped_count)
-
-    canonical = build_libero_training_arrays(
-        agentview_rgb=agentview_rgb,
-        eye_in_hand_rgb=eye_in_hand_rgb,
-        ee_pos=ee_pos,
-        ee_ori=ee_ori,
-        gripper_states=gripper_states,
-    )
     task_key = f"{suite_name}_task_{int(task_id)}"
-    return build_libero_residual_training_payload(
-        source="offline",
-        suite_name=suite_name,
-        task_id=int(task_id),
-        task_key=task_key,
-        task_description=task_description,
-        prompt=task_description,
-        chunk_horizon=int(chunk_horizon),
-        action_dim=int(expert_actions.shape[1]),
-        alpha=float(residual_alpha),
-        state=canonical["state"],
-        image_rgb_0=canonical["image_rgb_0"],
-        image_rgb_1=canonical["image_rgb_1"],
-        image_rgb_2=canonical["image_rgb_2"],
-        image_mask=canonical["image_mask"],
-        base_chunks=base_chunks,
-        actions=np.asarray(projected_actions, dtype=np.float32),
-        rewards=rewards,
-        dones=dones,
-        episode_index=int(episode_index),
-        episode_steps=int(num_steps),
-        episode_return=float(np.sum(rewards)) if rewards.size > 0 else 0.0,
-        episode_success=bool(num_steps > 0),
-        metadata={
-            "source_episode_format": "libero_hdf5_demo",
-            "task_name": str(task_name),
-            "dataset_path": str(dataset_path),
-            "demo_name": str(demo_name),
-            "projection": {
-                "control_indices": [
-                    int(v)
-                    for v in np.asarray(control_indices, dtype=np.int64).reshape(-1)
-                ],
-                "residual_limits": [
-                    float(v)
-                    for v in np.asarray(residual_limits, dtype=np.float32).reshape(-1)
-                ],
-                "expert_reference_scale": float(expert_reference_scale),
-                "clip_residual_to_unit": bool(clip_residual_to_unit),
-                "clipped_values": int(clipped_total),
+    return materialize_with_config(
+        {
+            "source": "offline",
+            "suite_name": suite_name,
+            "task_id": int(task_id),
+            "task_key": task_key,
+            "task_description": task_description,
+            "prompt": task_description,
+            "alpha": float(residual_alpha),
+            "agentview_rgb": agentview_rgb,
+            "eye_in_hand_rgb": eye_in_hand_rgb,
+            "ee_pos": ee_pos,
+            "ee_ori": ee_ori,
+            "gripper_states": gripper_states,
+            "base_chunks": base_chunks,
+            "actions": expert_actions,
+            "rewards": rewards,
+            "dones": dones,
+            "episode_index": int(episode_index),
+            "episode_steps": int(num_steps),
+            "episode_return": float(np.sum(rewards)) if rewards.size > 0 else 0.0,
+            "episode_success": bool(num_steps > 0),
+            "metadata": {
+                "source_episode_format": "libero_hdf5_demo",
+                "task_name": str(task_name),
+                "dataset_path": str(dataset_path),
+                "demo_name": str(demo_name),
+                "projection": {
+                    "control_indices": [
+                        int(v)
+                        for v in np.asarray(control_indices, dtype=np.int64).reshape(-1)
+                    ],
+                    "residual_limits": [
+                        float(v)
+                        for v in np.asarray(residual_limits, dtype=np.float32).reshape(-1)
+                    ],
+                    "expert_reference_scale": float(expert_reference_scale),
+                    "clip_residual_to_unit": bool(clip_residual_to_unit),
+                },
             },
         },
-        expert_actions=expert_actions,
+        data_config=LIBERO_OFFLINE_TRAINING_CONFIG,
     )
 
 
@@ -441,14 +412,15 @@ def main() -> None:
                     expert_reference_scale=float(args.expert_reference_scale),
                     clip_residual_to_unit=bool(args.clip_residual_to_unit),
                 )
-                total_frames += int(payload["actions"].shape[0])
-                action_dim_for_manifest = int(payload["action_dim"])
+                total_frames += int(payload["action"]["final"].shape[0])
+                action_dim_for_manifest = int(payload["action"]["final"].shape[1])
                 episode_path = task_output_dir / f"episode_{episode_index:06d}.pkl"
                 with open(episode_path, "wb") as f:
                     pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
                 manifest_files.append(str(episode_path))
 
         manifest = build_residual_training_manifest(
+            schema=LIBERO_OFFLINE_TRAINING_CONFIG.schema,
             source="offline",
             task_key=task_spec.task_key,
             suite_name=task_spec.suite_name,

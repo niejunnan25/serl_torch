@@ -53,6 +53,9 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.data.offline_bootstrap import (
     _bootstrap_offline_with_base_success,
 )
+from serl_torch.examples.libero.data.training_config import (
+    LIBERO_RESIDUAL_BASE_CONFIG,
+)
 from serl_torch.examples.libero.env_wrappers import (
     resolve_openpi_root,
     setup_openpi_client_pythonpath,
@@ -1244,6 +1247,7 @@ def main(cfg: DictConfig) -> None:
                 stack_horizon=stack_horizon,
                 chunk_step_enabled=chunk_step_enabled,
                 logger=logger,
+                data_config=LIBERO_RESIDUAL_BASE_CONFIG,
                 normalizer=normalizer,
                 profiler=profiler,
                 state_mode=obs_state_mode,
@@ -1419,6 +1423,7 @@ def main(cfg: DictConfig) -> None:
             stack_horizon=stack_horizon,
             chunk_step_enabled=chunk_step_enabled,
             logger=logger,
+            data_config=LIBERO_RESIDUAL_BASE_CONFIG,
             normalizer=normalizer,
             profiler=profiler,
             max_episodes=configured_warmup_episodes,

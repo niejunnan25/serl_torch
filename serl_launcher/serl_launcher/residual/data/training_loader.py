@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Tuple
 import numpy as np
 
 from serl_launcher.data.episode_paths import resolve_episode_files
-from serl_launcher.residual.data.formats import (
-    build_residual_step_core_from_training_payload,
+from serl_launcher.residual.data.config import ResidualDataConfig
+from serl_launcher.residual.data.materialize import (
+    build_step_core_from_payload,
     validate_residual_training_payload,
 )
 from serl_launcher.residual.data.transitions import (
@@ -28,10 +29,14 @@ if TYPE_CHECKING:
 def _get_payload_base_chunk_for_start(
     payload: Mapping[str, Any],
     *,
+    data_config: ResidualDataConfig,
     chunk_start: int,
-    chunk_horizon: int,
 ) -> np.ndarray:
-    base_chunks = np.asarray(payload["base_chunks"], dtype=np.float32)
+    base_chunks = np.asarray(
+        payload[data_config.schema.action.root][data_config.schema.action.base_chunks_key],
+        dtype=np.float32,
+    )
+    chunk_horizon = int(base_chunks.shape[1])
     chunk_index = int(chunk_start // chunk_horizon)
     if chunk_index >= base_chunks.shape[0]:
         raise IndexError(
@@ -52,6 +57,7 @@ def load_residual_training_buffer(
     stack_horizon: int,
     chunk_step_enabled: bool,
     logger: logging.Logger,
+    data_config: ResidualDataConfig,
     normalizer: Optional["StateActionNormalizer"] = None,
     profiler: Optional[Any] = None,
     max_episodes: Optional[int] = None,
@@ -122,6 +128,7 @@ def load_residual_training_buffer(
                 raise ValueError("payload must be a dictionary")
             validate_residual_training_payload(
                 payload,
+                schema=data_config.schema,
                 expected_task_key=expected_task_key,
                 expected_action_dim=int(action_dim),
                 expected_chunk_horizon=int(chunk_horizon),
@@ -129,24 +136,61 @@ def load_residual_training_buffer(
                 expected_projection=expected_projection,
             )
 
-            actions = np.asarray(payload.get("actions", []), dtype=np.float32)
+            actions = np.asarray(
+                payload[data_config.schema.action.root].get(
+                    data_config.schema.action.final_key,
+                    [],
+                ),
+                dtype=np.float32,
+            )
             rewards = np.asarray(
-                payload.get("rewards", np.zeros((actions.shape[0],), dtype=np.float32)),
+                payload[data_config.schema.trajectory.root].get(
+                    data_config.schema.trajectory.rewards_key,
+                    np.zeros((actions.shape[0],), dtype=np.float32),
+                ),
                 dtype=np.float32,
             ).reshape(-1)
             dones = np.asarray(
-                payload.get("dones", np.zeros((actions.shape[0],), dtype=bool)),
+                payload[data_config.schema.trajectory.root].get(
+                    data_config.schema.trajectory.dones_key,
+                    np.zeros((actions.shape[0],), dtype=bool),
+                ),
                 dtype=bool,
             ).reshape(-1)
             if actions.ndim != 2 or actions.shape[0] == 0:
                 raise ValueError(f"invalid action array in payload: {actions.shape}")
 
-            alpha = float(payload.get("alpha", 0.0))
-            episode_id = int(payload.get("episode_index", 0))
-            episode_success = int(bool(payload.get("episode_success", False)))
-            episode_return = float(payload.get("episode_return", float(np.sum(rewards))))
-            episode_steps = int(payload.get("episode_steps", int(actions.shape[0])))
-            projection_meta = dict(payload.get("metadata", {}).get("projection", {}))
+            episode_meta = payload[data_config.schema.episode.root]
+            alpha = float(
+                payload[data_config.schema.action.root].get(
+                    data_config.schema.action.alpha_key,
+                    0.0,
+                )
+            )
+            episode_id = int(
+                episode_meta.get(data_config.schema.episode.episode_index_key, 0)
+            )
+            episode_success = int(
+                bool(
+                    episode_meta.get(
+                        data_config.schema.episode.episode_success_key,
+                        False,
+                    )
+                )
+            )
+            episode_return = float(
+                episode_meta.get(
+                    data_config.schema.episode.episode_return_key,
+                    float(np.sum(rewards)),
+                )
+            )
+            episode_steps = int(
+                episode_meta.get(
+                    data_config.schema.episode.episode_steps_key,
+                    int(actions.shape[0]),
+                )
+            )
+            projection_meta = dict(payload.get(data_config.schema.metadata_key, {}).get("projection", {}))
             stats["clipped_values"] += int(projection_meta.get("clipped_values", 0))
 
             for step_idx in range(actions.shape[0]):
@@ -159,16 +203,18 @@ def load_residual_training_buffer(
                 done = bool(dones[step_idx]) or bool(step_idx >= (actions.shape[0] - 1))
                 reward = float(rewards[step_idx]) if step_idx < rewards.shape[0] else 0.0
 
-                core = build_residual_step_core_from_training_payload(
+                core = build_step_core_from_payload(
                     payload,
-                    step_idx,
+                    schema=data_config.schema,
+                    frame_idx=step_idx,
                     image_keys=image_keys,
+                    image_views=data_config.image_views,
                     normalizer=normalizer,
                 )
                 base_chunk = _get_payload_base_chunk_for_start(
                     payload,
+                    data_config=data_config,
                     chunk_start=chunk_start,
-                    chunk_horizon=chunk_horizon,
                 )
                 base_action = np.asarray(base_chunk[step_in_chunk], dtype=np.float32)
                 final_action = np.asarray(actions[step_idx], dtype=np.float32)
@@ -210,13 +256,15 @@ def load_residual_training_buffer(
                     next_step_in_chunk = int(next_step_idx - next_chunk_start)
                     next_base_chunk = _get_payload_base_chunk_for_start(
                         payload,
+                        data_config=data_config,
                         chunk_start=next_chunk_start,
-                        chunk_horizon=chunk_horizon,
                     )
-                    next_core = build_residual_step_core_from_training_payload(
+                    next_core = build_step_core_from_payload(
                         payload,
-                        next_step_idx,
+                        schema=data_config.schema,
+                        frame_idx=next_step_idx,
                         image_keys=image_keys,
+                        image_views=data_config.image_views,
                         normalizer=normalizer,
                     )
                     next_obs_input = build_residual_step_obs_from_core(
