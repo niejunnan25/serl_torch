@@ -42,13 +42,11 @@ from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
 from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.policy.openpi.prefetch import AsyncOpenPIPolicyPrefetcher
-from serl_launcher.residual.action import (
-    as_numpy_action,
-    as_numpy_action_chunk,
-    compose_residual_action,
-    compose_residual_action_chunk,
-    select_action_chunk_window,
-)
+from serl_launcher.residual.action import as_numpy_action
+from serl_launcher.residual.action import as_numpy_action_chunk
+from serl_launcher.residual.action import compose_residual_action
+from serl_launcher.residual.action import compose_residual_action_chunk
+from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 
@@ -56,93 +54,63 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.training_config import (
-    LIBERO_RESIDUAL_BASE_CONFIG,
-)
+from serl_torch.examples.libero.training_config import LIBERO_RESIDUAL_BASE_CONFIG
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
-from serl_torch.examples.libero.runtime import (
-    LiberoObservationCache,
-    build_libero_policy_input,
-    build_residual_step_core,
-)
-from serl_torch.examples.libero.utils.async_eval import (
-    _append_async_eval_request,
-    _init_async_eval_tb_sync_state,
-    _start_async_eval_watcher,
-    _stop_async_eval_watcher,
-    _sync_async_eval_results_to_tb,
-)
-from serl_torch.examples.libero.utils.async_learning import (
-    _AgentlaceAsyncLearner,
-    _AsyncLearner,
-    _MixedBatchPrefetcher,
-    _ProcessAsyncLearner,
-    _sample_mixed_batch,
-    _sync_agent_modules_inplace,
-)
-from serl_torch.examples.libero.utils import (
-    JsonlLogger,
-)
-from serl_torch.examples.libero.utils.checkpoint import (
-    _AsyncCheckpointWriter,
-    _CheckpointTask,
-    _snapshot_agent_checkpoint_payload,
-    _write_checkpoint_payload,
-)
-from serl_torch.examples.libero.utils.config_utils import (
-    build_residual_action_transform,
-    build_drq_agent,
-    resolve_action_mask_from_cfg,
-    resolve_control_indices_from_cfg,
-    resolve_image_keys,
-    resolve_residual_observation_state_mode,
-    sample_probing_steps,
-    set_global_seeds,
-)
-from serl_torch.examples.libero.utils.obs_utils import (
-    _clone_obs_dict,
-    _obs_space_from_sample,
-    _zero_obs_like,
-)
-from serl_torch.examples.libero.utils.alpha_utils import (
-    require_residual_alpha,
-    validate_alpha,
-)
-from serl_torch.examples.libero.utils.agentlace_io import (
-    resolve_agentlace_bootstrap_path,
-    save_agentlace_bootstrap,
-)
-from serl_torch.examples.libero.utils.profiling import (
-    _RuntimeProfiler,
-    _build_residual_step_obs_profiled,
-    _emit_profiling_snapshot,
-    _profile_call,
-)
+from serl_torch.examples.libero.runtime import LiberoObservationCache
+from serl_torch.examples.libero.runtime import build_libero_policy_input
+from serl_torch.examples.libero.runtime import build_residual_step_core
+from serl_torch.examples.libero.utils.async_eval import _append_async_eval_request
+from serl_torch.examples.libero.utils.async_eval import _init_async_eval_tb_sync_state
+from serl_torch.examples.libero.utils.async_eval import _start_async_eval_watcher
+from serl_torch.examples.libero.utils.async_eval import _stop_async_eval_watcher
+from serl_torch.examples.libero.utils.async_eval import _sync_async_eval_results_to_tb
+from serl_torch.examples.libero.utils.async_learning import _AgentlaceAsyncLearner
+from serl_torch.examples.libero.utils.async_learning import _AsyncLearner
+from serl_torch.examples.libero.utils.async_learning import _MixedBatchPrefetcher
+from serl_torch.examples.libero.utils.async_learning import _ProcessAsyncLearner
+from serl_torch.examples.libero.utils.async_learning import _sample_mixed_batch
+from serl_torch.examples.libero.utils.async_learning import _sync_agent_modules_inplace
+from serl_torch.examples.libero.utils import JsonlLogger
+from serl_torch.examples.libero.utils.checkpoint import _AsyncCheckpointWriter
+from serl_torch.examples.libero.utils.checkpoint import _CheckpointTask
+from serl_torch.examples.libero.utils.checkpoint import _snapshot_agent_checkpoint_payload
+from serl_torch.examples.libero.utils.checkpoint import _write_checkpoint_payload
+from serl_torch.examples.libero.utils.config_utils import build_residual_action_transform
+from serl_torch.examples.libero.utils.config_utils import build_drq_agent
+from serl_torch.examples.libero.utils.config_utils import resolve_action_mask_from_cfg
+from serl_torch.examples.libero.utils.config_utils import resolve_control_indices_from_cfg
+from serl_torch.examples.libero.utils.config_utils import resolve_image_keys
+from serl_torch.examples.libero.utils.config_utils import resolve_residual_observation_state_mode
+from serl_torch.examples.libero.utils.config_utils import sample_probing_steps
+from serl_torch.examples.libero.utils.config_utils import set_global_seeds
+from serl_torch.examples.libero.utils.obs_utils import _clone_obs_dict
+from serl_torch.examples.libero.utils.obs_utils import _obs_space_from_sample
+from serl_torch.examples.libero.utils.obs_utils import _zero_obs_like
+from serl_torch.examples.libero.utils.alpha_utils import require_residual_alpha
+from serl_torch.examples.libero.utils.alpha_utils import validate_alpha
+from serl_torch.examples.libero.utils.agentlace_io import resolve_agentlace_bootstrap_path
+from serl_torch.examples.libero.utils.agentlace_io import save_agentlace_bootstrap
+from serl_torch.examples.libero.utils.profiling import _RuntimeProfiler
+from serl_torch.examples.libero.utils.profiling import _build_residual_step_obs_profiled
+from serl_torch.examples.libero.utils.profiling import _emit_profiling_snapshot
+from serl_torch.examples.libero.utils.profiling import _profile_call
 from serl_torch.examples.libero.utils.pretrain import _pretrain_critic_with_calql
-from serl_torch.examples.libero.utils.replay_batch import (
-    _consume_prepared_replay_batch,
-    _prepare_replay_batch,
-)
-from serl_torch.examples.libero.utils.schedules import (
-    _epsilon_gating_clock,
-    _epsilon_gating_enabled,
-    _scheduled_alpha,
-    _scheduled_epsilon_gating_probability,
-)
+from serl_torch.examples.libero.utils.replay_batch import _consume_prepared_replay_batch
+from serl_torch.examples.libero.utils.replay_batch import _prepare_replay_batch
+from serl_torch.examples.libero.utils.schedules import _epsilon_gating_clock
+from serl_torch.examples.libero.utils.schedules import _epsilon_gating_enabled
+from serl_torch.examples.libero.utils.schedules import _scheduled_alpha
+from serl_torch.examples.libero.utils.schedules import _scheduled_epsilon_gating_probability
 from serl_torch.examples.libero.utils.serialization import _to_jsonable
 from serl_torch.examples.libero.utils.step_chunk_replay import ChunkReplayBuffer
-from serl_torch.examples.libero.utils.train_loop_utils import (
-    _count_env_step_update_triggers,
-    _insert_online_transition,
-    _iter_period_hits,
-    _remaining_train_budget_steps,
-)
-from serl_torch.examples.libero.utils.tb_metrics import (
-    _append_tb_step_window,
-    _flush_tb_step_window,
-    _log_update_metrics,
-    _new_tb_step_window,
-)
+from serl_torch.examples.libero.utils.train_loop_utils import _count_env_step_update_triggers
+from serl_torch.examples.libero.utils.train_loop_utils import _insert_online_transition
+from serl_torch.examples.libero.utils.train_loop_utils import _iter_period_hits
+from serl_torch.examples.libero.utils.train_loop_utils import _remaining_train_budget_steps
+from serl_torch.examples.libero.utils.tb_metrics import _append_tb_step_window
+from serl_torch.examples.libero.utils.tb_metrics import _flush_tb_step_window
+from serl_torch.examples.libero.utils.tb_metrics import _log_update_metrics
+from serl_torch.examples.libero.utils.tb_metrics import _new_tb_step_window
 
 from torch.utils.tensorboard import SummaryWriter
 

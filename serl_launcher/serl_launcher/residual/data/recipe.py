@@ -4,10 +4,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from serl_launcher.residual.data.config import (
-    ResidualDataConfig,
-    register_residual_data_config,
-)
+from serl_launcher.residual.data.config import ResidualDataConfig
+from serl_launcher.residual.data.config import register_residual_data_config
 from serl_launcher.residual.data.schema import ResidualTrainingSchema
 from serl_launcher.residual.data.transforms import CallableTransform, Group, RepackTransform
 

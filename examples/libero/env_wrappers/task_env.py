@@ -7,13 +7,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .setup import (
-    resolve_libero_config_dir,
-    resolve_libero_datasets_root,
-    resolve_libero_root,
-    resolve_max_episode_steps,
-    setup_libero_pythonpath,
-)
+from .setup import resolve_libero_config_dir
+from .setup import resolve_libero_datasets_root
+from .setup import resolve_libero_root
+from .setup import resolve_max_episode_steps
+from .setup import setup_libero_pythonpath
 
 
 def _clone_obs_tree(value: Any) -> Any:

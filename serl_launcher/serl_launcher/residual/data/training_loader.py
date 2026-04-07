@@ -11,14 +11,10 @@ import numpy as np
 
 from serl_launcher.data.episode_paths import resolve_episode_files
 from serl_launcher.residual.data.config import ResidualDataConfig
-from serl_launcher.residual.data.materialize import (
-    build_step_core_from_payload,
-    validate_residual_training_payload,
-)
-from serl_launcher.residual.data.transitions import (
-    build_step_transition,
-    build_stepchunk_transition,
-)
+from serl_launcher.residual.data.materialize import build_step_core_from_payload
+from serl_launcher.residual.data.materialize import validate_residual_training_payload
+from serl_launcher.residual.data.transitions import build_step_transition
+from serl_launcher.residual.data.transitions import build_stepchunk_transition
 from serl_launcher.residual.observation import build_residual_step_obs_from_core
 
 if TYPE_CHECKING:

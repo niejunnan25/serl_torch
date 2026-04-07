@@ -7,11 +7,9 @@ import numpy as np
 
 from serl_launcher.policy.base import PolicyInput
 
-from .obs_adapter import (
-    LiberoObservationCache,
-    build_libero_state,
-    extract_residual_images,
-)
+from .obs_adapter import LiberoObservationCache
+from .obs_adapter import build_libero_state
+from .obs_adapter import extract_residual_images
 
 
 def build_libero_policy_input(

@@ -6,20 +6,14 @@ from typing import Any, Dict
 import numpy as np
 
 from serl_launcher.residual.data.action_projection import project_expert_action
-from serl_launcher.residual.data.config import (
-    ResidualDataConfig,
-    register_residual_data_config,
-)
-from serl_launcher.residual.data.recipe import (
-    build_common_repack_structure,
-    make_residual_data_config,
-)
+from serl_launcher.residual.data.config import ResidualDataConfig
+from serl_launcher.residual.data.config import register_residual_data_config
+from serl_launcher.residual.data.recipe import build_common_repack_structure
+from serl_launcher.residual.data.recipe import make_residual_data_config
 from serl_launcher.residual.data.schema import LIBERO_RESIDUAL_TRAINING_SCHEMA
-from serl_launcher.residual.data.transforms import (
-    delete_by_path,
-    get_by_path,
-    set_by_path,
-)
+from serl_launcher.residual.data.transforms import delete_by_path
+from serl_launcher.residual.data.transforms import get_by_path
+from serl_launcher.residual.data.transforms import set_by_path
 
 from .runtime.obs_adapter import build_libero_state, extract_residual_images
 from .schema import LIBERO_IMAGE_SLOT_KEYS

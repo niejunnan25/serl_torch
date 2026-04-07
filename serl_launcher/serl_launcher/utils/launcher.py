@@ -12,10 +12,8 @@ from serl_launcher.agents.continuous.drq import DrQAgent
 from serl_launcher.agents.continuous.sac import SACAgent
 from serl_launcher.agents.continuous.vice import VICEAgent
 from serl_launcher.common.wandb import WandBLogger
-from serl_launcher.data.data_store import (
-    MemoryEfficientReplayBufferDataStore,
-    ReplayBufferDataStore,
-)
+from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
+from serl_launcher.data.data_store import ReplayBufferDataStore
 
 
 ##############################################################################

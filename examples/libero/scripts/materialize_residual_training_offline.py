@@ -19,19 +19,13 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.action_spec import (
-    build_residual_limits,
-    resolve_control_indices,
-)
-from serl_launcher.residual.data.materialize import (
-    build_residual_training_manifest,
-    materialize_with_config,
-)
+from serl_launcher.residual.action_spec import build_residual_limits
+from serl_launcher.residual.action_spec import resolve_control_indices
+from serl_launcher.residual.data.materialize import build_residual_training_manifest
+from serl_launcher.residual.data.materialize import materialize_with_config
 from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_torch.examples.libero.hdf5_utils import resolve_task_specs
-from serl_torch.examples.libero.training_config import (
-    LIBERO_OFFLINE_TRAINING_CONFIG,
-)
+from serl_torch.examples.libero.training_config import LIBERO_OFFLINE_TRAINING_CONFIG
 from serl_torch.examples.libero.runtime import build_libero_policy_input
 
 _T = TypeVar("_T")

@@ -10,13 +10,9 @@ import torch
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 
-from serl_launcher.residual.action_spec import (
-    resolve_action_mask,
-    resolve_control_indices,
-)
-from serl_launcher.residual.observation import (
-    normalize_residual_observation_state_mode,
-)
+from serl_launcher.residual.action_spec import resolve_action_mask
+from serl_launcher.residual.action_spec import resolve_control_indices
+from serl_launcher.residual.observation import normalize_residual_observation_state_mode
 
 from ..schema import resolve_libero_image_keys
 

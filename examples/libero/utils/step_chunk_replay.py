@@ -6,9 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
-from serl_launcher.residual.observation import (
-    normalize_residual_observation_state_mode,
-)
+from serl_launcher.residual.observation import normalize_residual_observation_state_mode
 
 from .alpha_utils import validate_alpha
 

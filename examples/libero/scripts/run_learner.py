@@ -27,31 +27,19 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.training_config import (
-    LIBERO_RESIDUAL_BASE_CONFIG,
-)
-from serl_torch.examples.libero.utils import (
-    JsonlLogger,
-)
-from serl_torch.examples.libero.utils.agentlace_io import (
-    resolve_agentlace_bootstrap_path,
-    wait_for_agentlace_bootstrap,
-)
-from serl_torch.examples.libero.utils.async_learning import (
-    _apply_agent_snapshot_payload,
-    run_agentlace_learner_service,
-)
-from serl_torch.examples.libero.utils.checkpoint import (
-    _snapshot_agent_checkpoint_payload,
-)
-from serl_torch.examples.libero.utils.config_utils import (
-    build_drq_agent,
-    build_residual_action_transform,
-    resolve_control_indices_from_cfg,
-    resolve_image_keys,
-    resolve_residual_observation_state_mode,
-    set_global_seeds,
-)
+from serl_torch.examples.libero.training_config import LIBERO_RESIDUAL_BASE_CONFIG
+from serl_torch.examples.libero.utils import JsonlLogger
+from serl_torch.examples.libero.utils.agentlace_io import resolve_agentlace_bootstrap_path
+from serl_torch.examples.libero.utils.agentlace_io import wait_for_agentlace_bootstrap
+from serl_torch.examples.libero.utils.async_learning import _apply_agent_snapshot_payload
+from serl_torch.examples.libero.utils.async_learning import run_agentlace_learner_service
+from serl_torch.examples.libero.utils.checkpoint import _snapshot_agent_checkpoint_payload
+from serl_torch.examples.libero.utils.config_utils import build_drq_agent
+from serl_torch.examples.libero.utils.config_utils import build_residual_action_transform
+from serl_torch.examples.libero.utils.config_utils import resolve_control_indices_from_cfg
+from serl_torch.examples.libero.utils.config_utils import resolve_image_keys
+from serl_torch.examples.libero.utils.config_utils import resolve_residual_observation_state_mode
+from serl_torch.examples.libero.utils.config_utils import set_global_seeds
 from serl_torch.examples.libero.utils.obs_utils import _obs_space_from_sample
 from serl_torch.examples.libero.utils.pretrain import _pretrain_critic_with_calql
 from serl_torch.examples.libero.utils.profiling import _RuntimeProfiler

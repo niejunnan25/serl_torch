@@ -9,10 +9,8 @@ from typing import Any, Dict, Hashable, Optional, Tuple
 import numpy as np
 from PIL import Image
 from serl_launcher.data.normalizer import StateActionNormalizer
-from serl_launcher.residual.observation import (
-    build_residual_step_obs_from_core,
-    normalize_residual_observation_state_mode,
-)
+from serl_launcher.residual.observation import build_residual_step_obs_from_core
+from serl_launcher.residual.observation import normalize_residual_observation_state_mode
 
 from ..schema import resolve_libero_image_keys
 
