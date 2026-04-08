@@ -27,9 +27,9 @@ from serl_launcher.residual.runtime.config_utils import resolve_control_indices_
 from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
 from serl_launcher.residual.runtime.config_utils import sample_probing_steps
 from serl_launcher.residual.runtime.config_utils import set_global_seeds
-from serl_launcher.residual.runtime.schedules import _epsilon_gating_enabled
-from serl_launcher.residual.runtime.schedules import _epsilon_gating_eval_force_on
-from serl_launcher.residual.runtime.schedules import _scheduled_epsilon_gating_probability
+from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
+from serl_launcher.residual.train.schedules import _epsilon_gating_eval_force_on
+from serl_launcher.residual.train.schedules import _scheduled_epsilon_gating_probability
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.logger import JsonlLogger
 

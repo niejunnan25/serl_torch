@@ -7,14 +7,14 @@ import numpy as np
 from concurrent.futures import Future
 
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.runtime.actor_episode_chunk import execute_chunk_decision
-from serl_launcher.residual.runtime.actor_episode_shared import build_episode_result
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeResult
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeSpec
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeState
-from serl_launcher.residual.runtime.actor_episode_shared import flush_episode_step_window
-from serl_launcher.residual.runtime.actor_episode_step import execute_step_decision
-from serl_launcher.residual.runtime.actor_support import build_policy_input
+from serl_launcher.residual.train.actor.episode_chunk import execute_chunk_decision
+from serl_launcher.residual.train.actor.episode_shared import build_episode_result
+from serl_launcher.residual.train.actor.episode_shared import EpisodeResult
+from serl_launcher.residual.train.actor.episode_shared import EpisodeSpec
+from serl_launcher.residual.train.actor.episode_shared import EpisodeState
+from serl_launcher.residual.train.actor.episode_shared import flush_episode_step_window
+from serl_launcher.residual.train.actor.episode_step import execute_step_decision
+from serl_launcher.residual.train.actor.support import build_policy_input
 from serl_launcher.residual.runtime.config_utils import sample_probing_steps
 from serl_launcher.training.profiling import _profile_call
 

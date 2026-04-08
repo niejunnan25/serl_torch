@@ -10,7 +10,7 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
-from serl_launcher.residual.runtime.actor_runtime import run_residual_actor_loop
+from serl_launcher.residual.train.actor.runtime import run_residual_actor_loop
 from serl_launcher.residual.runtime.config_utils import set_global_seeds
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
