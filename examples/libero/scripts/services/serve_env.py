@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 REPO_PARENT = REPO_ROOT.parent
 SERL_LAUNCHER_ROOT = REPO_ROOT / "serl_launcher"
 if str(REPO_PARENT) not in sys.path:

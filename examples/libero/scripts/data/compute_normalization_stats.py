@@ -12,9 +12,12 @@ import h5py
 import numpy as np
 from tqdm.auto import tqdm
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_PARENT = Path(__file__).resolve().parents[5]
+SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[4] / "serl_launcher"
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 from serl_torch.examples.libero.hdf5_utils import LiberoTaskSpec, resolve_task_specs
 
@@ -111,7 +114,7 @@ def main() -> None:
     parser.add_argument(
         "--output_dir",
         type=str,
-        default=str(Path(__file__).resolve().parents[1] / "data" / "stats"),
+        default=str(Path(__file__).resolve().parents[2] / "data" / "stats"),
     )
     args = parser.parse_args()
 

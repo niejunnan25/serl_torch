@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize unified residual-training episode PKLs from online LIBERO rollouts."""
+"""Collect online warmup/prefill rollouts into unified residual-training PKLs."""
 from __future__ import annotations
 
 import argparse
@@ -15,7 +15,7 @@ import hydra
 import numpy as np
 from tqdm.auto import tqdm
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
@@ -30,7 +30,7 @@ from serl_torch.examples.libero.env_wrappers.factory import _create_env
 from serl_torch.examples.libero.runtime.policy_adapter import build_libero_policy_input
 
 _T = TypeVar("_T")
-DEFAULT_CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
+DEFAULT_CONF_DIR = Path(__file__).resolve().parents[2] / "conf"
 
 
 def _progress(
@@ -156,7 +156,7 @@ def _canonicalize_obs_frame(obs_raw: Dict[str, Any]) -> Dict[str, np.ndarray]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Collect unified LIBERO residual-training episodes",
+        description="Collect online LIBERO warmup/prefill episodes into residual-training PKLs",
     )
     parser.add_argument(
         "config",
@@ -173,7 +173,7 @@ def main() -> None:
         "--output_dir",
         type=str,
         default=str(
-            Path(__file__).resolve().parents[1]
+            Path(__file__).resolve().parents[2]
             / "data"
             / "residual_training"
             / "online"

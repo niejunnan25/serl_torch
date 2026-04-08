@@ -29,4 +29,4 @@ if [[ -f "$CONDA_SH" ]]; then
     fi
 fi
 
-python scripts/compute_hdf5_stats.py "$@"
+python scripts/data/compute_normalization_stats.py "$@"

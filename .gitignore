@@ -182,6 +182,7 @@ pretrained_models/
 # Generated example data
 examples/libero/data/**
 examples/libero/training_logs/
+examples/libero/.local/
 .codex/
 
 

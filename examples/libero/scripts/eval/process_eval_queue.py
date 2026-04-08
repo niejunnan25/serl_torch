@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""Asynchronous checkpoint watcher for LIBERO residual policy evaluation."""
+"""Process queued LIBERO checkpoint evaluation jobs."""
 
 import argparse
 import json
@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from omegaconf import OmegaConf
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
@@ -287,7 +287,7 @@ def _timestamp() -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Watch checkpoints and run async eval for LIBERO training"
+        description="Process queued checkpoint eval jobs for LIBERO training"
     )
     parser.add_argument("--train-run-dir", type=str, required=True)
     parser.add_argument("--train-config", type=str, default=None)
@@ -473,14 +473,12 @@ def main() -> None:
     eval_script = async_eval_cfg.get("eval_script", None)
     if eval_script is None:
         eval_script_path = (
-            Path(__file__).resolve().parent / "eval_residual_fast.py"
+            Path(__file__).resolve().parent / "evaluate_checkpoint.py"
         ).resolve()
     else:
         eval_script_path = Path(str(eval_script)).expanduser()
         if not eval_script_path.is_absolute():
-            eval_script_path = (
-                Path(__file__).resolve().parent / eval_script_path
-            ).resolve()
+            eval_script_path = (Path(__file__).resolve().parent / eval_script_path).resolve()
     if not eval_script_path.exists():
         raise FileNotFoundError(f"eval script not found: {eval_script_path}")
 

@@ -13,14 +13,14 @@ from omegaconf import OmegaConf
 from serl_launcher.residual.train.learner.service import run_residual_learner_service
 from serl_launcher.training.seeding import set_global_seeds
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.libero.runtime.data_bindings import build_libero_data_bindings
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="train_residual_sac")
+@hydra.main(version_base=None, config_path="../../conf", config_name="train_residual_sac")
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)

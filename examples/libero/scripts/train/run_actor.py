@@ -13,14 +13,14 @@ from omegaconf import OmegaConf
 from serl_launcher.residual.train.actor.runtime import run_residual_actor_loop
 from serl_launcher.training.seeding import set_global_seeds
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.libero.runtime.runtime_bindings import build_libero_runtime_bindings
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="train_residual_sac")
+@hydra.main(version_base=None, config_path="../../conf", config_name="train_residual_sac")
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -41,9 +41,9 @@ def main(cfg: DictConfig) -> None:
         run_dir=run_dir,
         logger=logger,
         bindings=bindings,
-        async_eval_watcher_path=Path(__file__).resolve().with_name(
-            "async_eval_watch.py"
-        ),
+        async_eval_watcher_path=Path(__file__).resolve().parents[1]
+        / "eval"
+        / "process_eval_queue.py",
     )
 
 

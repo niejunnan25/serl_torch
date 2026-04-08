@@ -158,12 +158,12 @@ def _stream_foreground_to_console_and_log(
         return proc.wait()
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="train_residual_sac")
+@hydra.main(version_base=None, config_path="../../conf", config_name="train_residual_sac")
 def main(cfg: DictConfig) -> None:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
     logger = logging.getLogger("libero_launch_async_train")
 
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[4]
     tools_dir = repo_root / "examples" / "libero" / "tools"
     original_cwd = Path(get_original_cwd()).resolve()
 

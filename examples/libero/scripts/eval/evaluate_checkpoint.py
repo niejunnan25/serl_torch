@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Fast evaluation for LIBERO residual policies."""
+"""Evaluate a LIBERO residual checkpoint."""
 
 import json
 import logging
@@ -35,7 +35,7 @@ from serl_launcher.training.seeding import set_global_seeds
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.logger import JsonlLogger
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
@@ -85,7 +85,7 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
     raise ValueError(f"env.backend must be 'local' or 'remote', got {env_backend}")
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="eval_residual_fast")
+@hydra.main(version_base=None, config_path="../../conf", config_name="eval_residual_fast")
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ def main(cfg: DictConfig) -> None:
         task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
         stats_dir = norm_cfg.get(
             "stats_dir",
-            str(Path(__file__).resolve().parents[1] / "data" / "stats"),
+            str(Path(__file__).resolve().parents[2] / "data" / "stats"),
         )
         normalizer = load_normalizer(
             task_key, stats_dir=stats_dir

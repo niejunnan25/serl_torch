@@ -295,7 +295,7 @@ fi
 echo "Starting online residual-training collection..." | tee -a "$LAUNCH_LOG"
 RUN_CMD=(
     "$PYTHON_BIN"
-    "$ROOT_DIR/scripts/materialize_residual_training_online.py"
+    "$ROOT_DIR/scripts/data/collect_online_prefill.py"
     "$CONFIG_PATH"
 )
 RUN_CMD+=("${COLLECT_ARGS[@]}")

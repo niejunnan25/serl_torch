@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize unified residual-training episode PKLs from LIBERO HDF5 demos."""
+"""Prepare demo-derived residual-training episode PKLs from LIBERO HDF5 data."""
 from __future__ import annotations
 
 import argparse
@@ -16,9 +16,12 @@ import numpy as np
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
+REPO_PARENT = Path(__file__).resolve().parents[5]
+SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[4] / "serl_launcher"
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 from serl_launcher.policy.base import PolicyClient
 from serl_launcher.policy.factory import build_policy_backend_info
@@ -280,7 +283,7 @@ def main() -> None:
         "--output_dir",
         type=str,
         default=str(
-            Path(__file__).resolve().parents[1]
+            Path(__file__).resolve().parents[2]
             / "data"
             / "residual_training"
             / "offline"

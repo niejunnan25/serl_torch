@@ -68,4 +68,4 @@ then
     exit 1
 fi
 
-"$PYTHON_BIN" scripts/materialize_residual_training_online.py "$@"
+"$PYTHON_BIN" scripts/data/collect_online_prefill.py "$@"

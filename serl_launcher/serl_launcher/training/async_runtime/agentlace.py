@@ -1641,7 +1641,8 @@ class _AgentlaceAsyncLearner:
         resolved_request_timeout_ms = (
             3000.0 if request_timeout_ms is None else float(request_timeout_ms)
         )
-        self._request_timeout_ms = float(max(800.0, resolved_request_timeout_ms))
+        # pyzmq socket timeouts must be integer milliseconds.
+        self._request_timeout_ms = int(max(800.0, round(resolved_request_timeout_ms)))
         self._client = None
         self._data_store = None
         self._replay_proxy = _ReplayProgressProxy(

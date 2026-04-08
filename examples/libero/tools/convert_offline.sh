@@ -44,10 +44,14 @@ if [[ -f "$CONDA_SH" ]]; then
         conda activate "$CONVERT_CONDA_PREFIX"
     elif [[ -n "${CONVERT_CONDA_ENV:-}" ]]; then
         conda activate "$CONVERT_CONDA_ENV"
+    elif [[ -d "/vla/miniconda3/envs/serl_torch" ]]; then
+        conda activate serl_torch
     elif [[ -d "/vla/users/niejunnan/envs/libero" ]]; then
         conda activate "/vla/users/niejunnan/envs/libero"
     elif [[ -d "/vla/users/niejunnan/envs/hf_download" ]]; then
         conda activate "/vla/users/niejunnan/envs/hf_download"
+    elif conda env list | awk '{print $1}' | grep -qx "serl_torch"; then
+        conda activate serl_torch
     elif conda env list | awk '{print $1}' | grep -qx "libero"; then
         conda activate libero
     elif conda env list | awk '{print $1}' | grep -qx "hf_download"; then
@@ -55,7 +59,7 @@ if [[ -f "$CONDA_SH" ]]; then
     fi
 fi
 
-CMD=(python scripts/materialize_residual_training_offline.py)
+CMD=(python scripts/data/prepare_offline_demos.py)
 CMD+=(--openpi_host "$OPENPI_HOST" --openpi_port "$OPENPI_PORT")
 CMD+=("${EXTRA_ARGS[@]}")
 
