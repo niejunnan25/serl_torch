@@ -502,6 +502,185 @@ conda run -n serl_torch python examples/libero/scripts/eval/evaluate_checkpoint.
 - `step_logs.jsonl`
 - `episode_logs.jsonl`
 
+### 运行实例 3：exp12 / task8 / pi05 / alpha sweep
+
+如果你要在 `task8` 上并行跑一组 `pi05` 实验，当前本地 `exp12` 目录已经整理成：
+
+- `alpha02` 放在 `GPU 0, 1, 2, 3`
+- `alpha05` 放在 `GPU 4, 5, 6, 7`
+
+并且每份 yaml 都已经写死了：
+
+- 单卡 `actor / learner / OpenPI`
+- 不互撞的 `env / OpenPI / trainer / broadcast / async-eval` 端口
+- 固定 offline dataset 路径
+
+这一组命令建议直接显式指定固定输出目录，这样每个实验都会直接写到：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/<run_name>/`
+
+而不会再额外套一层 timestamp。
+
+#### alpha02 / GPU 0
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_pi05_alpha02`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_pi05_alpha02.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_pi05_alpha02
+```
+
+#### alpha02 / GPU 1
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_unfreeze_pi05_alpha02`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_unfreeze_pi05_alpha02.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_unfreeze_pi05_alpha02
+```
+
+#### alpha02 / GPU 2
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_pi05_alpha02`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_pi05_alpha02.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_pi05_alpha02
+```
+
+#### alpha02 / GPU 3
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05_alpha02`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05_alpha02.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05_alpha02
+```
+
+#### alpha05 / GPU 4
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_pi05_alpha05`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_pi05_alpha05.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_pi05_alpha05
+```
+
+#### alpha05 / GPU 5
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_unfreeze_pi05_alpha05`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_unfreeze_pi05_alpha05.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_unfreeze_pi05_alpha05
+```
+
+#### alpha05 / GPU 6
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_pi05_alpha05`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_pi05_alpha05.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_pi05_alpha05
+```
+
+#### alpha05 / GPU 7
+
+输出目录：
+
+- `/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05_alpha05`
+
+命令：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+POLICY_CONFIG=pi05_libero \
+POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
+bash tools/launch_async_train.sh \
+  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05_alpha05.yaml \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/exp12/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05_alpha05
+```
+
+这一组 `exp12` 配置当前已经统一成：
+
+- `alpha02`：`GPU 0-3`
+- `alpha05`：`GPU 4-7`
+- 每份 yaml 都是单卡 `actor / learner / OpenPI`
+- `max_train_env_steps = 1800000`
+- `residual_rl phase episodes = 6000`
+
 ### 日志怎么看
 
 一轮 async train 里最常看的文件：
