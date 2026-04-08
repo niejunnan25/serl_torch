@@ -1,46 +1,85 @@
 # serl_torch
 
-`serl_torch` 是当前这套 residual RL / VLA 实验代码仓库。现在这条分支的主线用法，已经收敛到：
+`serl_torch` 是当前这套 residual RL / VLA 实验仓库。
 
-- `serl_launcher/` 放公共训练、数据、runtime、policy backend 逻辑
-- `examples/libero/` 放 LIBERO 环境相关的 schema、runtime adapter、env wrapper 和实验配置
-- `examples/libero/configs/exp11/` 作为当前推荐的端到端训练入口
+这份根目录 README 只回答三类问题：
 
-如果你现在要真正跑通一组实验，建议直接按下面的 `exp11 + pi05` 流程走。
+1. 这个仓库现在怎么分层；
+2. 代码应该从哪里开始看；
+3. 如果你要真正跑实验，应该去看哪个 example 的 README。
 
-## 仓库结构
+如果你当前要跑 LIBERO，请直接看：
 
-- `serl_launcher/`: 通用 residual 数据管线、runtime、policy backend、replay、agent、训练辅助
-- `examples/libero/`: LIBERO 任务适配、环境服务、数据物化、训练/评测脚本、实验配置
-- `examples/RoboTwin/`: RoboTwin 示例
-- `pretrained_models/`: 本地视觉 backbone 权重
-- `docs/`: 额外说明
-- `third_party/`: 本地依赖或参考仓库
+- [examples/libero/README.md](examples/libero/README.md)
 
-## 当前默认假设
+## 仓库定位
 
-这套代码当前默认假设本机存在下面这些路径：
+当前主线是一套围绕：
 
-- `LIBERO` submodule: `/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO`
-- LIBERO datasets: `/vla/users/niejunnan/datasets`
-- OpenPI repo: `/vla/users/niejunnan/codebase/openpi`
-- OpenPI `pi05` checkpoint: `/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero`
+- chunk base policy
+- residual RL
+- actor / learner 异步训练
+- 多环境 example 适配
 
-如果你的机器路径不同，就在命令行显式覆盖：
+展开的实验代码。
 
-- `libero_root=...`  # only needed if you want to override the bundled `third_party/LIBERO`
-- `libero_datasets_root=...`
-- `OPENPI_ROOT=...`
-- `POLICY_DIR=...`
+目前已经重点整理过两条边界：
 
-## 环境准备
+- `serl_launcher/` 负责公共训练与算法基础设施
+- `examples/<env>/` 负责环境适配、脚本入口、实验配置
 
-训练环境：
+## 当前代码分层
+
+推荐按下面这套分层理解：
+
+- `serl_launcher/training/`
+  通用训练基础设施，例如 checkpoint、profiling、async runtime、telemetry
+- `serl_launcher/residual/algorithms/`
+  residual 算法接口与实现
+- `serl_launcher/residual/train/`
+  residual actor / learner 编排
+- `serl_launcher/residual/data/`
+  residual 训练数据 schema、materialize、loader
+- `serl_launcher/policy/`
+  base chunk policy backend
+- `serl_launcher/agents/`
+  RL agent 本体和 builder
+- `examples/libero/`
+  LIBERO 环境适配、环境服务、数据准备、训练/评测脚本、实验配置
+
+## 仓库目录
+
+- `serl_launcher/`
+  公共训练、policy backend、agent、residual 编排
+- `examples/libero/`
+  当前最完整、最常用的 example
+- `examples/RoboTwin/`
+  另一个 example
+- `docs/`
+  设计说明、重构记录、分析文档
+- `third_party/`
+  本地依赖或参考仓库
+- `pretrained_models/`
+  本地模型权重
+
+## 当前推荐入口
+
+如果你要理解这套仓库现在的主线，建议按下面顺序看：
+
+1. [examples/libero/README.md](examples/libero/README.md)
+2. [serl_launcher/serl_launcher/training/](serl_launcher/serl_launcher/training/)
+3. [serl_launcher/serl_launcher/residual/algorithms/](serl_launcher/serl_launcher/residual/algorithms/)
+4. [serl_launcher/serl_launcher/residual/train/](serl_launcher/serl_launcher/residual/train/)
+5. [examples/libero/runtime/](examples/libero/runtime/)
+
+## 安装
+
+最常见的训练环境是 `serl_torch`：
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch
 conda activate serl_torch
-pip install -e /vla/users/niejunnan/codebase/serl_torch/serl_launcher
+pip install -e serl_launcher
 pip install -e /vla/users/niejunnan/codebase/openpi/packages/openpi-client
 ```
 
@@ -51,167 +90,62 @@ cd /vla/users/niejunnan/codebase/serl_torch
 python tools/download_resnet.py --models microsoft/resnet-18
 ```
 
-运行时一般会用到三套环境：
+当前常用到三套环境：
 
-- `serl_torch`: actor / learner / 数据物化
-- `libero`: 环境服务
-- `openpi-modified`: OpenPI 服务
+- `serl_torch`
+  actor / learner / eval / 数据准备
+- `libero`
+  LIBERO 环境服务
+- `openpi-modified`
+  OpenPI 服务
 
-## 当前推荐主线：`exp11` 的 `pi05` 训练
+## 当前默认路径假设
 
-这条主线依赖两类统一格式数据：
+这套代码通常会默认使用下面这些本机路径：
 
-- offline residual training PKL
-- online prefill residual training PKL
+- LIBERO submodule:
+  `/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO`
+- LIBERO datasets:
+  `/vla/users/niejunnan/datasets`
+- OpenPI repo:
+  `/vla/users/niejunnan/codebase/openpi`
+- OpenPI checkpoint:
+  `/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero`
 
-训练配置示例：
+如果你的机器不同，请在命令行或环境变量里显式覆盖，例如：
 
-- [libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05.yaml](/vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05.yaml)
+- `libero_root=...`
+- `libero_datasets_root=...`
+- `OPENPI_ROOT=...`
+- `POLICY_DIR=...`
 
-### 1. 生成 offline 数据
+## Example README 的分工
 
-先启动一个专门的 OpenPI 服务：
+根目录 README 不放很长的 task 级运行命令。
 
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch
-POLICY_CONFIG=pi05_libero \
-POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
-bash examples/libero/tools/serve_openpi.sh \
-  --port 40111 \
-  --gpu-id 2
-```
+当前建议按下面方式分工：
 
-然后在另一个终端物化 offline 数据：
+- 根目录 README
+  负责讲仓库结构、安装、分层、入口导航
+- `examples/libero/README.md`
+  负责讲 LIBERO 具体怎么跑，包括：
+  - 环境变量
+  - 本地 config/cache 逻辑
+  - scripts / tools 说明
+  - offline / online 数据准备
+  - async train
+  - eval smoke
+  - 日志和常见问题
 
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-CONVERT_CONDA_ENV=serl_torch \
-bash tools/convert_offline.sh \
-  --suite_name libero_10 \
-  --task_id 8 \
-  --chunk_horizon 5 \
-  --residual_alpha 0.10 \
-  --libero_datasets_root /vla/users/niejunnan/datasets \
-  --openpi_host 127.0.0.1 \
-  --openpi_port 40111 \
-  --output_dir data/residual_training/offline_pi05_alpha01
-```
+## 当前状态
 
-生成结果会落到：
+当前已经验证过的主链路包括：
 
-- `examples/libero/data/residual_training/offline_pi05_alpha01/libero_10_task_8`
+- offline data preparation
+- online prefill collection
+- async train smoke
+- checkpoint eval smoke
 
-### 2. 生成 online warmup / prefill 数据
+对应的具体命令和配置，统一放在：
 
-先起一个 LIBERO 环境服务：
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch
-bash examples/libero/tools/serve_env.sh \
-  --host 127.0.0.1 \
-  --port 40110
-```
-
-然后在另一个终端收集在线 warmup 数据：
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-PREFILL_CONDA_ENV=serl_torch \
-bash tools/collect_online_prefill.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_pi05.yaml \
-  --episodes 100 \
-  --output_dir data/residual_training/online_pi05 \
-  libero_datasets_root=/vla/users/niejunnan/datasets \
-  openpi.host=127.0.0.1 \
-  openpi.port=40111 \
-  env.remote.host=127.0.0.1 \
-  env.remote.port=40110 \
-  training.async_eval.enabled=false
-```
-
-生成结果会落到：
-
-- `examples/libero/data/residual_training/online_pi05/libero_10_task_8/stepchunk/manifest.json`
-
-### 3. 启动端到端训练
-
-当前最推荐的方式是直接用 Hydra launcher，而不是再套一层历史实验脚本。这样你可以显式指定 GPU 和路径覆盖。
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch
-POLICY_CONFIG=pi05_libero \
-POLICY_DIR=/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero \
-bash examples/libero/tools/launch_async_train.sh \
-  /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05.yaml \
-  launch.actor_gpu=1 \
-  launch.learner_gpu=3 \
-  launch.openpi_gpu=4 \
-  libero_datasets_root=/vla/users/niejunnan/datasets
-```
-
-这条命令会自动拉起 5 个角色：
-
-1. training env server
-2. async eval env server
-3. OpenPI server
-4. standalone learner
-5. actor
-
-### 4. 训练日志怎么看
-
-每次运行都会生成一个 Hydra run 目录，例如：
-
-- `examples/libero/outputs/exp11/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05/<timestamp>/`
-
-常看的文件：
-
-- `launch_async_train.log`
-- `support/env_server.log`
-- `support/async_eval_env_server.log`
-- `support/openpi_server.log`
-- `support/learner.log`
-- `support/actor.log`
-
-训练启动成功后，你应该能在 `learner.log` 里看到：
-
-- offline preload 完成
-- online prefill 加载完成
-- `Starting standalone agentlace learner`
-
-在 `actor.log` 里看到：
-
-- `Connected actor to external agentlace learner`
-- `Start phase=residual_rl`
-
-## 端到端训练里的组件关系
-
-当前 `exp11` 这条链路里，主要组件是：
-
-- `launch_async_train.py`: 一次性拉起整组训练服务
-- `libero_env_server.py`: 提供远程 LIBERO 环境
-- `OpenPIPolicyClient`: actor 调用的 base policy client
-- `train_residual_sac.py`: actor 主进程，负责 rollout
-- `run_learner.py`: learner 主进程，负责 offline preload、online replay、参数更新、checkpoint
-- `agentlace_bootstrap.pkl`: actor 初始化后写出的 bootstrap，上游给 learner 启动
-
-数据流是：
-
-- env -> actor -> OpenPI -> actor -> env
-- actor -> learner replay
-- learner -> actor 参数广播
-
-## 额外说明
-
-- `examples/libero/configs/exp10/` 现在主要作为历史实验配置参考，不是这条分支的推荐主线
-- `examples/libero/data/` 现在只用于放真实数据，不再放 Python 代码
-- 当前 `OpenPI` 已经作为 policy backend 抽到了 `serl_launcher/policy/openpi/`
-
-## 最短总结
-
-如果你今天只想把 `pi05` 的一组训练真正跑起来，就按下面顺序：
-
-1. `pip install -e serl_launcher`
-2. `pip install -e /vla/users/niejunnan/codebase/openpi/packages/openpi-client`
-3. 生成 `offline_pi05_alpha01`
-4. 生成 `online_pi05`
-5. 用 `launch_async_train.sh + exp11 pi05 yaml` 启动整组训练
+- [examples/libero/README.md](examples/libero/README.md)

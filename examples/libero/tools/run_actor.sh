@@ -120,7 +120,7 @@ CONFIG_NAME="${CONFIG_BASENAME%.yaml}"
 export CUDA_VISIBLE_DEVICES="$GPU_ID"
 cd "$ROOT_DIR"
 
-exec "$PYTHON_BIN" "$ROOT_DIR/scripts/run_actor.py" \
+exec "$PYTHON_BIN" "$ROOT_DIR/scripts/train/run_actor.py" \
     --config-dir "$CONFIG_DIR" \
     --config-name "$CONFIG_NAME" \
     "++training.async.enabled=true" \

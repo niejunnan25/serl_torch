@@ -49,9 +49,17 @@ def resolve_libero_root(libero_root: Optional[str]) -> Path:
 def resolve_libero_config_dir(config_dir: Optional[str]) -> Path:
     if config_dir:
         return Path(config_dir).expanduser().resolve()
-    return (
-        find_serl_repo_root() / "examples" / "libero" / ".local" / "libero_config"
-    ).resolve()
+    env_override = os.environ.get("LIBERO_CONFIG_PATH")
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    cache_root = (
+        Path(xdg_cache_home).expanduser()
+        if xdg_cache_home
+        else Path.home() / ".cache"
+    )
+    return (cache_root / "serl_torch" / "libero_config").resolve()
 
 
 def resolve_libero_datasets_root(

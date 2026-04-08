@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-"$PYTHON_BIN" scripts/eval_residual_fast.py \
+"$PYTHON_BIN" scripts/eval/evaluate_checkpoint.py \
     "${HYDRA_OPTIONS[@]}" \
     env.backend=remote \
     env.remote.host=127.0.0.1 \
