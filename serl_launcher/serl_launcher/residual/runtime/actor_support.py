@@ -19,8 +19,8 @@ from serl_launcher.residual.runtime.async_learning import _AsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
-from serl_launcher.residual.runtime.checkpoint import _CheckpointTask
-from serl_launcher.residual.runtime.checkpoint import _write_checkpoint_payload
+from serl_launcher.training.checkpoint import _CheckpointTask
+from serl_launcher.training.checkpoint import _write_checkpoint_payload
 from serl_launcher.residual.runtime.schedules import _scheduled_epsilon_gating_probability
 
 

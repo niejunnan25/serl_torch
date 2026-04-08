@@ -9,8 +9,8 @@ from typing import Optional
 
 from omegaconf import DictConfig
 from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
-from serl_launcher.residual.runtime.profiling import _profile_call
+from serl_launcher.training.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _profile_call
 
 from ..env_wrappers.factory import _create_env
 from .data_bindings import LiberoDataBindings

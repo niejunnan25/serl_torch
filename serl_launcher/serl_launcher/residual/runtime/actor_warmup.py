@@ -17,7 +17,7 @@ from serl_launcher.residual.runtime.actor_support import flush_external_agentlac
 from serl_launcher.residual.runtime.actor_support import new_progress
 from serl_launcher.residual.runtime.obs_utils import _clone_obs_dict
 from serl_launcher.residual.runtime.obs_utils import _zero_obs_like
-from serl_launcher.residual.runtime.profiling import _profile_call
+from serl_launcher.training.profiling import _profile_call
 from serl_launcher.residual.runtime.train_loop_utils import _insert_online_transition
 
 

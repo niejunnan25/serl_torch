@@ -86,11 +86,11 @@ from serl_launcher.residual.runtime.actor_episode import run_policy_episode
 from serl_launcher.residual.runtime.config_utils import sample_probing_steps
 from serl_launcher.residual.runtime.obs_utils import _clone_obs_dict
 from serl_launcher.residual.runtime.obs_utils import _zero_obs_like
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
-from serl_launcher.residual.runtime.profiling import _emit_profiling_snapshot
-from serl_launcher.residual.runtime.profiling import _profile_call
-from serl_launcher.residual.runtime.replay_batch import _consume_prepared_replay_batch
-from serl_launcher.residual.runtime.replay_batch import _prepare_replay_batch
+from serl_launcher.training.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _emit_profiling_snapshot
+from serl_launcher.training.profiling import _profile_call
+from serl_launcher.training.replay_batch import _consume_prepared_replay_batch
+from serl_launcher.training.replay_batch import _prepare_replay_batch
 from serl_launcher.residual.runtime.schedules import _scheduled_alpha
 from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
 from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window

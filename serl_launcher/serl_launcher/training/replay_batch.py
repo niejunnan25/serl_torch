@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import torch
 
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _RuntimeProfiler
 
 
 def _recursive_to_torch(batch: Any) -> Any:

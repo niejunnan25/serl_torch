@@ -91,7 +91,7 @@ def _resolve_algorithm_type(cfg: Any | None) -> str:
 def build_residual_algorithm(cfg: Any | None = None) -> ResidualAlgorithm:
     algorithm_type = _resolve_algorithm_type(cfg)
     if algorithm_type == "sac":
-        from serl_launcher.residual.runtime.sac_algorithm import ResidualSACAlgorithm
+        from serl_launcher.residual.algorithms.sac import ResidualSACAlgorithm
 
         return ResidualSACAlgorithm()
     raise ValueError(f"Unsupported residual.algorithm.type: {algorithm_type}")

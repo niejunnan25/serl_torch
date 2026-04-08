@@ -7,9 +7,9 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
-from serl_launcher.residual.runtime.profiling import _emit_profiling_snapshot
-from serl_launcher.residual.runtime.replay_batch import _consume_prepared_replay_batch
-from serl_launcher.residual.runtime.replay_batch import _prepare_replay_batch
+from serl_launcher.training.profiling import _emit_profiling_snapshot
+from serl_launcher.training.replay_batch import _consume_prepared_replay_batch
+from serl_launcher.training.replay_batch import _prepare_replay_batch
 from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window
 from serl_launcher.residual.runtime.tb_metrics import _log_update_metrics
 from serl_launcher.residual.runtime.train_loop_utils import _insert_online_transition

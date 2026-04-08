@@ -16,7 +16,7 @@ from serl_launcher.residual.runtime.actor_episode_shared import flush_episode_st
 from serl_launcher.residual.runtime.actor_episode_step import execute_step_decision
 from serl_launcher.residual.runtime.actor_support import build_policy_input
 from serl_launcher.residual.runtime.config_utils import sample_probing_steps
-from serl_launcher.residual.runtime.profiling import _profile_call
+from serl_launcher.training.profiling import _profile_call
 
 
 def _run_probing_steps(

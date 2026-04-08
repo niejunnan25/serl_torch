@@ -9,10 +9,10 @@ from typing import Any
 from typing import Dict
 from typing import Optional
 
-from serl_launcher.residual.runtime.algorithm import ResidualAlgorithm
+from serl_launcher.residual.algorithms.base import ResidualAlgorithm
 from serl_launcher.residual.runtime.async_learning import _AgentlaceAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.train_loop_utils import _count_env_step_update_triggers
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
 from serl_launcher.utils.agentlace_io import save_agentlace_bootstrap

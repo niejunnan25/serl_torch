@@ -1,4 +1,4 @@
-"""Runtime profiling helpers for residual training scripts."""
+"""Training profiling helpers."""
 from __future__ import annotations
 
 import logging

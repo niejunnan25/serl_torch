@@ -18,7 +18,7 @@ import torch
 from omegaconf import DictConfig
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
-from serl_launcher.residual.runtime.algorithm import build_residual_algorithm
+from serl_launcher.residual.algorithms.base import build_residual_algorithm
 from serl_launcher.residual.runtime.async_learning import run_agentlace_learner_service
 from serl_launcher.residual.runtime.bindings import ResidualDataBindings
 from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
@@ -26,7 +26,7 @@ from serl_launcher.residual.runtime.config_utils import resolve_control_indices_
 from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
 from serl_launcher.residual.runtime.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.runtime.pretrain import _pretrain_critic_with_calql
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.schedules import _scheduled_alpha
 from serl_launcher.residual.runtime.step_chunk_replay import ChunkReplayBuffer
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path

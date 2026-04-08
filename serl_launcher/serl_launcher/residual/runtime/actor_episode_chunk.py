@@ -19,7 +19,7 @@ from serl_launcher.residual.runtime.actor_support import build_policy_input
 from serl_launcher.residual.runtime.actor_support import build_step_obs_profiled
 from serl_launcher.residual.runtime.actor_support import replay_progress_size
 from serl_launcher.residual.runtime.actor_support import resolve_train_gate
-from serl_launcher.residual.runtime.profiling import _profile_call
+from serl_launcher.training.profiling import _profile_call
 from serl_launcher.residual.runtime.schedules import _scheduled_alpha
 from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
 from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window

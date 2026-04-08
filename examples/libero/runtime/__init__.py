@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
-from serl_launcher.residual.runtime.profiling import _profile_call
+from serl_launcher.training.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _profile_call
 
 from .obs_adapter import LiberoObservationCache
 from .obs_adapter import build_libero_state

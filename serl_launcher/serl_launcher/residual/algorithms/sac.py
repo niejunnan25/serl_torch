@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import torch
 
-from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
+from serl_launcher.training.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.residual.runtime.config_utils import build_drq_agent
 
 

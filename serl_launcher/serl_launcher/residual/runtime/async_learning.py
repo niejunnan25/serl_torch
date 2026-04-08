@@ -14,16 +14,16 @@ import numpy as np
 import torch
 
 from serl_launcher.residual.action import as_numpy_action
-from serl_launcher.residual.runtime.algorithm import ResidualAlgorithm
-from serl_launcher.residual.runtime.algorithm import build_residual_algorithm
-from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
-from serl_launcher.residual.runtime.checkpoint import _CheckpointTask
-from serl_launcher.residual.runtime.checkpoint import _write_checkpoint_payload
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
-from serl_launcher.residual.runtime.profiling import _emit_profiling_snapshot
-from serl_launcher.residual.runtime.replay_batch import _PreparedBatch
-from serl_launcher.residual.runtime.replay_batch import _consume_prepared_replay_batch
-from serl_launcher.residual.runtime.replay_batch import _prepare_replay_batch
+from serl_launcher.residual.algorithms.base import ResidualAlgorithm
+from serl_launcher.residual.algorithms.base import build_residual_algorithm
+from serl_launcher.training.checkpoint import _AsyncCheckpointWriter
+from serl_launcher.training.checkpoint import _CheckpointTask
+from serl_launcher.training.checkpoint import _write_checkpoint_payload
+from serl_launcher.training.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _emit_profiling_snapshot
+from serl_launcher.training.replay_batch import _PreparedBatch
+from serl_launcher.training.replay_batch import _consume_prepared_replay_batch
+from serl_launcher.training.replay_batch import _prepare_replay_batch
 
 if TYPE_CHECKING:
     from serl_launcher.data.replay_buffer import ReplayBuffer

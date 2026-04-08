@@ -1,4 +1,4 @@
-"""Checkpoint payload and writing utilities for residual training."""
+"""Checkpoint payload and writing utilities for training runtimes."""
 from __future__ import annotations
 
 import queue
@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 import torch
 
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _RuntimeProfiler
 
 
 def _checkpoint_dir_size_bytes(checkpoint_dir: Path) -> int:

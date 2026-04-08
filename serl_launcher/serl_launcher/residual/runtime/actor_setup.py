@@ -28,7 +28,7 @@ from serl_launcher.residual.data.training_loader import load_residual_training_b
 from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
 from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
 from serl_launcher.residual.runtime.actor_support import initialize_actor_loop_state
-from serl_launcher.residual.runtime.algorithm import build_residual_algorithm
+from serl_launcher.residual.algorithms.base import build_residual_algorithm
 from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeConfig
 from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeState
 from serl_launcher.residual.runtime.agentlace_bridge import create_agentlace_async_learner
@@ -40,15 +40,15 @@ from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
 from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
-from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
+from serl_launcher.training.checkpoint import _AsyncCheckpointWriter
 from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
 from serl_launcher.residual.runtime.config_utils import resolve_action_mask_from_cfg
 from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
 from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
 from serl_launcher.residual.runtime.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.runtime.pretrain import _pretrain_critic_with_calql
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
-from serl_launcher.residual.runtime.profiling import _profile_call
+from serl_launcher.training.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _profile_call
 from serl_launcher.residual.runtime.schedules import _epsilon_gating_clock
 from serl_launcher.residual.runtime.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.runtime.schedules import _scheduled_alpha

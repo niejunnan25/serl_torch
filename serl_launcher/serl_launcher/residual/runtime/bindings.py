@@ -8,7 +8,7 @@ from typing import Protocol
 
 from serl_launcher.data.normalizer import StateActionNormalizer
 from serl_launcher.policy.base import PolicyInput
-from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _RuntimeProfiler
 
 
 class ResidualDataBindings(Protocol):
