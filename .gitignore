@@ -181,6 +181,7 @@ pretrained_models/
 
 # Generated example data
 examples/libero/data/**
+examples/libero/configs/
 examples/libero/training_logs/
 examples/libero/.local/
 .libero/
