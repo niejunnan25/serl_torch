@@ -154,4 +154,3 @@ class ResidualTrainingSchema:
 
 
 LIBERO_RESIDUAL_TRAINING_SCHEMA = ResidualTrainingSchema()
-

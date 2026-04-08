@@ -77,4 +77,3 @@ def make_residual_data_config(
     if register:
         return register_residual_data_config(data_config)
     return data_config
-
