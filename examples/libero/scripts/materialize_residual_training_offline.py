@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import pickle
 import sys
 import time
@@ -12,21 +13,24 @@ from typing import Iterable, Iterator, Optional, Sequence, TypeVar
 
 import h5py
 import numpy as np
+from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
+from serl_launcher.policy.base import PolicyClient
+from serl_launcher.policy.factory import build_policy_backend_info
+from serl_launcher.policy.factory import build_policy_client
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.action_spec import resolve_control_indices
 from serl_launcher.residual.data.materialize import build_residual_training_manifest
 from serl_launcher.residual.data.materialize import materialize_with_config
-from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_torch.examples.libero.hdf5_utils import resolve_task_specs
 from serl_torch.examples.libero.training_config import LIBERO_OFFLINE_TRAINING_CONFIG
-from serl_torch.examples.libero.runtime import build_libero_policy_input
+from serl_torch.examples.libero.runtime.policy_adapter import build_libero_policy_input
 
 _T = TypeVar("_T")
 
@@ -93,10 +97,29 @@ def _build_frame_obs(payload: dict, frame_idx: int) -> dict:
     }
 
 
+def _build_policy_cfg_from_args(args: argparse.Namespace):
+    return OmegaConf.create(
+        {
+            "policy": {
+                "type": str(args.policy_type),
+                "id": (
+                    str(args.policy_id).strip()
+                    if args.policy_id is not None
+                    else str(args.policy_type)
+                ),
+            },
+            "openpi": {
+                "host": str(args.openpi_host),
+                "port": int(args.openpi_port),
+            },
+        }
+    )
+
+
 def _precompute_base_chunks(
     payload: dict,
     *,
-    openpi_client: OpenPIPolicyClient,
+    policy_client: PolicyClient,
     chunk_horizon: int,
     progress_desc: str | None = None,
 ) -> np.ndarray:
@@ -114,7 +137,7 @@ def _precompute_base_chunks(
         )
     for chunk_start in chunk_starts:
         obs_raw = _build_frame_obs(payload, chunk_start)
-        action_chunk, _ = openpi_client.infer_chunk(
+        action_chunk, _ = policy_client.infer_chunk(
             build_libero_policy_input(
                 obs_raw,
                 str(payload["task_description"]),
@@ -134,7 +157,8 @@ def _convert_demo(
     dataset_path: Path,
     episode_index: int,
     chunk_horizon: int,
-    openpi_client: OpenPIPolicyClient,
+    policy_client: PolicyClient,
+    policy_backend_info: dict,
     demo_name: str,
     residual_alpha: float,
     action_mask: np.ndarray,
@@ -184,7 +208,7 @@ def _convert_demo(
     }
     base_chunks = _precompute_base_chunks(
         raw_payload,
-        openpi_client=openpi_client,
+        policy_client=policy_client,
         chunk_horizon=chunk_horizon,
         progress_desc=f"{task_name} ep={episode_index:03d}",
     )
@@ -214,6 +238,8 @@ def _convert_demo(
             "episode_success": bool(num_steps > 0),
             "metadata": {
                 "source_episode_format": "libero_hdf5_demo",
+                "base_policy_type": str(policy_backend_info["type"]),
+                "base_policy_id": str(policy_backend_info["id"]),
                 "task_name": str(task_name),
                 "dataset_path": str(dataset_path),
                 "demo_name": str(demo_name),
@@ -263,10 +289,22 @@ def main() -> None:
     parser.add_argument("--chunk_horizon", type=int, default=5)
     parser.add_argument("--max_episodes", type=int, default=None)
     parser.add_argument(
+        "--policy_type",
+        type=str,
+        default="openpi",
+        help="Chunk policy backend type used to materialize base_chunks.",
+    )
+    parser.add_argument(
+        "--policy_id",
+        type=str,
+        default=None,
+        help="Semantic base-policy label recorded in exported metadata.",
+    )
+    parser.add_argument(
         "--openpi_host",
         type=str,
         required=True,
-        help="OpenPI host used to materialize base_chunks",
+        help="OpenPI host used when policy_type=openpi.",
     )
     parser.add_argument("--openpi_port", type=int, default=30001)
     parser.add_argument(
@@ -304,7 +342,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    openpi_client = OpenPIPolicyClient(host=args.openpi_host, port=args.openpi_port)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s %(message)s",
+    )
+    logger = logging.getLogger("libero_materialize_residual_training_offline")
+
+    policy_cfg = _build_policy_cfg_from_args(args)
+    policy_backend_info = build_policy_backend_info(policy_cfg)
+    policy_client = build_policy_client(policy_cfg, logger=logger)
+    logger.info(
+        "Chunk policy backend: type=%s id=%s",
+        policy_backend_info["type"],
+        policy_backend_info["id"],
+    )
 
     output_root = Path(args.output_dir).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -340,7 +391,7 @@ def main() -> None:
 
             print(
                 f"[task] {task_spec.task_key}: episodes={len(demo_names)} "
-                f"openpi_precompute=True"
+                f"policy_precompute={policy_backend_info['type']}"
             )
             episode_iter: Iterator[tuple[int, str]] | Iterable[tuple[int, str]]
             episode_iter = enumerate(demo_names)
@@ -380,7 +431,8 @@ def main() -> None:
                     dataset_path=task_spec.dataset_path,
                     episode_index=episode_index,
                     chunk_horizon=int(args.chunk_horizon),
-                    openpi_client=openpi_client,
+                    policy_client=policy_client,
+                    policy_backend_info=policy_backend_info,
                     demo_name=demo_name,
                     residual_alpha=float(args.residual_alpha),
                     action_mask=np.asarray(resolved_action_mask, dtype=bool),
@@ -411,16 +463,19 @@ def main() -> None:
             total_frames=int(total_frames),
             episode_files=manifest_files,
             metadata={
+                "base_policy_type": str(policy_backend_info["type"]),
+                "base_policy_id": str(policy_backend_info["id"]),
                 "task_name": task_spec.task_name,
                 "dataset_path": str(task_spec.dataset_path),
-                "openpi_host": args.openpi_host,
-                "openpi_port": int(args.openpi_port),
                 "residual_alpha": float(args.residual_alpha),
                 "expert_reference_scale": float(args.expert_reference_scale),
                 "clip_residual_to_unit": bool(args.clip_residual_to_unit),
                 "elapsed_sec": float(time.time() - t0),
             },
         )
+        if str(policy_backend_info["type"]) == "openpi":
+            manifest["metadata"]["openpi_host"] = args.openpi_host
+            manifest["metadata"]["openpi_port"] = int(args.openpi_port)
         manifest_path = task_output_dir / "manifest.json"
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)

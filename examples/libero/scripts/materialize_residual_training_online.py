@@ -19,14 +19,15 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_launcher.policy.openpi.client import OpenPIPolicyClient
+from serl_launcher.policy.factory import build_policy_backend_info
+from serl_launcher.policy.factory import build_policy_client
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.data.materialize import build_residual_training_manifest
 from serl_launcher.residual.data.materialize import materialize_with_config
 from serl_launcher.residual.runtime.config_utils import set_global_seeds
 from serl_torch.examples.libero.training_config import LIBERO_ONLINE_TRAINING_CONFIG
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
-from serl_torch.examples.libero.runtime import build_libero_policy_input
+from serl_torch.examples.libero.runtime.policy_adapter import build_libero_policy_input
 
 _T = TypeVar("_T")
 DEFAULT_CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
@@ -228,10 +229,12 @@ def main() -> None:
     )
 
     env = _create_env(cfg, logger)
-    openpi_client = OpenPIPolicyClient(
-        host=str(cfg.openpi.host),
-        port=int(cfg.openpi.port),
-        logger=logger,
+    policy_backend_info = build_policy_backend_info(cfg)
+    policy_client = build_policy_client(cfg, logger=logger)
+    logger.info(
+        "Chunk policy backend: type=%s id=%s",
+        policy_backend_info["type"],
+        policy_backend_info["id"],
     )
 
     seed_cursor = int(cfg.task.seed_base)
@@ -283,7 +286,7 @@ def main() -> None:
             episode_done = False
 
             while (episode_steps < max_episode_steps) and (not episode_done):
-                openpi_chunk, _ = openpi_client.infer_chunk(
+                openpi_chunk, _ = policy_client.infer_chunk(
                     build_libero_policy_input(
                         obs_raw,
                         env.current_instruction,
@@ -394,6 +397,8 @@ def main() -> None:
                     "episode_success": bool(episode_success),
                     "metadata": {
                         "collection_mode": mode,
+                        "base_policy_type": str(policy_backend_info["type"]),
+                        "base_policy_id": str(policy_backend_info["id"]),
                         "seed": int(seed),
                         "applied_seed": (
                             int(env.last_seed) if env.last_seed is not None else int(seed)
@@ -435,10 +440,10 @@ def main() -> None:
         episode_files=manifest_files,
         metadata={
             "collection_mode": mode,
+            "base_policy_type": str(policy_backend_info["type"]),
+            "base_policy_id": str(policy_backend_info["id"]),
             "config_path": str(config_path),
             "overrides": list(overrides),
-            "openpi_host": str(cfg.openpi.host),
-            "openpi_port": int(cfg.openpi.port),
             "env_backend": str(cfg.env.backend),
             "env_host": str(cfg.env.get("remote", {}).get("host", "127.0.0.1"))
             if str(cfg.env.backend).lower() == "remote"
@@ -457,6 +462,9 @@ def main() -> None:
             "elapsed_sec": float(time.time() - t0),
         },
     )
+    if str(policy_backend_info["type"]) == "openpi":
+        manifest["metadata"]["openpi_host"] = str(cfg.openpi.host)
+        manifest["metadata"]["openpi_port"] = int(cfg.openpi.port)
     manifest_path = task_output_dir / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)

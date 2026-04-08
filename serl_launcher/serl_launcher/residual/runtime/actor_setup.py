@@ -86,7 +86,11 @@ def build_actor_runtime_session(
 
     policy_backend_info = build_policy_backend_info(cfg)
     policy_client = build_policy_client(cfg, logger=logger)
-    logger.info("Chunk policy backend: %s", policy_backend_info["type"])
+    logger.info(
+        "Chunk policy backend: type=%s id=%s",
+        policy_backend_info["type"],
+        policy_backend_info["id"],
+    )
     stack_horizon = int(cfg.sac.obs_stack_horizon)
     if stack_horizon != 1:
         raise ValueError("Only obs_stack_horizon=1 is currently supported")

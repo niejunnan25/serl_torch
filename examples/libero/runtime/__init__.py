@@ -1,4 +1,7 @@
 """LIBERO runtime adapters for residual training and evaluation."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.profiling import _profile_call
@@ -9,8 +12,9 @@ from .obs_adapter import build_residual_step_core
 from .obs_adapter import build_residual_step_obs
 from .obs_adapter import extract_residual_images
 from .policy_adapter import build_libero_policy_input
-from .runtime_bindings import LiberoRuntimeBindings
-from .runtime_bindings import build_libero_runtime_bindings
+
+if TYPE_CHECKING:
+    from .runtime_bindings import LiberoRuntimeBindings
 
 
 def build_residual_step_obs_profiled(
@@ -25,6 +29,14 @@ def build_residual_step_obs_profiled(
         *args,
         **kwargs,
     )
+
+
+def __getattr__(name: str):
+    if name in {"LiberoRuntimeBindings", "build_libero_runtime_bindings"}:
+        from . import runtime_bindings as _runtime_bindings
+
+        return getattr(_runtime_bindings, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [

@@ -13,7 +13,8 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
-from serl_launcher.policy.openpi.client import OpenPIPolicyClient
+from serl_launcher.policy.factory import build_policy_backend_info
+from serl_launcher.policy.factory import build_policy_client
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action
@@ -39,9 +40,9 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.env_wrappers import LiberoTaskEnv
 from serl_torch.examples.libero.env_wrappers import RemoteLiberoTaskEnv
 from serl_torch.examples.libero.config import resolve_libero_cfg_image_keys
-from serl_torch.examples.libero.runtime import LiberoObservationCache
-from serl_torch.examples.libero.runtime import build_libero_policy_input
-from serl_torch.examples.libero.runtime import build_residual_step_obs
+from serl_torch.examples.libero.runtime.obs_adapter import LiberoObservationCache
+from serl_torch.examples.libero.runtime.obs_adapter import build_residual_step_obs
+from serl_torch.examples.libero.runtime.policy_adapter import build_libero_policy_input
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -124,10 +125,12 @@ def main(cfg: DictConfig) -> None:
         bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
     )
 
-    openpi_client = OpenPIPolicyClient(
-        host=str(cfg.openpi.host),
-        port=int(cfg.openpi.port),
-        logger=logger,
+    policy_backend_info = build_policy_backend_info(cfg)
+    policy_client = build_policy_client(cfg, logger=logger)
+    logger.info(
+        "Chunk policy backend: type=%s id=%s",
+        policy_backend_info["type"],
+        policy_backend_info["id"],
     )
 
     image_keys = resolve_libero_cfg_image_keys(cfg)
@@ -263,7 +266,7 @@ def main(cfg: DictConfig) -> None:
                     min(probing_steps_target, max_episode_steps - episode_steps)
                 )
                 while probing_remaining > 0 and episode_steps < max_episode_steps:
-                    probe_chunk, probe_info = openpi_client.infer_chunk(
+                    probe_chunk, probe_info = policy_client.infer_chunk(
                         _policy_input(obs_raw, env.current_instruction)
                     )
                     probe_base_chunk = select_action_chunk_window(
@@ -326,7 +329,7 @@ def main(cfg: DictConfig) -> None:
             while episode_steps < max_episode_steps:
                 if decision_done:
                     break
-                openpi_chunk, infer_info = openpi_client.infer_chunk(
+                openpi_chunk, infer_info = policy_client.infer_chunk(
                     _policy_input(obs_raw, env.current_instruction)
                 )
                 base_chunk = select_action_chunk_window(
@@ -571,6 +574,8 @@ def main(cfg: DictConfig) -> None:
             "total_policy_steps": int(total_policy_steps),
             "total_success": int(total_success),
             "success_rate": float(total_success / max(1, int(episode_id))),
+            "base_policy_type": str(policy_backend_info["type"]),
+            "base_policy_id": str(policy_backend_info["id"]),
             "checkpoint_loaded": checkpoint_loaded,
             "checkpoint_path": checkpoint_path,
             "chunk_horizon": int(chunk_horizon),

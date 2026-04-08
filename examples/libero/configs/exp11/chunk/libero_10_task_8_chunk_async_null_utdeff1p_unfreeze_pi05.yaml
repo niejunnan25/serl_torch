@@ -33,6 +33,10 @@ openpi:
   host: localhost
   port: 40041
 
+policy:
+  type: openpi
+  id: pi05_libero
+
 env:
   action_dim: 7
   backend: remote
