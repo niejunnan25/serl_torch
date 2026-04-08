@@ -18,7 +18,7 @@ from serl_launcher.residual.train.actor.support import new_progress
 from serl_launcher.residual.train.obs_utils import _clone_obs_dict
 from serl_launcher.residual.train.obs_utils import _zero_obs_like
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.runtime.train_loop_utils import _insert_online_transition
+from serl_launcher.residual.train.transitions import _insert_online_transition
 
 
 def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> None:

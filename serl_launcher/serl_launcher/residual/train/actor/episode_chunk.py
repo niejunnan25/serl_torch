@@ -21,11 +21,11 @@ from serl_launcher.residual.train.actor.support import replay_progress_size
 from serl_launcher.residual.train.actor.support import resolve_train_gate
 from serl_launcher.training.profiling import _profile_call
 from serl_launcher.residual.train.schedules import _scheduled_alpha
-from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
-from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window
-from serl_launcher.residual.runtime.train_loop_utils import _count_env_step_update_triggers
-from serl_launcher.residual.runtime.train_loop_utils import _iter_period_hits
-from serl_launcher.residual.runtime.train_loop_utils import _remaining_train_budget_steps
+from serl_launcher.residual.train.telemetry import _append_tb_step_window
+from serl_launcher.residual.train.telemetry import _flush_tb_step_window
+from serl_launcher.training.loop_utils import _count_env_step_update_triggers
+from serl_launcher.training.loop_utils import _iter_period_hits
+from serl_launcher.training.loop_utils import _remaining_train_budget_steps
 
 
 def execute_chunk_decision(

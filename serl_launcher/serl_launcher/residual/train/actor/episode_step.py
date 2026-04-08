@@ -22,8 +22,8 @@ from serl_launcher.residual.train.obs_utils import _clone_obs_dict
 from serl_launcher.residual.train.obs_utils import _zero_obs_like
 from serl_launcher.training.profiling import _profile_call
 from serl_launcher.residual.train.schedules import _scheduled_alpha
-from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
-from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window
+from serl_launcher.residual.train.telemetry import _append_tb_step_window
+from serl_launcher.residual.train.telemetry import _flush_tb_step_window
 
 
 def execute_step_decision(

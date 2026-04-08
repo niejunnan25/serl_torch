@@ -55,7 +55,7 @@ from serl_launcher.residual.train.schedules import _epsilon_gating_clock
 from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
-from serl_launcher.residual.runtime.tb_metrics import _new_tb_step_window
+from serl_launcher.residual.train.telemetry import _new_tb_step_window
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.alpha_utils import validate_alpha
 from serl_launcher.utils.logger import JsonlLogger
