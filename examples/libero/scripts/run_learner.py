@@ -17,7 +17,7 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.runtime.runtime_bindings import build_libero_data_bindings
+from serl_torch.examples.libero.runtime.data_bindings import build_libero_data_bindings
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train_residual_sac")
