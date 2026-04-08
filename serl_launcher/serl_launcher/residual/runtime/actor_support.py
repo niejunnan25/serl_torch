@@ -19,11 +19,8 @@ from serl_launcher.residual.runtime.async_learning import _AsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
-from serl_launcher.residual.runtime.async_learning import _sync_agent_modules_inplace
 from serl_launcher.residual.runtime.checkpoint import _CheckpointTask
-from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.residual.runtime.checkpoint import _write_checkpoint_payload
-from serl_launcher.residual.runtime.config_utils import build_drq_agent
 from serl_launcher.residual.runtime.schedules import _scheduled_epsilon_gating_probability
 
 
@@ -314,7 +311,7 @@ def save_checkpoint_at_step(
             keep=ctx.checkpoint_keep,
         )
     else:
-        checkpoint_payload = _snapshot_agent_checkpoint_payload(
+        checkpoint_payload = ctx.algorithm.snapshot_checkpoint_payload(
             ctx.learner_agent,
             step=int(checkpoint_step),
         )
@@ -417,6 +414,7 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
             agentlace_replay_buffer = ctx.replay_buffer
             ctx.async_learner = create_agentlace_async_learner(
                 config=ctx.agentlace_bridge_config,
+                algorithm=ctx.algorithm,
                 actor_agent=ctx.agent,
                 replay_buffer=agentlace_replay_buffer,
                 offline_buffer=(
@@ -436,6 +434,7 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
 
         if ctx.async_backend == "process":
             ctx.async_learner = _ProcessAsyncLearner(
+                algorithm=ctx.algorithm,
                 actor_agent=ctx.agent,
                 online_buffer=ctx.replay_buffer,
                 offline_buffer=ctx.offline_buffer if ctx.offline_enabled else None,
@@ -458,7 +457,7 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
             ctx.async_learner.start()
             return
 
-        ctx.agent = build_drq_agent(
+        ctx.agent = ctx.algorithm.build_actor_agent(
             ctx.cfg,
             sample_obs=ctx.sample_obs,
             action_dim=ctx.agent_action_dim,
@@ -467,8 +466,9 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
             action_transform=ctx.action_transform,
             device=ctx.async_actor_device,
         )
-        _sync_agent_modules_inplace(ctx.agent, ctx.learner_agent)
+        ctx.algorithm.sync_modules(ctx.agent, ctx.learner_agent)
         ctx.async_learner = _AsyncLearner(
+            algorithm=ctx.algorithm,
             learner_agent=ctx.learner_agent,
             actor_agent=ctx.agent,
             online_buffer=ctx.replay_buffer,

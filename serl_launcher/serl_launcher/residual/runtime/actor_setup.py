@@ -28,6 +28,7 @@ from serl_launcher.residual.data.training_loader import load_residual_training_b
 from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
 from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
 from serl_launcher.residual.runtime.actor_support import initialize_actor_loop_state
+from serl_launcher.residual.runtime.algorithm import build_residual_algorithm
 from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeConfig
 from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeState
 from serl_launcher.residual.runtime.agentlace_bridge import create_agentlace_async_learner
@@ -38,10 +39,8 @@ from serl_launcher.residual.runtime.async_learning import _AsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
-from serl_launcher.residual.runtime.async_learning import _sync_agent_modules_inplace
 from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
 from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
-from serl_launcher.residual.runtime.config_utils import build_drq_agent
 from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
 from serl_launcher.residual.runtime.config_utils import resolve_action_mask_from_cfg
 from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
@@ -84,6 +83,8 @@ def build_actor_runtime_session(
         obs_state_mode,
         bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
     )
+    algorithm = build_residual_algorithm(cfg)
+    logger.info("Residual algorithm: %s", algorithm.name)
 
     policy_backend_info = build_policy_backend_info(cfg)
     policy_client = build_policy_client(cfg, logger=logger)
@@ -877,7 +878,7 @@ def build_actor_runtime_session(
         if async_enabled and async_backend in {"process", "agentlace"}
         else None
     )
-    learner_agent = build_drq_agent(
+    learner_agent = algorithm.build_learner_agent(
         cfg,
         sample_obs=sample_obs,
         action_dim=agent_action_dim,
@@ -887,7 +888,7 @@ def build_actor_runtime_session(
         device=learner_agent_device,
     )
     if async_enabled and async_backend in {"process", "agentlace"}:
-        agent = build_drq_agent(
+        agent = algorithm.build_actor_agent(
             cfg,
             sample_obs=sample_obs,
             action_dim=agent_action_dim,
@@ -896,7 +897,7 @@ def build_actor_runtime_session(
             action_transform=action_transform,
             device=actor_agent_device,
         )
-        _sync_agent_modules_inplace(agent, learner_agent)
+        algorithm.sync_modules(agent, learner_agent)
         if not manage_learner_state_locally:
             learner_agent = agent
     else:
@@ -1008,6 +1009,7 @@ def build_actor_runtime_session(
             chunk_horizon=int(chunk_horizon),
             state_mode=str(obs_state_mode),
             learner_agent=learner_agent,
+            algorithm=algorithm,
             logger=logger,
         )
 
@@ -1018,6 +1020,7 @@ def build_actor_runtime_session(
             )
         async_learner = create_agentlace_async_learner(
             config=replace(agentlace_bridge_config, spawn_local_worker=False),
+            algorithm=algorithm,
             actor_agent=agent,
             replay_buffer=replay_buffer,
             offline_buffer=None,
@@ -1149,6 +1152,7 @@ def build_actor_runtime_session(
             agentlace_replay_buffer = replay_buffer
             async_learner = create_agentlace_async_learner(
                 config=agentlace_bridge_config,
+                algorithm=algorithm,
                 actor_agent=agent,
                 replay_buffer=agentlace_replay_buffer,
                 offline_buffer=(
@@ -1166,6 +1170,7 @@ def build_actor_runtime_session(
             replay_buffer = async_learner.replay_proxy
         elif async_backend == "process":
             async_learner = _ProcessAsyncLearner(
+                algorithm=algorithm,
                 actor_agent=agent,
                 online_buffer=replay_buffer,
                 offline_buffer=offline_buffer if offline_enabled else None,
@@ -1187,7 +1192,7 @@ def build_actor_runtime_session(
             )
             async_learner.start()
         else:
-            agent = build_drq_agent(
+            agent = algorithm.build_actor_agent(
                 cfg,
                 sample_obs=sample_obs,
                 action_dim=agent_action_dim,
@@ -1196,8 +1201,9 @@ def build_actor_runtime_session(
                 action_transform=action_transform,
                 device=async_actor_device,
             )
-            _sync_agent_modules_inplace(agent, learner_agent)
+            algorithm.sync_modules(agent, learner_agent)
             async_learner = _AsyncLearner(
+                algorithm=algorithm,
                 learner_agent=learner_agent,
                 actor_agent=agent,
                 online_buffer=replay_buffer,
@@ -1256,6 +1262,7 @@ def build_actor_runtime_session(
         async_eval_watcher_path=async_eval_watcher_path,
     )
     ctx.update(
+        algorithm=algorithm,
         env=env,
         policy_backend_info=policy_backend_info,
         policy_client=policy_client,

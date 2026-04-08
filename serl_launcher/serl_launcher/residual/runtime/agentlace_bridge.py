@@ -9,9 +9,9 @@ from typing import Any
 from typing import Dict
 from typing import Optional
 
+from serl_launcher.residual.runtime.algorithm import ResidualAlgorithm
 from serl_launcher.residual.runtime.async_learning import _AgentlaceAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
-from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.train_loop_utils import _count_env_step_update_triggers
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
@@ -73,6 +73,7 @@ def _replay_capacity(buffer: Any) -> Optional[int]:
 def create_agentlace_async_learner(
     *,
     config: AgentlaceBridgeConfig,
+    algorithm: ResidualAlgorithm,
     actor_agent: Any,
     replay_buffer: Any,
     offline_buffer: Optional[Any],
@@ -84,6 +85,7 @@ def create_agentlace_async_learner(
     action_transform: Any,
 ) -> _AgentlaceAsyncLearner:
     async_learner = _AgentlaceAsyncLearner(
+        algorithm=algorithm,
         actor_agent=actor_agent,
         replay_buffer=replay_buffer,
         offline_buffer=offline_buffer,
@@ -128,6 +130,7 @@ def save_actor_bootstrap(
     chunk_horizon: int,
     state_mode: str,
     learner_agent: Any,
+    algorithm: ResidualAlgorithm,
     logger: logging.Logger,
 ) -> Path:
     bootstrap_path = resolve_agentlace_bootstrap_path(
@@ -148,7 +151,7 @@ def save_actor_bootstrap(
             "chunk_step_enabled": bool(chunk_step_enabled),
             "chunk_horizon": int(chunk_horizon),
             "state_mode": str(state_mode),
-            "initial_agent_payload": _snapshot_agent_checkpoint_payload(
+            "initial_agent_payload": algorithm.snapshot_checkpoint_payload(
                 learner_agent,
                 step=int(learner_agent.state.step),
             ),

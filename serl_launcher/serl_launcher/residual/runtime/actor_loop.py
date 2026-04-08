@@ -62,7 +62,6 @@ from serl_launcher.residual.runtime.async_learning import _AsyncLearner
 from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
-from serl_launcher.residual.runtime.async_learning import _sync_agent_modules_inplace
 from serl_launcher.residual.runtime.actor_support import ActorLoopState
 from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
 from serl_launcher.residual.runtime.actor_support import advance_async_update_calls
@@ -82,31 +81,15 @@ from serl_launcher.residual.runtime.actor_support import send_agentlace_timer_st
 from serl_launcher.residual.runtime.actor_support import sync_async_bounded_lag_baseline
 from serl_launcher.residual.runtime.actor_support import update_train_progress
 from serl_launcher.residual.runtime.actor_support import wait_for_async_learner_budget
-from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
-from serl_launcher.residual.runtime.checkpoint import _CheckpointTask
-from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
-from serl_launcher.residual.runtime.checkpoint import _write_checkpoint_payload
-from serl_launcher.residual.runtime.config_utils import build_drq_agent
-from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
-from serl_launcher.residual.runtime.config_utils import resolve_action_mask_from_cfg
-from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
-from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
 from serl_launcher.residual.runtime.config_utils import sample_probing_steps
-from serl_launcher.residual.runtime.config_utils import set_global_seeds
 from serl_launcher.residual.runtime.obs_utils import _clone_obs_dict
-from serl_launcher.residual.runtime.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.runtime.obs_utils import _zero_obs_like
-from serl_launcher.residual.runtime.pretrain import _pretrain_critic_with_calql
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.profiling import _emit_profiling_snapshot
 from serl_launcher.residual.runtime.profiling import _profile_call
 from serl_launcher.residual.runtime.replay_batch import _consume_prepared_replay_batch
 from serl_launcher.residual.runtime.replay_batch import _prepare_replay_batch
-from serl_launcher.residual.runtime.schedules import _epsilon_gating_clock
-from serl_launcher.residual.runtime.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.runtime.schedules import _scheduled_alpha
-from serl_launcher.residual.runtime.schedules import _scheduled_epsilon_gating_probability
-from serl_launcher.residual.runtime.step_chunk_replay import ChunkReplayBuffer
 from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
 from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window
 from serl_launcher.residual.runtime.tb_metrics import _log_update_metrics
@@ -117,14 +100,9 @@ from serl_launcher.residual.runtime.train_loop_utils import _iter_period_hits
 from serl_launcher.residual.runtime.train_loop_utils import _remaining_train_budget_steps
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.alpha_utils import validate_alpha
-from serl_launcher.utils.logger import JsonlLogger
 from serl_launcher.utils.serialization import _to_jsonable
 
 from torch.utils.tensorboard import SummaryWriter
-
-from serl_launcher.data.replay_buffer import ReplayBuffer
-
-
 
 
 def run_actor_loop(
@@ -138,6 +116,7 @@ def run_actor_loop(
     env = ctx.env
     policy_client = ctx.policy_client
     policy_prefetcher = ctx.policy_prefetcher
+    algorithm = ctx.algorithm
     stack_horizon = int(ctx.stack_horizon)
     obs_state_mode = str(ctx.obs_state_mode)
     env_action_dim = int(ctx.env_action_dim)
@@ -609,8 +588,10 @@ def run_actor_loop(
                                     )
                                 else:
                                     sample_actions_start = time.perf_counter()
-                                    sampled = agent.sample_actions(
-                                        obs_input, deterministic=False
+                                    sampled = algorithm.sample_actions(
+                                        agent,
+                                        obs_input,
+                                        deterministic=False,
                                     )
                                     profiler.record_duration(
                                         "agent_sample_actions",
@@ -963,7 +944,8 @@ def run_actor_loop(
                                         (
                                             learner_agent,
                                             last_update_info,
-                                        ) = learner_agent.update_high_utd(
+                                        ) = algorithm.update_high_utd(
+                                            learner_agent,
                                             batch,
                                             utd_ratio=int(cfg.sac.utd_ratio),
                                         )
@@ -1207,8 +1189,10 @@ def run_actor_loop(
                                         )
                                     else:
                                         sample_actions_start = time.perf_counter()
-                                        sampled = agent.sample_actions(
-                                            obs_input, deterministic=False
+                                        sampled = algorithm.sample_actions(
+                                            agent,
+                                            obs_input,
+                                            deterministic=False,
                                         )
                                         profiler.record_duration(
                                             "agent_sample_actions",
@@ -1514,7 +1498,8 @@ def run_actor_loop(
                                             (
                                                 learner_agent,
                                                 last_update_info,
-                                            ) = learner_agent.update_high_utd(
+                                            ) = algorithm.update_high_utd(
+                                                learner_agent,
                                                 batch,
                                                 utd_ratio=int(cfg.sac.utd_ratio),
                                             )

@@ -18,11 +18,9 @@ import torch
 from omegaconf import DictConfig
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
-from serl_launcher.residual.runtime.async_learning import _apply_agent_snapshot_payload
+from serl_launcher.residual.runtime.algorithm import build_residual_algorithm
 from serl_launcher.residual.runtime.async_learning import run_agentlace_learner_service
 from serl_launcher.residual.runtime.bindings import ResidualDataBindings
-from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
-from serl_launcher.residual.runtime.config_utils import build_drq_agent
 from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
 from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
 from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
@@ -303,6 +301,8 @@ def run_residual_learner_service(
     logger: logging.Logger,
     bindings: ResidualDataBindings,
 ) -> None:
+    algorithm = build_residual_algorithm(cfg)
+    logger.info("Residual algorithm: %s", algorithm.name)
     async_cfg = cfg.training.get("async", None)
     async_enabled = (
         bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
@@ -444,7 +444,7 @@ def run_residual_learner_service(
         state_mode=state_mode,
     )
 
-    learner_agent = build_drq_agent(
+    learner_agent = algorithm.build_learner_agent(
         cfg,
         sample_obs=sample_obs,
         action_dim=int(agent_action_dim),
@@ -455,7 +455,7 @@ def run_residual_learner_service(
     )
     bootstrap_initial_payload = bootstrap.get("initial_agent_payload", None)
     if isinstance(bootstrap_initial_payload, dict):
-        _apply_agent_snapshot_payload(
+        algorithm.apply_snapshot_payload(
             learner_agent,
             bootstrap_initial_payload,
             load_optimizers=True,
@@ -624,7 +624,7 @@ def run_residual_learner_service(
         offline_buffer=offline_buffer,
     )
 
-    initial_payload = _snapshot_agent_checkpoint_payload(
+    initial_payload = algorithm.snapshot_checkpoint_payload(
         learner_agent,
         step=int(learner_agent.state.step),
     )
@@ -636,7 +636,7 @@ def run_residual_learner_service(
         tb_writer=tb_writer,
     )
     if int(critic_pretrain.get("enabled", 0)) > 0:
-        initial_payload = _snapshot_agent_checkpoint_payload(
+        initial_payload = algorithm.snapshot_checkpoint_payload(
             learner_agent,
             step=int(learner_agent.state.step),
         )
@@ -675,6 +675,7 @@ def run_residual_learner_service(
             batch_size=int(cfg.replay.batch_size),
             offline_ratio=float(cfg.offline.ratio),
             symmetric_replay=bool(cfg.offline.get("symmetric_replay", False)),
+            algorithm=algorithm,
             host=async_trainer_host,
             port_number=async_trainer_port,
             broadcast_port=async_broadcast_port,
