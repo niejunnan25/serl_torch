@@ -40,11 +40,13 @@ from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
 from serl_launcher.residual.train.bindings import ResidualRuntimeBindings
+from serl_launcher.residual.train.config import build_residual_action_transform
+from serl_launcher.residual.train.config import resolve_action_mask_from_cfg
+from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
+from serl_launcher.residual.train.config import (
+    resolve_residual_observation_state_mode,
+)
 from serl_launcher.training.checkpoint import _AsyncCheckpointWriter
-from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
-from serl_launcher.residual.runtime.config_utils import resolve_action_mask_from_cfg
-from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
-from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
 from serl_launcher.training.profiling import _RuntimeProfiler

@@ -15,7 +15,7 @@ from serl_launcher.residual.train.actor.episode_shared import EpisodeState
 from serl_launcher.residual.train.actor.episode_shared import flush_episode_step_window
 from serl_launcher.residual.train.actor.episode_step import execute_step_decision
 from serl_launcher.residual.train.actor.support import build_policy_input
-from serl_launcher.residual.runtime.config_utils import sample_probing_steps
+from serl_launcher.residual.train.config import sample_probing_steps
 from serl_launcher.training.profiling import _profile_call
 
 

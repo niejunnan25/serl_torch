@@ -24,7 +24,7 @@ from serl_launcher.policy.factory import build_policy_client
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.data.materialize import build_residual_training_manifest
 from serl_launcher.residual.data.materialize import materialize_with_config
-from serl_launcher.residual.runtime.config_utils import set_global_seeds
+from serl_launcher.training.seeding import set_global_seeds
 from serl_torch.examples.libero.training_config import LIBERO_ONLINE_TRAINING_CONFIG
 from serl_torch.examples.libero.env_wrappers.factory import _create_env
 from serl_torch.examples.libero.runtime.policy_adapter import build_libero_policy_input

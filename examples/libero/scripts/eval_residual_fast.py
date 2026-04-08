@@ -15,21 +15,23 @@ from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
 from serl_launcher.policy.factory import build_policy_backend_info
 from serl_launcher.policy.factory import build_policy_client
+from serl_launcher.agents.continuous.builders import build_drq_agent
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
-from serl_launcher.residual.runtime.config_utils import build_drq_agent
-from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
-from serl_launcher.residual.runtime.config_utils import resolve_control_indices_from_cfg
-from serl_launcher.residual.runtime.config_utils import resolve_residual_observation_state_mode
-from serl_launcher.residual.runtime.config_utils import sample_probing_steps
-from serl_launcher.residual.runtime.config_utils import set_global_seeds
+from serl_launcher.residual.train.config import build_residual_action_transform
+from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
+from serl_launcher.residual.train.config import (
+    resolve_residual_observation_state_mode,
+)
+from serl_launcher.residual.train.config import sample_probing_steps
 from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.train.schedules import _epsilon_gating_eval_force_on
 from serl_launcher.residual.train.schedules import _scheduled_epsilon_gating_probability
+from serl_launcher.training.seeding import set_global_seeds
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.logger import JsonlLogger
 

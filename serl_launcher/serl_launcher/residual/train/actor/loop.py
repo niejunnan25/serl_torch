@@ -83,7 +83,7 @@ from serl_launcher.residual.train.actor.support import update_train_progress
 from serl_launcher.residual.train.actor.support import wait_for_async_learner_budget
 from serl_launcher.residual.train.actor.episode import EpisodeSpec
 from serl_launcher.residual.train.actor.episode import run_policy_episode
-from serl_launcher.residual.runtime.config_utils import sample_probing_steps
+from serl_launcher.residual.train.config import sample_probing_steps
 from serl_launcher.residual.train.obs_utils import _clone_obs_dict
 from serl_launcher.residual.train.obs_utils import _zero_obs_like
 from serl_launcher.training.profiling import _RuntimeProfiler
