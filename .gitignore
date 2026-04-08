@@ -183,6 +183,7 @@ pretrained_models/
 examples/libero/data/**
 examples/libero/training_logs/
 examples/libero/.local/
+.libero/
 .codex/
 
 
