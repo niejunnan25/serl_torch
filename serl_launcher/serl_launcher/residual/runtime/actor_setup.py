@@ -39,6 +39,7 @@ from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
 from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
 from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
 from serl_launcher.residual.runtime.async_learning import _sync_agent_modules_inplace
+from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
 from serl_launcher.residual.runtime.checkpoint import _AsyncCheckpointWriter
 from serl_launcher.residual.runtime.config_utils import build_drq_agent
 from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
@@ -64,7 +65,7 @@ def build_actor_runtime_session(
     *,
     run_dir: Path,
     logger: logging.Logger,
-    bindings: Any,
+    bindings: ResidualRuntimeBindings,
     async_eval_watcher_path: Path,
 ):
     env = bindings.env

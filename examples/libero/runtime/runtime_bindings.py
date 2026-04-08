@@ -11,6 +11,7 @@ from typing import Optional
 from omegaconf import DictConfig
 from serl_launcher.data.normalizer import StateActionNormalizer
 from serl_launcher.data.normalizer import load_normalizer
+from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.profiling import _profile_call
 
@@ -24,7 +25,7 @@ from .policy_adapter import build_libero_policy_input
 
 
 @dataclass
-class LiberoRuntimeBindings:
+class LiberoRuntimeBindings(ResidualRuntimeBindings):
     env: Any
     image_keys: tuple[str, ...]
     normalizer: StateActionNormalizer | None

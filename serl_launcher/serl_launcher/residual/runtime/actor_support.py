@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 from tqdm.auto import tqdm
 
+from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
 from serl_launcher.residual.runtime.agentlace_bridge import advance_async_target_update_calls
 from serl_launcher.residual.runtime.agentlace_bridge import create_agentlace_async_learner
 from serl_launcher.residual.runtime.agentlace_bridge import maybe_send_agentlace_timer_stats
@@ -41,7 +42,7 @@ class ActorRuntimeContext:
     cfg: Any
     run_dir: Path
     logger: Any
-    bindings: Any
+    bindings: ResidualRuntimeBindings
     async_eval_watcher_path: Path
     values: Dict[str, Any] = field(default_factory=dict)
 
