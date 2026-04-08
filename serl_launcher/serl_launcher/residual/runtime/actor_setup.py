@@ -1257,13 +1257,6 @@ def build_actor_runtime_session(
     )
     ctx.update(
         env=env,
-        normalizer=normalizer,
-        image_keys=image_keys,
-        obs_cache=obs_cache,
-        task_key=task_key,
-        data_config=data_config,
-        build_residual_step_obs_profiled=build_residual_step_obs_profiled,
-        build_residual_step_core=build_residual_step_core,
         policy_backend_info=policy_backend_info,
         policy_client=policy_client,
         policy_prefetcher=policy_prefetcher,

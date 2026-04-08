@@ -129,6 +129,62 @@ def build_policy_input(
     return ctx.bindings.build_policy_input(obs_raw, prompt, cache_key=cache_key)
 
 
+def runtime_image_keys(ctx: ActorRuntimeContext) -> tuple[str, ...]:
+    return tuple(ctx.bindings.image_keys)
+
+
+def runtime_normalizer(ctx: ActorRuntimeContext):
+    return ctx.bindings.normalizer
+
+
+def runtime_obs_cache(ctx: ActorRuntimeContext):
+    return ctx.bindings.obs_cache
+
+
+def runtime_task_key(ctx: ActorRuntimeContext) -> str:
+    return str(ctx.bindings.task_key)
+
+
+def runtime_data_config(ctx: ActorRuntimeContext) -> Any:
+    return ctx.bindings.data_config
+
+
+def clear_obs_cache(ctx: ActorRuntimeContext) -> None:
+    runtime_obs_cache(ctx).clear()
+
+
+def build_step_core(
+    ctx: ActorRuntimeContext,
+    obs_raw: Dict[str, Any],
+    *,
+    cache_key: Optional[Any] = None,
+) -> dict[str, Any]:
+    return ctx.bindings.build_step_core(obs_raw, cache_key=cache_key)
+
+
+def build_step_obs_profiled(
+    ctx: ActorRuntimeContext,
+    obs_raw: Dict[str, Any],
+    base_action: Any,
+    *,
+    cache_key: Optional[Any] = None,
+    action_dim: Optional[int] = None,
+    base_action_chunk: Any = None,
+    alpha: Optional[float] = None,
+) -> dict[str, Any]:
+    return ctx.bindings.build_step_obs_profiled(
+        ctx.profiler,
+        obs_raw,
+        base_action,
+        stack_horizon=int(ctx.stack_horizon),
+        cache_key=cache_key,
+        action_dim=action_dim,
+        base_action_chunk=base_action_chunk,
+        alpha=alpha,
+        state_mode=str(ctx.obs_state_mode),
+    )
+
+
 def resolve_train_gate(
     ctx: ActorRuntimeContext,
     *,
@@ -156,9 +212,10 @@ def resolve_train_gate(
 
 def normalize_step_action(ctx: ActorRuntimeContext, action: np.ndarray) -> np.ndarray:
     action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-    if ctx.normalizer is None:
+    normalizer = runtime_normalizer(ctx)
+    if normalizer is None:
         return action_arr.astype(np.float32)
-    return np.asarray(ctx.normalizer.normalize_action(action_arr), dtype=np.float32)
+    return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
 
 
 def build_chunk_step_record(
@@ -172,12 +229,7 @@ def build_chunk_step_record(
     episode_step: int,
     done: bool,
 ) -> Dict[str, Any]:
-    obs_core = ctx.build_residual_step_core(
-        current_obs_raw,
-        image_keys=ctx.image_keys,
-        normalizer=ctx.normalizer,
-        obs_cache=ctx.obs_cache,
-    )
+    obs_core = build_step_core(ctx, current_obs_raw)
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
     final_action_arr = np.asarray(final_action, dtype=np.float32).reshape(-1)
     return {
@@ -376,7 +428,7 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
                 sample_obs=ctx.sample_obs,
                 action_dim=ctx.agent_action_dim,
                 critic_action_dim=ctx.critic_action_dim,
-                image_keys=ctx.image_keys,
+                image_keys=runtime_image_keys(ctx),
                 action_transform=ctx.action_transform,
             )
             ctx.replay_buffer = ctx.async_learner.replay_proxy
@@ -397,7 +449,7 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
                 sample_obs=ctx.sample_obs,
                 action_dim=ctx.agent_action_dim,
                 critic_action_dim=ctx.critic_action_dim,
-                image_keys=ctx.image_keys,
+                image_keys=runtime_image_keys(ctx),
                 action_transform=ctx.action_transform,
                 actor_device=ctx.async_actor_device,
                 learner_device=ctx.async_learner_device,
@@ -410,7 +462,7 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
             ctx.cfg,
             sample_obs=ctx.sample_obs,
             action_dim=ctx.agent_action_dim,
-            image_keys=ctx.image_keys,
+            image_keys=runtime_image_keys(ctx),
             critic_action_dim=ctx.critic_action_dim,
             action_transform=ctx.action_transform,
             device=ctx.async_actor_device,

@@ -10,6 +10,8 @@ from serl_launcher.residual.runtime.actor_support import ActorLoopState
 from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
 from serl_launcher.residual.runtime.actor_support import build_chunk_step_record
 from serl_launcher.residual.runtime.actor_support import build_policy_input
+from serl_launcher.residual.runtime.actor_support import build_step_obs_profiled
+from serl_launcher.residual.runtime.actor_support import clear_obs_cache
 from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
 from serl_launcher.residual.runtime.actor_support import flush_external_agentlace_actor
 from serl_launcher.residual.runtime.actor_support import new_progress
@@ -52,7 +54,7 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
 
         seed = int(state.seed_cursor)
         state.seed_cursor += 1
-        ctx.obs_cache.clear()
+        clear_obs_cache(ctx)
         obs_raw = _profile_call(
             ctx.profiler,
             "env_reset",
@@ -222,16 +224,11 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                     episode_done = True
                     break
                 alpha_step = 0.0
-                obs_input = ctx.build_residual_step_obs_profiled(
-                    ctx.profiler,
+                obs_input = build_step_obs_profiled(
+                    ctx,
                     next_obs_raw,
                     base_chunk[chunk_step],
-                    image_keys=ctx.image_keys,
-                    stack_horizon=ctx.stack_horizon,
-                    normalizer=ctx.normalizer,
-                    obs_cache=ctx.obs_cache,
                     alpha=float(alpha_step),
-                    state_mode=ctx.obs_state_mode,
                 )
                 residual_step_action = np.zeros(
                     (ctx.step_action_dim,), dtype=np.float32
@@ -264,16 +261,11 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                     next_obs_input = _zero_obs_like(obs_input)
                     mask = 0.0
                 elif chunk_step < (ctx.chunk_horizon - 1):
-                    next_obs_input = ctx.build_residual_step_obs_profiled(
-                        ctx.profiler,
+                    next_obs_input = build_step_obs_profiled(
+                        ctx,
                         next_obs_raw,
                         base_chunk[chunk_step + 1],
-                        image_keys=ctx.image_keys,
-                        stack_horizon=ctx.stack_horizon,
-                        normalizer=ctx.normalizer,
-                        obs_cache=ctx.obs_cache,
                         alpha=float(next_alpha_step),
-                        state_mode=ctx.obs_state_mode,
                     )
                     mask = 1.0
                 else:
@@ -290,16 +282,11 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                         horizon=ctx.chunk_horizon,
                         action_dim=ctx.env_action_dim,
                     )
-                    next_obs_input = ctx.build_residual_step_obs_profiled(
-                        ctx.profiler,
+                    next_obs_input = build_step_obs_profiled(
+                        ctx,
                         next_obs_raw,
                         next_base_chunk[0],
-                        image_keys=ctx.image_keys,
-                        stack_horizon=ctx.stack_horizon,
-                        normalizer=ctx.normalizer,
-                        obs_cache=ctx.obs_cache,
                         alpha=float(next_alpha_step),
-                        state_mode=ctx.obs_state_mode,
                     )
                     cached_base_chunk = next_base_chunk
                     cached_infer_info = next_infer_info

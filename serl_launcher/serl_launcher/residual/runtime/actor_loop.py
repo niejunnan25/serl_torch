@@ -68,6 +68,8 @@ from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
 from serl_launcher.residual.runtime.actor_support import advance_async_update_calls
 from serl_launcher.residual.runtime.actor_support import build_chunk_step_record
 from serl_launcher.residual.runtime.actor_support import build_policy_input
+from serl_launcher.residual.runtime.actor_support import build_step_obs_profiled
+from serl_launcher.residual.runtime.actor_support import clear_obs_cache
 from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
 from serl_launcher.residual.runtime.actor_support import flush_external_agentlace_actor
 from serl_launcher.residual.runtime.actor_support import initialize_actor_loop_state
@@ -134,13 +136,6 @@ def run_actor_loop(
     logger = ctx.logger
     bindings = ctx.bindings
     env = ctx.env
-    normalizer = ctx.normalizer
-    image_keys = tuple(ctx.image_keys)
-    obs_cache = ctx.obs_cache
-    task_key = str(ctx.task_key)
-    data_config = ctx.data_config
-    build_residual_step_obs_profiled = ctx.build_residual_step_obs_profiled
-    build_residual_step_core = ctx.build_residual_step_core
     policy_client = ctx.policy_client
     policy_prefetcher = ctx.policy_prefetcher
     stack_horizon = int(ctx.stack_horizon)
@@ -408,7 +403,7 @@ def run_actor_loop(
                             continue
 
                     init_episode_idx += 1
-                    obs_cache.clear()
+                    clear_obs_cache(ctx)
                     obs_raw = _profile_call(
                         profiler,
                         "env_reset",
@@ -580,17 +575,12 @@ def run_actor_loop(
                                 base_alpha=residual_alpha,
                                 schedule_step=schedule_step,
                             )
-                            obs_input = build_residual_step_obs_profiled(
-                                profiler,
+                            obs_input = build_step_obs_profiled(
+                                ctx,
                                 obs_raw,
                                 base_chunk[0],
-                                image_keys=image_keys,
-                                stack_horizon=stack_horizon,
-                                normalizer=normalizer,
-                                obs_cache=obs_cache,
                                 base_action_chunk=base_chunk,
                                 alpha=float(alpha_step),
-                                state_mode=obs_state_mode,
                             )
                             gate_prob, gate_on = resolve_train_gate(ctx,
                                 phase_train_flag=bool(phase_train),
@@ -1183,16 +1173,11 @@ def run_actor_loop(
                                     base_alpha=residual_alpha,
                                     schedule_step=train_env_step_before_step,
                                 )
-                                obs_input = build_residual_step_obs_profiled(
-                                    profiler,
+                                obs_input = build_step_obs_profiled(
+                                    ctx,
                                     next_obs_raw,
                                     base_chunk[chunk_step],
-                                    image_keys=image_keys,
-                                    stack_horizon=stack_horizon,
-                                    normalizer=normalizer,
-                                    obs_cache=obs_cache,
                                     alpha=float(alpha_step),
-                                    state_mode=obs_state_mode,
                                 )
                                 gate_prob, gate_on = resolve_train_gate(ctx,
                                     phase_train_flag=bool(phase_train),
@@ -1369,16 +1354,11 @@ def run_actor_loop(
                                     next_obs_input = _zero_obs_like(obs_input)
                                     mask = 0.0
                                 elif chunk_step < (chunk_horizon - 1):
-                                    next_obs_input = build_residual_step_obs_profiled(
-                                        profiler,
+                                    next_obs_input = build_step_obs_profiled(
+                                        ctx,
                                         next_obs_raw,
                                         base_chunk[chunk_step + 1],
-                                        image_keys=image_keys,
-                                        stack_horizon=stack_horizon,
-                                        normalizer=normalizer,
-                                        obs_cache=obs_cache,
                                         alpha=float(next_alpha_step),
-                                        state_mode=obs_state_mode,
                                     )
                                     mask = 1.0
                                 else:
@@ -1405,16 +1385,11 @@ def run_actor_loop(
                                             horizon=chunk_horizon,
                                             action_dim=env_action_dim,
                                         )
-                                    next_obs_input = build_residual_step_obs_profiled(
-                                        profiler,
+                                    next_obs_input = build_step_obs_profiled(
+                                        ctx,
                                         next_obs_raw,
                                         next_base_chunk[0],
-                                        image_keys=image_keys,
-                                        stack_horizon=stack_horizon,
-                                        normalizer=normalizer,
-                                        obs_cache=obs_cache,
                                         alpha=float(next_alpha_step),
-                                        state_mode=obs_state_mode,
                                     )
                                     cached_base_chunk = next_base_chunk
                                     cached_infer_info = next_infer_info
