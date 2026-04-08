@@ -1,24 +1,12 @@
 """Remote LIBERO environment wrapper via HTTP RPC."""
 from __future__ import annotations
 
-import http.client
 import logging
-import pickle
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-
-def _sanitize_for_pickle(value: Any) -> Any:
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {key: _sanitize_for_pickle(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize_for_pickle(val) for val in value]
-    return value
+from serl_launcher.envs.remote_http import RemoteHttpRpcClient
 
 
 class RemoteLiberoTaskEnv:
@@ -34,7 +22,6 @@ class RemoteLiberoTaskEnv:
         num_steps_wait: int = 10,
         max_episode_steps: Optional[int] = None,
         libero_root: Optional[str] = None,
-        openpi_root: Optional[str] = None,
         libero_config_dir: Optional[str] = None,
         libero_datasets_root: Optional[str] = None,
         env_seed_mode: str = "per_episode",
@@ -57,7 +44,6 @@ class RemoteLiberoTaskEnv:
             None if max_episode_steps is None else int(max_episode_steps)
         )
         self.libero_root = None if libero_root is None else str(libero_root)
-        self.openpi_root = None if openpi_root is None else str(openpi_root)
         self.libero_config_dir = (
             None if libero_config_dir is None else str(libero_config_dir)
         )
@@ -74,7 +60,13 @@ class RemoteLiberoTaskEnv:
         self._task_description: str = ""
         self._step_limit: int = 0
         self._take_action_cnt: int = 0
-        self._conn: Optional[http.client.HTTPConnection] = None
+        self._rpc_client = RemoteHttpRpcClient(
+            host=self.host,
+            port=self.port,
+            timeout_sec=self.timeout_sec,
+            keep_alive=True,
+            logger=self.logger,
+        )
 
         try:
             self._rpc(
@@ -86,7 +78,6 @@ class RemoteLiberoTaskEnv:
                 num_steps_wait=self.num_steps_wait,
                 max_episode_steps=self.max_episode_steps,
                 libero_root=self.libero_root,
-                openpi_root=self.openpi_root,
                 libero_config_dir=self.libero_config_dir,
                 libero_datasets_root=self.libero_datasets_root,
                 env_seed_mode=self.env_seed_mode,
@@ -95,7 +86,7 @@ class RemoteLiberoTaskEnv:
             )
             self._apply_meta(self._rpc("get_meta"))
         except Exception:
-            self._close_conn()
+            self._rpc_client.close()
             raise
 
     @property
@@ -118,92 +109,8 @@ class RemoteLiberoTaskEnv:
     def action_dim(self) -> int:
         return int(self._action_dim)
 
-    def _close_conn(self) -> None:
-        conn, self._conn = self._conn, None
-        if conn is None:
-            return
-        try:
-            conn.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _ensure_conn(self) -> http.client.HTTPConnection:
-        if self._conn is None:
-            self._conn = http.client.HTTPConnection(
-                self.host,
-                self.port,
-                timeout=self.timeout_sec,
-            )
-        return self._conn
-
-    def _reconnect(self) -> http.client.HTTPConnection:
-        self._close_conn()
-        return self._ensure_conn()
-
-    def _rpc_once(self, method: str, payload: bytes) -> Any:
-        conn = self._ensure_conn()
-        conn.request(
-            "POST",
-            "/rpc",
-            body=payload,
-            headers={
-                "Content-Type": "application/octet-stream",
-                "Connection": "keep-alive",
-            },
-        )
-        resp = conn.getresponse()
-        try:
-            resp_bytes = resp.read()
-        finally:
-            if getattr(resp, "will_close", False):
-                self._close_conn()
-
-        if resp.status != 200:
-            self._close_conn()
-            raise RuntimeError(
-                f"remote env rpc failed method={method} status={resp.status} reason={resp.reason}"
-            )
-        data = pickle.loads(resp_bytes)
-        if not isinstance(data, dict):
-            raise RuntimeError(
-                f"remote env rpc invalid response type for method={method}"
-            )
-        if not bool(data.get("ok", False)):
-            err = str(data.get("error", "unknown remote error"))
-            raise RuntimeError(f"remote env rpc method={method} failed: {err}")
-        return data.get("result", None)
-
     def _rpc(self, method: str, **kwargs: Any) -> Any:
-        payload = pickle.dumps(
-            {"method": method, "kwargs": _sanitize_for_pickle(kwargs)},
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
-        last_exc: Optional[BaseException] = None
-        for attempt in range(2):
-            try:
-                return self._rpc_once(method, payload)
-            except (
-                OSError,
-                EOFError,
-                http.client.HTTPException,
-                pickle.PickleError,
-            ) as exc:
-                last_exc = exc
-                self._close_conn()
-                if attempt == 0:
-                    self.logger.debug(
-                        "remote env rpc reconnect: method=%s error=%s",
-                        method,
-                        exc,
-                    )
-                    self._reconnect()
-                    continue
-                break
-
-        assert last_exc is not None
-        raise RuntimeError(
-            f"remote env rpc method={method} transport error: {last_exc}"
-        ) from last_exc
+        return self._rpc_client.call(method, **kwargs)
 
     def _apply_meta(self, meta: Any) -> None:
         if not isinstance(meta, dict):
@@ -286,4 +193,4 @@ class RemoteLiberoTaskEnv:
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("remote env close failed: %s", exc)
         finally:
-            self._close_conn()
+            self._rpc_client.close()

@@ -1,0 +1,900 @@
+from __future__ import annotations
+
+"""
+Residual policy training runtime (chunk base policy + DrQ-SAC).
+
+Minimal residual RL loop:
+1. A chunk policy backend predicts a base action chunk.
+2. Residual policy predicts a residual action (step mode) or residual chunk (chunk mode).
+3. Final action = base action + bounded residual.
+4. Step mode writes step transitions; chunk mode writes a step stream that replay assembles into chunk windows.
+5. DrQ-SAC updates from online replay or mixed online/offline replay.
+
+Recommended runtime split:
+- Base policy server + env server: run in the environment-specific stack.
+- This trainer: run in a serl_torch / newer PyTorch env.
+"""
+
+import json
+import logging
+import subprocess
+import sys
+import threading
+import time
+from collections import deque
+from concurrent.futures import Future
+from dataclasses import replace
+from pathlib import Path
+from typing import IO, Any, Dict, Optional, Tuple
+
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
+
+    # Keep legacy `gym.*` imports working when only Gymnasium is installed.
+    sys.modules["gym"] = gym
+import numpy as np
+import torch
+from tqdm.auto import tqdm
+from omegaconf import DictConfig, OmegaConf
+from serl_launcher.residual.action import as_numpy_action
+from serl_launcher.residual.action import as_numpy_action_chunk
+from serl_launcher.residual.action import compose_residual_action
+from serl_launcher.residual.action import compose_residual_action_chunk
+from serl_launcher.residual.action import select_action_chunk_window
+from serl_launcher.residual.action_spec import build_residual_limits
+from serl_launcher.residual.data.training_loader import load_residual_training_buffer
+from serl_launcher.residual.train.async_eval import _append_async_eval_request
+from serl_launcher.residual.train.async_eval import _init_async_eval_tb_sync_state
+from serl_launcher.residual.train.async_eval import _start_async_eval_watcher
+from serl_launcher.residual.train.async_eval import _stop_async_eval_watcher
+from serl_launcher.residual.train.async_eval import _sync_async_eval_results_to_tb
+from serl_launcher.training.async_runtime.agentlace import _AsyncLearner
+from serl_launcher.training.async_runtime.agentlace import _MixedBatchPrefetcher
+from serl_launcher.training.async_runtime.agentlace import _ProcessAsyncLearner
+from serl_launcher.training.async_runtime.agentlace import _sample_mixed_batch
+from serl_launcher.training.async_runtime.bridge import advance_async_target_update_calls
+from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeConfig
+from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeState
+from serl_launcher.training.async_runtime.bridge import create_agentlace_async_learner
+from serl_launcher.training.async_runtime.bridge import maybe_send_agentlace_timer_stats
+from serl_launcher.training.async_runtime.bridge import maybe_wait_for_async_learner_budget
+from serl_launcher.training.async_runtime.bridge import save_actor_bootstrap
+from serl_launcher.training.async_runtime.bridge import (
+    sync_async_bounded_lag_baseline_from_learner,
+)
+from serl_launcher.residual.train.actor.support import ActorLoopState
+from serl_launcher.residual.train.actor.support import ActorRuntimeContext
+from serl_launcher.residual.train.actor.support import (
+    advance_async_update_calls as advance_async_update_calls_impl,
+)
+from serl_launcher.residual.train.actor.support import build_chunk_step_record
+from serl_launcher.residual.train.actor.support import build_policy_input
+from serl_launcher.residual.train.actor.support import build_step_obs_profiled
+from serl_launcher.residual.train.actor.support import clear_obs_cache
+from serl_launcher.residual.train.actor.support import ensure_training_runtime_started
+from serl_launcher.residual.train.actor.support import flush_external_agentlace_actor
+from serl_launcher.residual.train.actor.support import initialize_actor_loop_state
+from serl_launcher.residual.train.actor.support import new_progress
+from serl_launcher.residual.train.actor.support import replay_progress_size
+from serl_launcher.residual.train.actor.support import resolve_train_gate
+from serl_launcher.residual.train.actor.warmup import run_base_only_warmup
+from serl_launcher.residual.train.actor.support import save_checkpoint_at_step
+from serl_launcher.residual.train.actor.support import send_agentlace_timer_stats
+from serl_launcher.residual.train.actor.support import sync_async_bounded_lag_baseline
+from serl_launcher.residual.train.actor.support import update_train_progress
+from serl_launcher.residual.train.actor.support import wait_for_async_learner_budget
+from serl_launcher.residual.train.actor.episode import EpisodeSpec
+from serl_launcher.residual.train.actor.episode import run_policy_episode
+from serl_launcher.residual.train.config import sample_probing_steps
+from serl_launcher.residual.train.obs_utils import _clone_obs_dict
+from serl_launcher.residual.train.obs_utils import _zero_obs_like
+from serl_launcher.training.profiling import _RuntimeProfiler
+from serl_launcher.training.profiling import _emit_profiling_snapshot
+from serl_launcher.training.profiling import _profile_call
+from serl_launcher.training.replay_batch import _consume_prepared_replay_batch
+from serl_launcher.training.replay_batch import _prepare_replay_batch
+from serl_launcher.residual.train.schedules import _scheduled_alpha
+from serl_launcher.residual.train.telemetry import _append_tb_step_window
+from serl_launcher.residual.train.telemetry import _flush_tb_step_window
+from serl_launcher.residual.train.telemetry import _log_update_metrics
+from serl_launcher.residual.train.telemetry import _new_tb_step_window
+from serl_launcher.residual.train.transitions import _insert_online_transition
+from serl_launcher.training.loop_utils import _count_env_step_update_triggers
+from serl_launcher.training.loop_utils import _iter_period_hits
+from serl_launcher.training.loop_utils import _remaining_train_budget_steps
+from serl_launcher.utils.alpha_utils import require_residual_alpha
+from serl_launcher.utils.alpha_utils import validate_alpha
+from serl_launcher.utils.serialization import _to_jsonable
+
+from torch.utils.tensorboard import SummaryWriter
+
+
+def run_actor_loop(
+    ctx: ActorRuntimeContext,
+    state: ActorLoopState,
+) -> None:
+    cfg = ctx.cfg
+    run_dir = ctx.run_dir
+    logger = ctx.logger
+    bindings = ctx.bindings
+    env = ctx.env
+    policy_client = ctx.policy_client
+    policy_prefetcher = ctx.policy_prefetcher
+    algorithm = ctx.algorithm
+    stack_horizon = int(ctx.stack_horizon)
+    obs_state_mode = str(ctx.obs_state_mode)
+    env_action_dim = int(ctx.env_action_dim)
+    control_indices = ctx.control_indices
+    step_action_dim = int(ctx.step_action_dim)
+    chunk_horizon = int(ctx.chunk_horizon)
+    residual_alpha = float(ctx.residual_alpha)
+    chunk_step_enabled = bool(ctx.chunk_step_enabled)
+    chunk_step_sample_stride = int(ctx.chunk_step_sample_stride)
+    chunk_step_require_full_horizon = bool(ctx.chunk_step_require_full_horizon)
+    chunk_step_pad_action = bool(ctx.chunk_step_pad_action)
+    chunk_step_scheduler_clock = str(ctx.chunk_step_scheduler_clock)
+    agent_action_dim = int(ctx.agent_action_dim)
+    critic_action_dim = int(ctx.critic_action_dim)
+    residual_limits = ctx.residual_limits
+    action_mask = ctx.action_mask
+    epsilon_gating_enabled = bool(ctx.epsilon_gating_enabled)
+    epsilon_gating_clock = str(ctx.epsilon_gating_clock)
+    resolved_cfg_dict = ctx.resolved_cfg_dict
+    offline_enabled = bool(ctx.offline_enabled)
+    offline_ratio = float(ctx.offline_ratio)
+    symmetric_replay = bool(ctx.symmetric_replay)
+    async_enabled = bool(ctx.async_enabled)
+    async_update_frequency = int(ctx.async_update_frequency)
+    async_idle_sleep_sec = float(ctx.async_idle_sleep_sec)
+    async_backend = str(ctx.async_backend)
+    async_actor_device = ctx.async_actor_device
+    async_learner_device = ctx.async_learner_device
+    async_batch_queue_size = int(ctx.async_batch_queue_size)
+    async_trainer_host = str(ctx.async_trainer_host)
+    async_trainer_port = int(ctx.async_trainer_port)
+    async_broadcast_port = int(ctx.async_broadcast_port)
+    async_data_store_queue_size = int(ctx.async_data_store_queue_size)
+    async_stats_period_steps = int(ctx.async_stats_period_steps)
+    async_agentlace_spawn_local_worker = bool(ctx.async_agentlace_spawn_local_worker)
+    async_agentlace_bootstrap_file = str(ctx.async_agentlace_bootstrap_file)
+    async_agentlace_connect_timeout_sec = float(ctx.async_agentlace_connect_timeout_sec)
+    async_bounded_lag_enabled = bool(ctx.async_bounded_lag_enabled)
+    async_bounded_lag_max_update_calls = int(ctx.async_bounded_lag_max_update_calls)
+    async_bounded_lag_poll_sec = ctx.async_bounded_lag_poll_sec
+    async_bounded_lag_timeout_sec = ctx.async_bounded_lag_timeout_sec
+    async_bounded_lag_sync_on_wait = bool(ctx.async_bounded_lag_sync_on_wait)
+    async_bounded_lag_log_period_steps = int(ctx.async_bounded_lag_log_period_steps)
+    async_bounded_lag_env_steps_per_update_call = ctx.async_bounded_lag_env_steps_per_update_call
+    async_bounded_lag_manual_rate_enabled = bool(ctx.async_bounded_lag_manual_rate_enabled)
+    async_bounded_lag_mode = str(ctx.async_bounded_lag_mode)
+    replay_prefetch_enabled = bool(ctx.replay_prefetch_enabled)
+    replay_prefetch_queue_size = int(ctx.replay_prefetch_queue_size)
+    replay_prefetch_pin_memory = bool(ctx.replay_prefetch_pin_memory)
+    replay_prefetch_to_device = bool(ctx.replay_prefetch_to_device)
+    profiling_enabled = bool(ctx.profiling_enabled)
+    profiling_window_size = int(ctx.profiling_window_size)
+    profiling_log_period_steps = int(ctx.profiling_log_period_steps)
+    profiling_log_file = str(ctx.profiling_log_file)
+    external_agentlace_actor_mode = bool(ctx.external_agentlace_actor_mode)
+    manage_learner_state_locally = bool(ctx.manage_learner_state_locally)
+    agentlace_bridge_config = ctx.agentlace_bridge_config
+    agentlace_bridge_state = ctx.agentlace_bridge_state
+    action_transform = ctx.action_transform
+    action_space = ctx.action_space
+    agent = ctx.agent
+    learner_agent = ctx.learner_agent
+    async_learner = ctx.async_learner
+    sync_replay_lock = ctx.sync_replay_lock
+    sync_replay_prefetcher = ctx.sync_replay_prefetcher
+    checkpoint_writer = ctx.checkpoint_writer
+    replay_buffer = ctx.replay_buffer
+    offline_buffer = ctx.offline_buffer
+    offline_stats = ctx.offline_stats
+    warmstart_info = ctx.warmstart_info
+    online_prefill_stats = ctx.online_prefill_stats
+    checkpoint_every_steps = int(ctx.checkpoint_every_steps)
+    checkpoint_keep = int(ctx.checkpoint_keep)
+    checkpoint_dir = ctx.checkpoint_dir
+    async_eval_enabled = bool(ctx.async_eval_enabled)
+    async_eval_every_episodes = int(ctx.async_eval_every_episodes)
+    async_eval_alpha_mode = str(ctx.async_eval_alpha_mode)
+    async_eval_proc = ctx.async_eval_proc
+    async_eval_log_fp = ctx.async_eval_log_fp
+    async_eval_log_path = ctx.async_eval_log_path
+    async_eval_summary_path = ctx.async_eval_summary_path
+    async_eval_watcher_return_code = ctx.async_eval_watcher_return_code
+    async_eval_dead_reported = bool(ctx.async_eval_dead_reported)
+    profiler = ctx.profiler
+    profiling_logger = ctx.profiling_logger
+    profiling_last_flush_step = int(ctx.profiling_last_flush_step)
+    async_eval_queue_path = ctx.async_eval_queue_path
+    step_logger = ctx.step_logger
+    episode_logger = ctx.episode_logger
+    tb_writer = ctx.tb_writer
+    tb_step_period = int(ctx.tb_step_period)
+    tb_histogram_period = int(ctx.tb_histogram_period)
+    progress_enabled = bool(ctx.progress_enabled)
+    progress_mininterval_sec = float(ctx.progress_mininterval_sec)
+    step_metric_window = ctx.step_metric_window
+    async_eval_tb_sync_state = ctx.async_eval_tb_sync_state
+    sample_obs = ctx.sample_obs
+    sample_state_core = ctx.sample_state_core
+    configured_warmup_episodes = int(ctx.configured_warmup_episodes)
+    online_prefill_enabled = bool(ctx.online_prefill_enabled)
+    online_prefill_loaded_episodes = int(ctx.online_prefill_loaded_episodes)
+    warmup_episodes_cfg = int(ctx.warmup_episodes_cfg)
+    need_warmup_first = bool(ctx.need_warmup_first)
+    max_train_env_steps = int(ctx.max_train_env_steps)
+    train_env_step = int(state.train_env_step)
+    decision_step = int(state.decision_step)
+    train_episode_id = int(state.train_episode_id)
+    warmup_episode_id = int(state.warmup_episode_id)
+    init_episode_idx = int(state.init_episode_idx)
+    eval_trigger_count = int(state.eval_trigger_count)
+    train_total_success = int(state.train_total_success)
+    train_recent_successes = state.train_recent_successes
+    warmup_total_success = int(state.warmup_total_success)
+    warmup_recent_successes = state.warmup_recent_successes
+    skipped_seeds = int(state.skipped_seeds)
+    seed_cursor = int(state.seed_cursor)
+    stopped_by_env_budget = bool(state.stopped_by_env_budget)
+    last_update_info = state.last_update_info
+    saved_checkpoint_steps = state.saved_checkpoint_steps
+    train_progress = state.train_progress
+    warmup_progress = state.warmup_progress
+    phase_progress = state.phase_progress
+    train_progress_last_step = int(state.train_progress_last_step)
+
+    def _sync_shared_state() -> None:
+        state.train_env_step = int(train_env_step)
+        state.decision_step = int(decision_step)
+        state.train_episode_id = int(train_episode_id)
+        state.warmup_episode_id = int(warmup_episode_id)
+        state.init_episode_idx = int(init_episode_idx)
+        state.eval_trigger_count = int(eval_trigger_count)
+        state.train_total_success = int(train_total_success)
+        state.warmup_total_success = int(warmup_total_success)
+        state.skipped_seeds = int(skipped_seeds)
+        state.seed_cursor = int(seed_cursor)
+        state.stopped_by_env_budget = bool(stopped_by_env_budget)
+        state.last_update_info = last_update_info
+        state.saved_checkpoint_steps = saved_checkpoint_steps
+        state.train_progress = train_progress
+        state.warmup_progress = warmup_progress
+        state.phase_progress = phase_progress
+        state.train_progress_last_step = int(train_progress_last_step)
+
+    def _maybe_send_agentlace_timer_stats(
+        *,
+        train_env_step_value: int,
+        decision_step_value: int,
+        train_episode_id_value: int,
+        force: bool = False,
+    ) -> None:
+        _sync_shared_state()
+        state.train_env_step = int(train_env_step_value)
+        state.decision_step = int(decision_step_value)
+        send_agentlace_timer_stats(
+            ctx,
+            state,
+            train_episode_id_value=int(train_episode_id_value),
+            force=bool(force),
+        )
+
+    def _maybe_wait_for_async_learner_budget(
+        *,
+        train_env_step_value: int,
+        decision_step_value: int,
+    ) -> None:
+        _sync_shared_state()
+        state.train_env_step = int(train_env_step_value)
+        state.decision_step = int(decision_step_value)
+        wait_for_async_learner_budget(ctx, state)
+
+    def _advance_async_update_calls(
+        *,
+        phase_train_flag: bool,
+        train_step_before: int,
+        train_step_after: int,
+        replay_size_before: int,
+        replay_size_after: int,
+    ) -> None:
+        _sync_shared_state()
+        state.train_env_step = int(train_step_after)
+        advance_async_update_calls_impl(
+            ctx,
+            phase_train_flag=bool(phase_train_flag),
+            train_step_before=int(train_step_before),
+            train_step_after=int(train_step_after),
+            replay_size_before=int(replay_size_before),
+            replay_size_after=int(replay_size_after),
+        )
+
+    def _update_train_progress(
+        *,
+        force_postfix: bool = False,
+        train_env_step_value: Optional[int] = None,
+    ) -> None:
+        nonlocal train_progress_last_step
+        _sync_shared_state()
+        if train_env_step_value is not None:
+            state.train_env_step = int(train_env_step_value)
+        update_train_progress(ctx, state, force_postfix=force_postfix)
+        train_progress_last_step = int(state.train_progress_last_step)
+
+    def _save_checkpoint_at_step(checkpoint_step: int) -> Path:
+        _sync_shared_state()
+        return save_checkpoint_at_step(ctx, state, checkpoint_step)
+
+    assert agent is not None
+    assert learner_agent is not None
+    assert replay_buffer is not None
+
+    try:
+        if need_warmup_first:
+            run_base_only_warmup(ctx, state)
+            agent = ctx.agent
+            async_learner = ctx.async_learner
+            replay_buffer = ctx.replay_buffer
+            sync_replay_lock = ctx.sync_replay_lock
+            sync_replay_prefetcher = ctx.sync_replay_prefetcher
+            train_env_step = int(state.train_env_step)
+            decision_step = int(state.decision_step)
+            train_episode_id = int(state.train_episode_id)
+            warmup_episode_id = int(state.warmup_episode_id)
+            init_episode_idx = int(state.init_episode_idx)
+            eval_trigger_count = int(state.eval_trigger_count)
+            train_total_success = int(state.train_total_success)
+            train_recent_successes = state.train_recent_successes
+            warmup_total_success = int(state.warmup_total_success)
+            warmup_recent_successes = state.warmup_recent_successes
+            skipped_seeds = int(state.skipped_seeds)
+            seed_cursor = int(state.seed_cursor)
+            stopped_by_env_budget = bool(state.stopped_by_env_budget)
+            last_update_info = state.last_update_info
+            train_progress = state.train_progress
+            warmup_progress = state.warmup_progress
+            phase_progress = state.phase_progress
+            train_progress_last_step = int(state.train_progress_last_step)
+
+        sync_async_bounded_lag_baseline(ctx)
+
+        for phase in cfg.training.phases:
+            if max_train_env_steps > 0 and train_env_step >= max_train_env_steps:
+                stopped_by_env_budget = True
+                break
+            phase_name = str(phase.name)
+            phase_episodes = int(phase.episodes)
+            phase_train = bool(phase.get("train", True))
+            logger.info(
+                "Start phase=%s episodes=%s train=%s",
+                phase_name,
+                phase_episodes,
+                phase_train,
+            )
+
+            phase_episode_count = 0
+            phase_progress = new_progress(ctx,
+                desc=f"{phase_name}:episode",
+                total=int(phase_episodes),
+                position=1,
+                leave=False,
+            )
+            try:
+                while phase_episode_count < phase_episodes:
+                    if (
+                        max_train_env_steps > 0
+                        and train_env_step >= max_train_env_steps
+                    ):
+                        stopped_by_env_budget = True
+                        break
+
+                    seed = int(seed_cursor)
+                    seed_cursor += 1
+                    current_phase_episode_idx = int(phase_episode_count + 1)
+                    current_train_episode_id = (
+                        int(train_episode_id + 1) if phase_train else None
+                    )
+                    current_init_episode_idx = int(init_episode_idx)
+
+                    if bool(cfg.training.get("expert_check", False)):
+                        passed, _ = env.expert_precheck(
+                            seed=seed, init_episode_idx=current_init_episode_idx
+                        )
+                        if not passed:
+                            skipped_seeds += 1
+                            logger.warning(
+                                "skip seed=%s in phase=%s: expert precheck failed",
+                                seed,
+                                phase_name,
+                            )
+                            continue
+
+                    init_episode_idx += 1
+                    clear_obs_cache(ctx)
+                    obs_raw = _profile_call(
+                        profiler,
+                        "env_reset",
+                        env.reset,
+                        seed=seed,
+                        init_episode_idx=current_init_episode_idx,
+                    )
+                    max_episode_steps = int(env.step_limit)
+                    if cfg.training.max_env_steps_per_episode is not None:
+                        max_episode_steps = min(
+                            max_episode_steps,
+                            int(cfg.training.max_env_steps_per_episode),
+                        )
+
+                    episode_result = run_policy_episode(
+                        ctx,
+                        EpisodeSpec(
+                            phase_name=str(phase_name),
+                            phase_train=bool(phase_train),
+                            phase_episode_idx=int(current_phase_episode_idx),
+                            train_episode_id=current_train_episode_id,
+                            seed=int(seed),
+                            init_episode_idx=int(current_init_episode_idx),
+                            max_episode_steps=int(max_episode_steps),
+                        ),
+                        obs_raw,
+                        agent=agent,
+                        learner_agent=learner_agent,
+                        async_learner=async_learner,
+                        replay_buffer=replay_buffer,
+                        sync_replay_lock=sync_replay_lock,
+                        sync_replay_prefetcher=sync_replay_prefetcher,
+                        train_env_step=int(train_env_step),
+                        decision_step=int(decision_step),
+                        last_update_info=dict(last_update_info),
+                        profiling_last_flush_step=int(profiling_last_flush_step),
+                        update_train_progress=_update_train_progress,
+                        advance_async_update_calls=_advance_async_update_calls,
+                        maybe_send_agentlace_timer_stats=_maybe_send_agentlace_timer_stats,
+                        maybe_wait_for_async_learner_budget=_maybe_wait_for_async_learner_budget,
+                        save_checkpoint_at_step=_save_checkpoint_at_step,
+                        timer_train_episode_id=int(train_episode_id),
+                    )
+                    episode_success = bool(episode_result.episode_success)
+                    episode_return = float(episode_result.episode_return)
+                    episode_steps = int(episode_result.episode_steps)
+                    train_env_step = int(episode_result.train_env_step)
+                    decision_step = int(episode_result.decision_step)
+                    last_update_info = dict(episode_result.last_update_info)
+                    agent = episode_result.agent
+                    learner_agent = episode_result.learner_agent
+                    async_learner = episode_result.async_learner
+                    replay_buffer = episode_result.replay_buffer
+                    sync_replay_lock = episode_result.sync_replay_lock
+                    sync_replay_prefetcher = episode_result.sync_replay_prefetcher
+                    profiling_last_flush_step = int(
+                        episode_result.profiling_last_flush_step
+                    )
+
+                    if phase_train:
+                        train_total_success += int(episode_success)
+                        train_recent_successes.append(int(episode_success))
+                        running_success_rate = float(train_total_success) / float(
+                            current_train_episode_id
+                        )
+                        recent_success_rate = float(
+                            sum(train_recent_successes)
+                        ) / float(len(train_recent_successes))
+                        episode_logger.write(
+                            {
+                                "phase": phase_name,
+                                "warmup_episode_id": None,
+                                "train_episode_id": current_train_episode_id,
+                                "phase_episode_idx": current_phase_episode_idx,
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
+                                "init_state_idx": (
+                                    int(env.current_init_state_idx)
+                                    if env.current_init_state_idx is not None
+                                    else None
+                                ),
+                                "success": bool(episode_success),
+                                "episode_steps": int(episode_steps),
+                                "episode_return": float(episode_return),
+                                "train_env_step": int(train_env_step),
+                                "decision_step": int(decision_step),
+                                "running_success_rate": running_success_rate,
+                                "recent_success_rate": recent_success_rate,
+                            }
+                        )
+                        tb_writer.add_scalar(
+                            "train_episode/success",
+                            int(episode_success),
+                            current_train_episode_id,
+                        )
+                        tb_writer.add_scalar(
+                            "train_episode/return",
+                            float(episode_return),
+                            current_train_episode_id,
+                        )
+                        tb_writer.add_scalar(
+                            "train_episode/length",
+                            int(episode_steps),
+                            current_train_episode_id,
+                        )
+                        tb_writer.add_scalar(
+                            "train_episode/running_success_rate",
+                            running_success_rate,
+                            current_train_episode_id,
+                        )
+                        tb_writer.add_scalar(
+                            "train_episode/recent_success_rate_20",
+                            recent_success_rate,
+                            current_train_episode_id,
+                        )
+                        tb_writer.add_scalar(
+                            "system/online_buffer_size",
+                            int(len(replay_buffer)),
+                            train_env_step,
+                        )
+                        if offline_buffer is not None:
+                            tb_writer.add_scalar(
+                                "system/offline_buffer_size",
+                                int(len(offline_buffer)),
+                                train_env_step,
+                            )
+                        tb_writer.add_scalar(
+                            "system/decision_step", int(decision_step), train_env_step
+                        )
+                        if async_learner is not None:
+                            tb_writer.add_scalar(
+                                "system/learner_update_steps",
+                                int(async_learner.get_update_steps()),
+                                train_env_step,
+                            )
+                            tb_writer.add_scalar(
+                                "system/replay_prefetch_queue_size",
+                                int(async_learner.get_prefetch_queue_size()),
+                                train_env_step,
+                            )
+                        elif sync_replay_prefetcher is not None:
+                            tb_writer.add_scalar(
+                                "system/replay_prefetch_queue_size",
+                                int(sync_replay_prefetcher.get_queue_size()),
+                                train_env_step,
+                            )
+
+                        logger.info(
+                            "phase=%s train_episode=%s success=%s steps=%s return=%.2f "
+                            "train_env_step=%s success_rate=%.3f recent=%.3f",
+                            phase_name,
+                            current_train_episode_id,
+                            episode_success,
+                            episode_steps,
+                            episode_return,
+                            train_env_step,
+                            running_success_rate,
+                            recent_success_rate,
+                        )
+                        if external_agentlace_actor_mode and async_learner is not None:
+                            _maybe_send_agentlace_timer_stats(
+                                train_env_step_value=int(train_env_step),
+                                decision_step_value=int(decision_step),
+                                train_episode_id_value=int(current_train_episode_id),
+                                force=True,
+                            )
+                            async_learner.request_stats(
+                                {
+                                    "train_episode": {
+                                        "phase": str(phase_name),
+                                        "train_episode_id": int(
+                                            current_train_episode_id
+                                        ),
+                                        "success": bool(episode_success),
+                                        "episode_steps": int(episode_steps),
+                                        "episode_return": float(episode_return),
+                                        "train_env_step": int(train_env_step),
+                                        "decision_step": int(decision_step),
+                                        "running_success_rate": float(
+                                            running_success_rate
+                                        ),
+                                        "recent_success_rate": float(
+                                            recent_success_rate
+                                        ),
+                                    }
+                                }
+                            )
+                        train_episode_id = int(current_train_episode_id)
+
+                        if (
+                            async_eval_enabled
+                            and async_eval_queue_path is not None
+                            and train_episode_id % async_eval_every_episodes == 0
+                        ):
+                            checkpoint_path = _save_checkpoint_at_step(
+                                int(train_env_step)
+                            )
+                            eval_index = int(eval_trigger_count)
+                            _append_async_eval_request(
+                                async_eval_queue_path,
+                                {
+                                    "eval_index": eval_index,
+                                    "train_episode_id": int(train_episode_id),
+                                    "train_env_step": int(train_env_step),
+                                    "checkpoint_step": int(train_env_step),
+                                    "checkpoint_path": str(checkpoint_path),
+                                },
+                            )
+                            eval_trigger_count += 1
+                    else:
+                        episode_logger.write(
+                            {
+                                "phase": phase_name,
+                                "warmup_episode_id": None,
+                                "train_episode_id": None,
+                                "phase_episode_idx": current_phase_episode_idx,
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
+                                "init_state_idx": (
+                                    int(env.current_init_state_idx)
+                                    if env.current_init_state_idx is not None
+                                    else None
+                                ),
+                                "success": bool(episode_success),
+                                "episode_steps": int(episode_steps),
+                                "episode_return": float(episode_return),
+                                "train_env_step": int(train_env_step),
+                                "decision_step": None,
+                                "running_success_rate": None,
+                                "recent_success_rate": None,
+                            }
+                        )
+                        logger.info(
+                            "phase=%s phase_episode=%s success=%s steps=%s return=%.2f train_env_step=%s",
+                            phase_name,
+                            current_phase_episode_idx,
+                            episode_success,
+                            episode_steps,
+                            episode_return,
+                            train_env_step,
+                        )
+
+                    if async_eval_proc is not None and (not async_eval_dead_reported):
+                        proc_rc = async_eval_proc.poll()
+                        if proc_rc is not None:
+                            async_eval_dead_reported = True
+                            logger.warning(
+                                "Async eval watcher exited early with returncode=%s; "
+                                "see %s for details",
+                                proc_rc,
+                                async_eval_log_path,
+                            )
+                    _sync_async_eval_results_to_tb(
+                        tb_writer,
+                        summary_jsonl_path=async_eval_summary_path,
+                        sync_state=async_eval_tb_sync_state,
+                        logger=logger,
+                    )
+                    _update_train_progress(force_postfix=True)
+
+                    phase_episode_count += 1
+                    if phase_progress is not None:
+                        phase_progress.update(1)
+            finally:
+                if phase_progress is not None:
+                    phase_progress.close()
+                    phase_progress = None
+
+            if stopped_by_env_budget:
+                break
+
+        if async_learner is not None:
+            async_learner.stop()
+            last_update_info = async_learner.get_last_update_info()
+        if checkpoint_writer is not None:
+            checkpoint_writer.close(wait=True)
+            checkpoint_writer = None
+
+        final_profiling_payload = _emit_profiling_snapshot(
+            profiler,
+            profile_logger=profiling_logger,
+            tb_writer=tb_writer,
+            logger=logger,
+            train_env_step=train_env_step,
+            decision_step=decision_step,
+            train_episode_id=train_episode_id,
+            learner_update_steps=int(async_learner.get_update_steps())
+            if async_learner is not None
+            else 0,
+            replay_prefetch_queue_size=(
+                int(async_learner.get_prefetch_queue_size())
+                if async_learner is not None
+                else int(sync_replay_prefetcher.get_queue_size())
+                if sync_replay_prefetcher is not None
+                else 0
+            ),
+        )
+
+        summary = {
+            "train_env_step": int(train_env_step),
+            "decision_step": int(decision_step),
+            "train_episode_id": int(train_episode_id),
+            "configured_warmup_episodes": int(configured_warmup_episodes),
+            "warmup_episode_id": int(warmup_episode_id),
+            "warmup_source": (
+                "online_prefill"
+                if int(online_prefill_loaded_episodes) > 0
+                and int(warmup_episode_id) == int(online_prefill_loaded_episodes)
+                else "online_prefill+runtime"
+                if int(online_prefill_loaded_episodes) > 0
+                else "runtime"
+                if int(warmup_episode_id) > 0
+                else "disabled"
+            ),
+            "train_total_success": int(train_total_success),
+            "train_success_rate": float(
+                train_total_success / max(1, int(train_episode_id))
+            ),
+            "warmup_total_success": int(warmup_total_success),
+            "warmup_success_rate": float(
+                warmup_total_success / max(1, int(warmup_episode_id))
+            ),
+            "skipped_seeds": int(skipped_seeds),
+            "seed_start": int(cfg.task.seed_base),
+            "seed_next": int(seed_cursor),
+            "stopped_by_env_budget": bool(stopped_by_env_budget),
+            "max_train_env_steps": int(max_train_env_steps),
+            "chunk_step": {
+                "enabled": bool(chunk_step_enabled),
+                "sample_stride": int(chunk_step_sample_stride),
+                "require_full_horizon": bool(chunk_step_require_full_horizon),
+                "pad_action_to_horizon": bool(chunk_step_pad_action),
+                "scheduler_clock": str(chunk_step_scheduler_clock),
+                "step_action_dim": int(step_action_dim),
+                "agent_action_dim": int(agent_action_dim),
+                "chunk_horizon": int(chunk_horizon),
+            },
+            "replay_size": int(len(replay_buffer) if replay_buffer is not None else 0),
+            "offline_enabled": bool(offline_enabled),
+            "offline_ratio": float(offline_ratio),
+            "offline_symmetric_replay": bool(symmetric_replay),
+            "offline_buffer_size": int(
+                len(offline_buffer) if offline_buffer is not None else 0
+            ),
+            "offline_stats": offline_stats,
+            "online_prefill_stats": _to_jsonable(online_prefill_stats),
+            "critic_pretrain": _to_jsonable(warmstart_info),
+            "checkpoint_dir": str(checkpoint_dir),
+            "checkpoint_every_steps": int(checkpoint_every_steps),
+            "checkpoint_keep": int(checkpoint_keep),
+            "last_update_info": _to_jsonable(last_update_info),
+            "async_enabled": bool(async_enabled),
+            "async_backend": str(async_backend),
+            "async_update_frequency": int(async_update_frequency),
+            "async_actor_device": async_actor_device,
+            "async_learner_device": async_learner_device,
+            "async_batch_queue_size": int(async_batch_queue_size),
+            "async_trainer_host": str(async_trainer_host),
+            "async_trainer_port": int(async_trainer_port),
+            "async_broadcast_port": int(async_broadcast_port),
+            "async_data_store_queue_size": int(async_data_store_queue_size),
+            "learner_update_steps": int(
+                async_learner.get_update_steps() if async_learner is not None else 0
+            ),
+            "async_bounded_lag": {
+                "enabled": bool(async_bounded_lag_enabled),
+                "mode": str(async_bounded_lag_mode),
+                "max_update_lag_calls": int(async_bounded_lag_max_update_calls),
+                "env_steps_per_update_call": (
+                    None
+                    if async_bounded_lag_env_steps_per_update_call is None
+                    else float(async_bounded_lag_env_steps_per_update_call)
+                ),
+                "poll_sec": (
+                    None
+                    if async_bounded_lag_poll_sec is None
+                    else float(async_bounded_lag_poll_sec)
+                ),
+                "timeout_sec": (
+                    None
+                    if async_bounded_lag_timeout_sec is None
+                    else float(async_bounded_lag_timeout_sec)
+                ),
+                "sync_on_wait": bool(async_bounded_lag_sync_on_wait),
+                "target_update_calls": int(agentlace_bridge_state.target_update_calls),
+                "tracked_env_steps": int(agentlace_bridge_state.tracked_env_steps),
+                "last_required_update_steps": int(
+                    agentlace_bridge_state.last_required_update_steps
+                ),
+                "last_lag_before_wait": int(agentlace_bridge_state.last_lag_before_wait),
+                "last_lag_after_wait": int(agentlace_bridge_state.last_lag_after_wait),
+                "wait_count": int(agentlace_bridge_state.wait_count),
+                "wait_timeout_count": int(agentlace_bridge_state.timeout_count),
+                "wait_total_sec": float(agentlace_bridge_state.wait_total_sec),
+                "last_wait_sec": float(agentlace_bridge_state.last_wait_sec),
+            },
+            "replay_prefetch_enabled": bool(replay_prefetch_enabled),
+            "replay_prefetch_queue_size": int(replay_prefetch_queue_size),
+            "replay_prefetch_pin_memory": bool(replay_prefetch_pin_memory),
+            "replay_prefetch_to_device": bool(replay_prefetch_to_device),
+            "profiling": {
+                "enabled": bool(profiling_enabled),
+                "window_size": int(profiling_window_size),
+                "log_period_steps": int(profiling_log_period_steps),
+                "log_file": str(run_dir / profiling_log_file)
+                if profiling_enabled
+                else None,
+                "snapshot": (
+                    _to_jsonable(final_profiling_payload.get("metrics", {}))
+                    if final_profiling_payload is not None
+                    else {}
+                ),
+            },
+            "async_eval": {
+                "enabled": bool(async_eval_enabled),
+                "every_episodes": int(async_eval_every_episodes),
+                "queue_path": str(async_eval_queue_path)
+                if async_eval_queue_path is not None
+                else None,
+                "eval_trigger_count": int(eval_trigger_count),
+                "watcher_started": bool(async_eval_proc is not None),
+                "watcher_log_path": str(async_eval_log_path)
+                if async_eval_log_path is not None
+                else None,
+                "summary_jsonl_path": (
+                    str(async_eval_summary_path)
+                    if async_eval_summary_path is not None
+                    else None
+                ),
+                "watcher_return_code": (
+                    int(async_eval_proc.returncode)
+                    if async_eval_proc is not None
+                    and async_eval_proc.returncode is not None
+                    else None
+                ),
+            },
+        }
+        with open(run_dir / str(cfg.logging.summary_file), "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        logger.info("training done: %s", summary)
+
+    finally:
+        if async_learner is not None:
+            async_learner.stop()
+        if checkpoint_writer is not None:
+            checkpoint_writer.close(wait=True)
+        if sync_replay_prefetcher is not None:
+            sync_replay_prefetcher.stop()
+        if policy_prefetcher is not None:
+            policy_prefetcher.close()
+        if phase_progress is not None:
+            phase_progress.close()
+        if warmup_progress is not None:
+            warmup_progress.close()
+        if train_progress is not None:
+            train_progress.close()
+        async_eval_watcher_return_code = _stop_async_eval_watcher(
+            async_eval_proc,
+            async_eval_log_fp,
+            logger=logger,
+        )
+        if async_eval_proc is not None:
+            logger.info(
+                "Async eval watcher stopped (returncode=%s, log=%s)",
+                async_eval_watcher_return_code,
+                async_eval_log_path,
+            )
+        _sync_async_eval_results_to_tb(
+            tb_writer,
+            summary_jsonl_path=async_eval_summary_path,
+            sync_state=async_eval_tb_sync_state,
+            logger=logger,
+        )
+        try:
+            env.close(clear_cache=False)
+        except Exception:  # noqa: BLE001
+            pass
+        step_logger.close()
+        episode_logger.close()
+        if profiling_logger is not None:
+            profiling_logger.close()
+        tb_writer.close()

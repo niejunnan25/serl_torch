@@ -23,7 +23,6 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
             else None
         ),
         libero_root=cfg.get("libero_root", None),
-        openpi_root=cfg.get("openpi_root", None),
         libero_config_dir=cfg.get("libero_config_dir", None),
         libero_datasets_root=cfg.get("libero_datasets_root", None),
         env_seed_mode=str(cfg.task.get("env_seed_mode", "per_episode")),

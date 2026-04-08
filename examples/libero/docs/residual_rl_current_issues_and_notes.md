@@ -27,9 +27,8 @@
 
 对应代码：
 
-- `examples/libero/policy/observation.py:207`
-- `examples/libero/policy/observation.py:218`
-- `examples/libero/utils/step_chunk_replay.py:294`
+- `examples/libero/runtime/obs_adapter.py`
+- `examples/libero/utils/step_chunk_replay.py`
 
 也就是说，当前 `raw` 更准确的意思是：
 
@@ -47,9 +46,7 @@
 
 对应：
 
-- `examples/libero/policy/observation.py:238`
-- `examples/libero/policy/observation.py:492`
-- `examples/libero/policy/observation.py:548`
+- `examples/libero/runtime/obs_adapter.py`
 
 只要 `normalizer` 不为空，`build_libero_state()` 就会调用：
 
@@ -423,4 +420,3 @@ OpenReview 论文 PDF 在 Sec. 4.3 写道：
 3. `shared_encoder + actor stop_gradient` 意味着表征仍主要由 critic 驱动
 4. `warmup without replay` 只适合作诊断，不是强训练策略
 5. `alpha` 问题目前并没有被这次功能开发解决
-

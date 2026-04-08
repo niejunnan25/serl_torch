@@ -179,13 +179,14 @@ outputs/
 # Pretrained model weights (download via tools/download_resnet.py)
 pretrained_models/
 
-# Local LIBERO offline data cache
-examples/libero/data/offline/
-examples/libero/data/online_prefill/
+# Generated example data
+examples/libero/data/**
+examples/libero/configs/
 examples/libero/training_logs/
+examples/libero/.local/
+.libero/
+.codex/
 
-# Local third_party workspace content
-third_party/
 
 # NFS temporary files
 .nfs*

@@ -92,7 +92,7 @@ if [[ "$HAS_HYDRA_RUN_DIR_OVERRIDE" -eq 0 ]]; then
 fi
 
 cd "$ROOT_DIR"
-exec "$PYTHON_BIN" "$ROOT_DIR/scripts/launch_async_train.py" \
+exec "$PYTHON_BIN" "$ROOT_DIR/scripts/train/launch_async_train.py" \
     --config-path "$CONFIG_DIR" \
     --config-name "$CONFIG_NAME" \
     "${EXTRA_ARGS[@]}"

@@ -1,12 +1,12 @@
 """RoboTwin 远程环境客户端：在训练进程中通过 HTTP RPC 调用环境服务。"""
 from __future__ import annotations
 
-import http.client
 import logging
-import pickle
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+
+from serl_launcher.envs.remote_http import RemoteHttpRpcClient
 
 
 class RemoteRoboTwinTaskEnv:
@@ -47,6 +47,13 @@ class RemoteRoboTwinTaskEnv:
         self._current_instruction: str = self.prompt
         self._step_limit: int = 0
         self._take_action_cnt: int = 0
+        self._rpc_client = RemoteHttpRpcClient(
+            host=self.host,
+            port=self.port,
+            timeout_sec=self.timeout_sec,
+            keep_alive=False,
+            logger=self.logger,
+        )
 
         self._rpc(
             "create_env",
@@ -73,31 +80,7 @@ class RemoteRoboTwinTaskEnv:
         return int(self._take_action_cnt)
 
     def _rpc(self, method: str, **kwargs: Any) -> Any:
-        payload = pickle.dumps({"method": method, "kwargs": kwargs}, protocol=pickle.HIGHEST_PROTOCOL)
-        conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout_sec)
-        try:
-            conn.request(
-                "POST",
-                "/rpc",
-                body=payload,
-                headers={"Content-Type": "application/octet-stream"},
-            )
-            resp = conn.getresponse()
-            resp_bytes = resp.read()
-        finally:
-            conn.close()
-
-        if resp.status != 200:
-            raise RuntimeError(
-                f"remote env rpc failed method={method} status={resp.status} reason={resp.reason}"
-            )
-        data = pickle.loads(resp_bytes)
-        if not isinstance(data, dict):
-            raise RuntimeError(f"remote env rpc invalid response type for method={method}")
-        if not bool(data.get("ok", False)):
-            err = str(data.get("error", "unknown remote error"))
-            raise RuntimeError(f"remote env rpc method={method} failed: {err}")
-        return data.get("result", None)
+        return self._rpc_client.call(method, **kwargs)
 
     def _apply_meta(self, meta: Any) -> None:
         if not isinstance(meta, dict):
@@ -161,3 +144,5 @@ class RemoteRoboTwinTaskEnv:
             self._rpc("close", clear_cache=bool(clear_cache))
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("remote env close failed: %s", exc)
+        finally:
+            self._rpc_client.close()

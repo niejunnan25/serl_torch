@@ -5,11 +5,11 @@
 1. 评估请求如何触发、如何执行；
 2. 请求是否会一直排队、排到什么时候。
 
-截至代码版本（2026-03-25）对应核心文件：
+截至代码版本（2026-04-09）对应核心文件：
 
-- `examples/libero/scripts/train_residual_sac.py`
-- `examples/libero/utils/async_eval.py`
-- `examples/libero/scripts/async_eval_watch.py`
+- `examples/libero/scripts/train/run_actor.py`
+- `serl_launcher/serl_launcher/residual/train/async_eval.py`
+- `examples/libero/scripts/eval/process_eval_queue.py`
 
 ---
 
@@ -113,4 +113,3 @@ watcher 主循环逻辑：
 - 每 50 个训练 episode 触发一次异步评估；
 - 每次评估跑 50 个 episode；
 - 所有触发点都会排队等待执行（若评估慢，会明显积压）。
-

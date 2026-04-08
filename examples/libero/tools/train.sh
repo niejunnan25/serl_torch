@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-"$PYTHON_BIN" scripts/train_residual_sac.py \
+"$PYTHON_BIN" scripts/train/run_actor.py \
     "${HYDRA_OPTIONS[@]}" \
     env.backend=remote \
     env.remote.host=127.0.0.1 \

@@ -10,8 +10,6 @@ python scripts/robotwin_env_server.py --host 127.0.0.1 --port 9100
 import argparse
 import logging
 import os
-import pickle
-import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -19,13 +17,18 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SERL_LAUNCHER_ROOT = REPO_ROOT / "serl_launcher"
 import sys
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 from env_wrappers.task_env import RoboTwinTaskEnv
 from env_wrappers.setup import load_task_args, resolve_robo_root, setup_robotwin_pythonpath
+from serl_launcher.envs.remote_http import make_pickle_rpc_handler
 
 
 LOGGER = logging.getLogger("robotwin_env_server")
@@ -128,39 +131,11 @@ class _EnvState:
 
 
 STATE = _EnvState()
-
-
-class Handler(BaseHTTPRequestHandler):
-    def _write(self, status: int, payload: Dict[str, Any]) -> None:
-        body = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
-        self.send_response(status)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/rpc":
-            self._write(404, {"ok": False, "error": "not found"})
-            return
-
-        try:
-            content_len = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(content_len)
-            req = pickle.loads(raw)
-            method = str(req["method"])
-            kwargs = req.get("kwargs", {})
-            fn = getattr(STATE, method, None)
-            if fn is None:
-                raise RuntimeError(f"unknown method: {method}")
-            result = fn(**kwargs)
-            self._write(200, {"ok": True, "result": result})
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.error("rpc error: %s\n%s", exc, traceback.format_exc())
-            self._write(200, {"ok": False, "error": str(exc)})
-
-    def log_message(self, format: str, *args: Any) -> None:
-        LOGGER.info("%s - %s", self.address_string(), format % args)
+Handler: type[BaseHTTPRequestHandler] = make_pickle_rpc_handler(
+    STATE,
+    LOGGER,
+    keep_alive=False,
+)
 
 
 def _sapien_render_test() -> None:

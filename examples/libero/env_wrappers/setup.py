@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from ..utils.paths import _find_serl_repo_root, resolve_repo_candidate
+from serl_launcher.utils.repo_paths import find_serl_repo_root, resolve_repo_candidate
 
 
 def _package_root(libero_root: Path) -> Path:
@@ -23,29 +23,16 @@ def _is_complete_libero_root(libero_root: Path) -> bool:
     return all(path.exists() for path in required_paths)
 
 
-def resolve_openpi_root(openpi_root: Optional[str]) -> Path:
-    if openpi_root:
-        root = Path(openpi_root).expanduser().resolve()
-    else:
-        root = resolve_repo_candidate("openpi")
-    if not root.exists():
-        raise FileNotFoundError(f"openpi root not found: {root}")
-    return root
-
-
-def resolve_libero_root(
-    libero_root: Optional[str], openpi_root: Optional[str] = None
-) -> Path:
+def resolve_libero_root(libero_root: Optional[str]) -> Path:
     candidates = []
     if libero_root:
         candidates.append(Path(libero_root).expanduser().resolve())
     else:
-        serl_root = _find_serl_repo_root()
+        serl_root = find_serl_repo_root()
         candidates.extend(
             [
-                resolve_repo_candidate("LIBERO"),
-                resolve_openpi_root(openpi_root) / "third_party" / "LIBERO",
                 serl_root / "third_party" / "LIBERO",
+                resolve_repo_candidate("LIBERO"),
             ]
         )
 
@@ -62,9 +49,17 @@ def resolve_libero_root(
 def resolve_libero_config_dir(config_dir: Optional[str]) -> Path:
     if config_dir:
         return Path(config_dir).expanduser().resolve()
-    return (
-        _find_serl_repo_root() / "examples" / "libero" / ".local" / "libero_config"
-    ).resolve()
+    env_override = os.environ.get("LIBERO_CONFIG_PATH")
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    cache_root = (
+        Path(xdg_cache_home).expanduser()
+        if xdg_cache_home
+        else Path.home() / ".cache"
+    )
+    return (cache_root / "serl_torch" / "libero_config").resolve()
 
 
 def resolve_libero_datasets_root(
@@ -78,7 +73,7 @@ def resolve_libero_datasets_root(
     if env_override:
         candidates.append(Path(env_override).expanduser().resolve())
 
-    serl_root = _find_serl_repo_root()
+    serl_root = find_serl_repo_root()
     candidates.extend(
         [
             (serl_root.parent.parent / "datasets").resolve(),
@@ -131,15 +126,6 @@ def setup_libero_pythonpath(
     if str(libero_root) not in sys.path:
         sys.path.insert(0, str(libero_root))
     return config_path
-
-
-def setup_openpi_client_pythonpath(openpi_root: Path) -> Path:
-    client_src = openpi_root / "packages" / "openpi-client" / "src"
-    if not client_src.exists():
-        raise FileNotFoundError(f"openpi client src not found: {client_src}")
-    if str(client_src) not in sys.path:
-        sys.path.insert(0, str(client_src))
-    return client_src
 
 
 def resolve_max_episode_steps(suite_name: str) -> int:
