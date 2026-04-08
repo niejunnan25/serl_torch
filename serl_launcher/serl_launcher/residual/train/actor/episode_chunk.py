@@ -198,7 +198,7 @@ def execute_chunk_decision(
         state.episode_steps += 1
         if spec.phase_train:
             state.train_env_step += 1
-            update_train_progress()
+            update_train_progress(train_env_step_value=state.train_env_step)
         state.episode_return += reward
         state.episode_success = bool(info.get("success", state.episode_success))
 

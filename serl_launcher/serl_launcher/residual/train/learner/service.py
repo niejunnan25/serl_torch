@@ -16,6 +16,7 @@ except ModuleNotFoundError:
 import numpy as np
 import torch
 from omegaconf import DictConfig
+from omegaconf import OmegaConf
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 from serl_launcher.residual.algorithms.base import build_residual_algorithm

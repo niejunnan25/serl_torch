@@ -140,7 +140,7 @@ def execute_step_decision(
         state.episode_steps += 1
         if spec.phase_train:
             state.train_env_step += 1
-            update_train_progress()
+            update_train_progress(train_env_step_value=state.train_env_step)
         train_env_step_after_step = int(state.train_env_step)
         next_alpha_step = _scheduled_alpha(
             cfg,

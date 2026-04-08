@@ -4,6 +4,7 @@ import logging
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import IO, Any, Dict, Optional, Tuple
 

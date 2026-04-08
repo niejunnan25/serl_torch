@@ -401,6 +401,7 @@ def run_agentlace_learner_service(
     batch_size: int,
     offline_ratio: float,
     symmetric_replay: bool,
+    algorithm: Optional[ResidualAlgorithm] = None,
     host: str,
     port_number: int,
     broadcast_port: int,
@@ -424,7 +425,8 @@ def run_agentlace_learner_service(
     from agentlace.trainer import TrainerServer
 
     cfg = OmegaConf.create(cfg_dict)
-    algorithm = build_residual_algorithm(cfg)
+    if algorithm is None:
+        algorithm = build_residual_algorithm(cfg)
     replay_prefetch_cfg = cfg.training.get("replay_prefetch", None)
     if replay_prefetch_enabled is None:
         replay_prefetch_enabled = (
@@ -1615,6 +1617,7 @@ class _AgentlaceAsyncLearner:
         replay_capacity: Optional[int] = None,
         spawn_local_worker: bool = True,
         connect_timeout_sec: float = 120.0,
+        request_timeout_ms: Optional[float] = None,
     ) -> None:
         self.algorithm = algorithm
         self.actor_agent = actor_agent
@@ -1635,6 +1638,10 @@ class _AgentlaceAsyncLearner:
         self._process: Optional[mp.Process] = None
         self._spawn_local_worker = bool(spawn_local_worker)
         self._connect_timeout_sec = float(max(1.0, connect_timeout_sec))
+        resolved_request_timeout_ms = (
+            3000.0 if request_timeout_ms is None else float(request_timeout_ms)
+        )
+        self._request_timeout_ms = float(max(800.0, resolved_request_timeout_ms))
         self._client = None
         self._data_store = None
         self._replay_proxy = _ReplayProgressProxy(
@@ -1881,6 +1888,7 @@ class _AgentlaceAsyncLearner:
             ),
             self._data_store,
             wait_for_server=False,
+            timeout_ms=self._request_timeout_ms,
         )
         self._client.recv_network_callback(self._update_params)
         self.flush()

@@ -66,7 +66,9 @@ from serl_launcher.training.async_runtime.bridge import (
 )
 from serl_launcher.residual.train.actor.support import ActorLoopState
 from serl_launcher.residual.train.actor.support import ActorRuntimeContext
-from serl_launcher.residual.train.actor.support import advance_async_update_calls
+from serl_launcher.residual.train.actor.support import (
+    advance_async_update_calls as advance_async_update_calls_impl,
+)
 from serl_launcher.residual.train.actor.support import build_chunk_step_record
 from serl_launcher.residual.train.actor.support import build_policy_input
 from serl_launcher.residual.train.actor.support import build_step_obs_profiled
@@ -301,9 +303,8 @@ def run_actor_loop(
     ) -> None:
         _sync_shared_state()
         state.train_env_step = int(train_step_after)
-        advance_async_update_calls(
+        advance_async_update_calls_impl(
             ctx,
-            state,
             phase_train_flag=bool(phase_train_flag),
             train_step_before=int(train_step_before),
             train_step_after=int(train_step_after),
@@ -311,9 +312,15 @@ def run_actor_loop(
             replay_size_after=int(replay_size_after),
         )
 
-    def _update_train_progress(*, force_postfix: bool = False) -> None:
+    def _update_train_progress(
+        *,
+        force_postfix: bool = False,
+        train_env_step_value: Optional[int] = None,
+    ) -> None:
         nonlocal train_progress_last_step
         _sync_shared_state()
+        if train_env_step_value is not None:
+            state.train_env_step = int(train_env_step_value)
         update_train_progress(ctx, state, force_postfix=force_postfix)
         train_progress_last_step = int(state.train_progress_last_step)
 

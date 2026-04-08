@@ -72,7 +72,7 @@ def _run_probing_steps(
             state.episode_steps += 1
             if spec.phase_train:
                 state.train_env_step += 1
-                update_train_progress()
+                update_train_progress(train_env_step_value=state.train_env_step)
             probing_remaining -= 1
             state.episode_return += float(reward)
             state.episode_success = bool(info["success"])
