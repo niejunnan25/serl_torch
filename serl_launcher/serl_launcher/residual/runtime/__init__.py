@@ -1,1 +1,1 @@
-"""Legacy residual runtime helpers pending later package cleanup."""
+"""Legacy residual runtime package kept as an empty compatibility shell."""

@@ -1,4 +1,4 @@
-"""Asynchronous learner and replay prefetch helpers."""
+"""Asynchronous learner and replay-prefetch helpers for training runtimes."""
 from __future__ import annotations
 
 import logging

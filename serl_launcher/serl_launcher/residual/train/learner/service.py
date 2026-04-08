@@ -19,13 +19,13 @@ from omegaconf import DictConfig
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 from serl_launcher.residual.algorithms.base import build_residual_algorithm
-from serl_launcher.residual.runtime.async_learning import run_agentlace_learner_service
 from serl_launcher.residual.train.bindings import ResidualDataBindings
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
 from serl_launcher.residual.train.config import resolve_residual_observation_state_mode
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
+from serl_launcher.training.async_runtime.agentlace import run_agentlace_learner_service
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
