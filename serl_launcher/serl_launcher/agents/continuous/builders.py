@@ -1,31 +1,21 @@
-"""Shared residual runtime config helpers."""
+"""Builders for continuous-control agents."""
 from __future__ import annotations
 
 import os
-import random
-from typing import Any, Dict
+from typing import Any
+from typing import Dict
 
 import numpy as np
 import torch
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 
-from serl_launcher.residual.action_spec import resolve_action_mask
-from serl_launcher.residual.action_spec import resolve_control_indices
-from serl_launcher.residual.observation import normalize_residual_observation_state_mode
 
-
-def set_global_seeds(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
-def to_hidden_dims(values) -> list[int]:
+def _to_hidden_dims(values) -> list[int]:
     return [int(v) for v in values]
 
 
-def build_optimizer_kwargs(
+def _build_optimizer_kwargs(
     cfg: DictConfig,
     *,
     for_temperature: bool = False,
@@ -61,7 +51,7 @@ def build_optimizer_kwargs(
     return kwargs
 
 
-def build_mixed_precision_kwargs(cfg: DictConfig) -> Dict[str, Any]:
+def _build_mixed_precision_kwargs(cfg: DictConfig) -> Dict[str, Any]:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", None)
     if mixed_precision_cfg is None:
@@ -72,78 +62,6 @@ def build_mixed_precision_kwargs(cfg: DictConfig) -> Dict[str, Any]:
     return {
         "enabled": bool(mixed_precision_cfg.get("enabled", False)),
         "dtype": str(mixed_precision_cfg.get("dtype", "bfloat16")),
-    }
-
-
-def resolve_residual_observation_state_mode(cfg: DictConfig) -> str:
-    residual_cfg = cfg.get("residual", None)
-    observation_cfg = (
-        residual_cfg.get("observation", None)
-        if residual_cfg is not None
-        else None
-    )
-    state_mode = (
-        observation_cfg.get("state_mode", "fused")
-        if observation_cfg is not None
-        else "fused"
-    )
-    return normalize_residual_observation_state_mode(state_mode)
-
-
-def resolve_action_mask_from_cfg(
-    cfg: DictConfig,
-    *,
-    full_action_dim: int,
-) -> np.ndarray:
-    action_mask_cfg = cfg.residual.get("action_mask", None)
-    action_mask = (
-        [bool(v) for v in action_mask_cfg] if action_mask_cfg is not None else None
-    )
-    return resolve_action_mask(
-        full_action_dim=int(full_action_dim),
-        action_mask=action_mask,
-    )
-
-
-def resolve_control_indices_from_cfg(
-    cfg: DictConfig,
-    *,
-    full_action_dim: int,
-) -> np.ndarray:
-    action_mask = resolve_action_mask_from_cfg(
-        cfg,
-        full_action_dim=int(full_action_dim),
-    )
-    return resolve_control_indices(
-        full_action_dim=int(full_action_dim),
-        action_mask=action_mask,
-    )
-
-
-def build_residual_action_transform(
-    *,
-    control_indices: np.ndarray,
-    residual_limits: np.ndarray,
-    full_action_dim: int,
-    chunk_horizon: int,
-    chunk_step_enabled: bool,
-    clip_gripper: bool,
-) -> Dict[str, Any]:
-    return {
-        "type": "residual_combined",
-        "control_indices": [
-            int(v) for v in np.asarray(control_indices, dtype=np.int64).reshape(-1)
-        ],
-        "limits": [
-            float(v) for v in np.asarray(residual_limits, dtype=np.float32).reshape(-1)
-        ],
-        "full_action_dim": int(full_action_dim),
-        "chunk_horizon": int(chunk_horizon),
-        "chunk_step_enabled": bool(chunk_step_enabled),
-        "clip_gripper": bool(clip_gripper),
-        "base_action_key": "base_action",
-        "base_action_chunk_key": "base_action_chunk",
-        "scale_key": "alpha",
     }
 
 
@@ -164,9 +82,9 @@ def build_drq_agent(
         (int(critic_action_dim) if critic_action_dim is not None else int(action_dim),),
         dtype=np.float32,
     )
-    actor_optim_kwargs = build_optimizer_kwargs(cfg, for_temperature=False)
-    critic_optim_kwargs = build_optimizer_kwargs(cfg, for_temperature=False)
-    temp_optim_kwargs = build_optimizer_kwargs(cfg, for_temperature=True)
+    actor_optim_kwargs = _build_optimizer_kwargs(cfg, for_temperature=False)
+    critic_optim_kwargs = _build_optimizer_kwargs(cfg, for_temperature=False)
+    temp_optim_kwargs = _build_optimizer_kwargs(cfg, for_temperature=True)
 
     resnet_kwargs = None
     resnet_cfg = cfg.sac.get("resnet", None)
@@ -199,12 +117,12 @@ def build_drq_agent(
         critic_network_kwargs={
             "activations": str(cfg.sac.critic_activation),
             "use_layer_norm": bool(cfg.sac.critic_layer_norm),
-            "hidden_dims": to_hidden_dims(cfg.sac.critic_hidden_dims),
+            "hidden_dims": _to_hidden_dims(cfg.sac.critic_hidden_dims),
         },
         policy_network_kwargs={
             "activations": str(cfg.sac.policy_activation),
             "use_layer_norm": bool(cfg.sac.policy_layer_norm),
-            "hidden_dims": to_hidden_dims(cfg.sac.policy_hidden_dims),
+            "hidden_dims": _to_hidden_dims(cfg.sac.policy_hidden_dims),
         },
         policy_kwargs={
             "tanh_squash_distribution": True,
@@ -229,7 +147,7 @@ def build_drq_agent(
         ),
         temperature_init=float(cfg.sac.temperature_init),
         action_transform=action_transform,
-        mixed_precision=build_mixed_precision_kwargs(cfg),
+        mixed_precision=_build_mixed_precision_kwargs(cfg),
     )
     te = cfg.sac.get("target_entropy", None)
     if te is not None:
@@ -242,26 +160,3 @@ def build_drq_agent(
         device=device,
         **kwargs,
     )
-
-
-def sample_probing_steps(probing_cfg: DictConfig, *, episode_horizon: int) -> int:
-    if not bool(probing_cfg.get("enable_base_probing", False)):
-        return 0
-
-    alpha_cfg = probing_cfg.get("probing_alpha", None)
-    if alpha_cfg is not None:
-        alpha = float(np.clip(float(alpha_cfg), 0.0, 1.0))
-        max_steps = int(max(0, round(alpha * float(max(0, int(episode_horizon))))))
-        if max_steps <= 0:
-            return 0
-        return int(random.randint(0, max_steps))
-
-    min_steps = int(probing_cfg.get("probing_min_steps", 0))
-    max_steps = int(probing_cfg.get("probing_max_steps", 0))
-    min_steps = max(0, min_steps)
-    max_steps = max(0, max_steps)
-    if max_steps < min_steps:
-        min_steps, max_steps = max_steps, min_steps
-    if max_steps == 0:
-        return 0
-    return int(random.randint(min_steps, max_steps))

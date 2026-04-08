@@ -8,7 +8,7 @@ from typing import Hashable
 from typing import Optional
 
 from omegaconf import DictConfig
-from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
+from serl_launcher.residual.train.bindings import ResidualRuntimeBindings
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.profiling import _profile_call
 

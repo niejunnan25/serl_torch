@@ -10,20 +10,20 @@ import numpy as np
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.runtime.actor_episode_shared import apply_training_updates_and_runtime_hooks
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeSpec
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeState
-from serl_launcher.residual.runtime.actor_episode_shared import insert_online_transitions
-from serl_launcher.residual.runtime.actor_support import build_policy_input
-from serl_launcher.residual.runtime.actor_support import build_step_obs_profiled
-from serl_launcher.residual.runtime.actor_support import replay_progress_size
-from serl_launcher.residual.runtime.actor_support import resolve_train_gate
-from serl_launcher.residual.runtime.obs_utils import _clone_obs_dict
-from serl_launcher.residual.runtime.obs_utils import _zero_obs_like
+from serl_launcher.residual.train.actor.episode_shared import apply_training_updates_and_runtime_hooks
+from serl_launcher.residual.train.actor.episode_shared import EpisodeSpec
+from serl_launcher.residual.train.actor.episode_shared import EpisodeState
+from serl_launcher.residual.train.actor.episode_shared import insert_online_transitions
+from serl_launcher.residual.train.actor.support import build_policy_input
+from serl_launcher.residual.train.actor.support import build_step_obs_profiled
+from serl_launcher.residual.train.actor.support import replay_progress_size
+from serl_launcher.residual.train.actor.support import resolve_train_gate
+from serl_launcher.residual.train.obs_utils import _clone_obs_dict
+from serl_launcher.residual.train.obs_utils import _zero_obs_like
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.runtime.schedules import _scheduled_alpha
-from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
-from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window
+from serl_launcher.residual.train.schedules import _scheduled_alpha
+from serl_launcher.residual.train.telemetry import _append_tb_step_window
+from serl_launcher.residual.train.telemetry import _flush_tb_step_window
 
 
 def execute_step_decision(
@@ -140,7 +140,7 @@ def execute_step_decision(
         state.episode_steps += 1
         if spec.phase_train:
             state.train_env_step += 1
-            update_train_progress()
+            update_train_progress(train_env_step_value=state.train_env_step)
         train_env_step_after_step = int(state.train_env_step)
         next_alpha_step = _scheduled_alpha(
             cfg,

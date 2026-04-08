@@ -1,20 +1,11 @@
-"""TensorBoard metric helpers for LIBERO residual training."""
+"""Residual-train TensorBoard metric helpers."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import numpy as np
 
-
-def _log_info_scalars(
-    tb_writer,
-    info: Dict[str, Any],
-    global_step: int,
-    pairs: Tuple[Tuple[str, str], ...],
-) -> None:
-    for tb_key, info_key in pairs:
-        if info_key in info and info[info_key] is not None:
-            tb_writer.add_scalar(tb_key, float(info[info_key]), global_step)
+from serl_launcher.training.telemetry import _log_info_scalars
 
 
 def _new_tb_step_window() -> Dict[str, List[Any]]:

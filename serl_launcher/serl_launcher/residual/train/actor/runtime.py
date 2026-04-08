@@ -5,9 +5,9 @@ from pathlib import Path
 
 from omegaconf import DictConfig
 
-from serl_launcher.residual.runtime.actor_loop import run_actor_loop
-from serl_launcher.residual.runtime.actor_setup import build_actor_runtime_session
-from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
+from serl_launcher.residual.train.actor.loop import run_actor_loop
+from serl_launcher.residual.train.actor.setup import build_actor_runtime_session
+from serl_launcher.residual.train.bindings import ResidualRuntimeBindings
 
 
 def run_residual_actor_loop(

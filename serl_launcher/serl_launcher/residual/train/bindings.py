@@ -1,4 +1,4 @@
-"""Shared binding protocols for residual runtime entrypoints."""
+"""Shared binding protocols for residual training entrypoints."""
 from __future__ import annotations
 
 from typing import Any
@@ -12,7 +12,7 @@ from serl_launcher.training.profiling import _RuntimeProfiler
 
 
 class ResidualDataBindings(Protocol):
-    """Dataset- and task-facing binding contract used by runtime services."""
+    """Dataset- and task-facing binding contract used by training services."""
 
     image_keys: tuple[str, ...]
     normalizer: StateActionNormalizer | None

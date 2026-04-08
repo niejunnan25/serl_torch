@@ -10,22 +10,22 @@ from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.runtime.actor_episode_shared import apply_training_updates_and_runtime_hooks
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeSpec
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeState
-from serl_launcher.residual.runtime.actor_episode_shared import insert_online_transitions
-from serl_launcher.residual.runtime.actor_support import build_chunk_step_record
-from serl_launcher.residual.runtime.actor_support import build_policy_input
-from serl_launcher.residual.runtime.actor_support import build_step_obs_profiled
-from serl_launcher.residual.runtime.actor_support import replay_progress_size
-from serl_launcher.residual.runtime.actor_support import resolve_train_gate
+from serl_launcher.residual.train.actor.episode_shared import apply_training_updates_and_runtime_hooks
+from serl_launcher.residual.train.actor.episode_shared import EpisodeSpec
+from serl_launcher.residual.train.actor.episode_shared import EpisodeState
+from serl_launcher.residual.train.actor.episode_shared import insert_online_transitions
+from serl_launcher.residual.train.actor.support import build_chunk_step_record
+from serl_launcher.residual.train.actor.support import build_policy_input
+from serl_launcher.residual.train.actor.support import build_step_obs_profiled
+from serl_launcher.residual.train.actor.support import replay_progress_size
+from serl_launcher.residual.train.actor.support import resolve_train_gate
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.runtime.schedules import _scheduled_alpha
-from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
-from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window
-from serl_launcher.residual.runtime.train_loop_utils import _count_env_step_update_triggers
-from serl_launcher.residual.runtime.train_loop_utils import _iter_period_hits
-from serl_launcher.residual.runtime.train_loop_utils import _remaining_train_budget_steps
+from serl_launcher.residual.train.schedules import _scheduled_alpha
+from serl_launcher.residual.train.telemetry import _append_tb_step_window
+from serl_launcher.residual.train.telemetry import _flush_tb_step_window
+from serl_launcher.training.loop_utils import _count_env_step_update_triggers
+from serl_launcher.training.loop_utils import _iter_period_hits
+from serl_launcher.training.loop_utils import _remaining_train_budget_steps
 
 
 def execute_chunk_decision(
@@ -198,7 +198,7 @@ def execute_chunk_decision(
         state.episode_steps += 1
         if spec.phase_train:
             state.train_env_step += 1
-            update_train_progress()
+            update_train_progress(train_env_step_value=state.train_env_step)
         state.episode_return += reward
         state.episode_success = bool(info.get("success", state.episode_success))
 

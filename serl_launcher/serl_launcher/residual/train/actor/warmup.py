@@ -6,19 +6,19 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.runtime.actor_support import ActorLoopState
-from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
-from serl_launcher.residual.runtime.actor_support import build_chunk_step_record
-from serl_launcher.residual.runtime.actor_support import build_policy_input
-from serl_launcher.residual.runtime.actor_support import build_step_obs_profiled
-from serl_launcher.residual.runtime.actor_support import clear_obs_cache
-from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
-from serl_launcher.residual.runtime.actor_support import flush_external_agentlace_actor
-from serl_launcher.residual.runtime.actor_support import new_progress
-from serl_launcher.residual.runtime.obs_utils import _clone_obs_dict
-from serl_launcher.residual.runtime.obs_utils import _zero_obs_like
+from serl_launcher.residual.train.actor.support import ActorLoopState
+from serl_launcher.residual.train.actor.support import ActorRuntimeContext
+from serl_launcher.residual.train.actor.support import build_chunk_step_record
+from serl_launcher.residual.train.actor.support import build_policy_input
+from serl_launcher.residual.train.actor.support import build_step_obs_profiled
+from serl_launcher.residual.train.actor.support import clear_obs_cache
+from serl_launcher.residual.train.actor.support import ensure_training_runtime_started
+from serl_launcher.residual.train.actor.support import flush_external_agentlace_actor
+from serl_launcher.residual.train.actor.support import new_progress
+from serl_launcher.residual.train.obs_utils import _clone_obs_dict
+from serl_launcher.residual.train.obs_utils import _zero_obs_like
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.runtime.train_loop_utils import _insert_online_transition
+from serl_launcher.residual.train.transitions import _insert_online_transition
 
 
 def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> None:

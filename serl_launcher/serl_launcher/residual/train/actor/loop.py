@@ -45,61 +45,65 @@ from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
-from serl_launcher.residual.runtime.async_eval import _append_async_eval_request
-from serl_launcher.residual.runtime.async_eval import _init_async_eval_tb_sync_state
-from serl_launcher.residual.runtime.async_eval import _start_async_eval_watcher
-from serl_launcher.residual.runtime.async_eval import _stop_async_eval_watcher
-from serl_launcher.residual.runtime.async_eval import _sync_async_eval_results_to_tb
-from serl_launcher.residual.runtime.agentlace_bridge import advance_async_target_update_calls
-from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeConfig
-from serl_launcher.residual.runtime.agentlace_bridge import AgentlaceBridgeState
-from serl_launcher.residual.runtime.agentlace_bridge import create_agentlace_async_learner
-from serl_launcher.residual.runtime.agentlace_bridge import maybe_send_agentlace_timer_stats
-from serl_launcher.residual.runtime.agentlace_bridge import maybe_wait_for_async_learner_budget
-from serl_launcher.residual.runtime.agentlace_bridge import save_actor_bootstrap
-from serl_launcher.residual.runtime.agentlace_bridge import sync_async_bounded_lag_baseline_from_learner
-from serl_launcher.residual.runtime.async_learning import _AsyncLearner
-from serl_launcher.residual.runtime.async_learning import _MixedBatchPrefetcher
-from serl_launcher.residual.runtime.async_learning import _ProcessAsyncLearner
-from serl_launcher.residual.runtime.async_learning import _sample_mixed_batch
-from serl_launcher.residual.runtime.actor_support import ActorLoopState
-from serl_launcher.residual.runtime.actor_support import ActorRuntimeContext
-from serl_launcher.residual.runtime.actor_support import advance_async_update_calls
-from serl_launcher.residual.runtime.actor_support import build_chunk_step_record
-from serl_launcher.residual.runtime.actor_support import build_policy_input
-from serl_launcher.residual.runtime.actor_support import build_step_obs_profiled
-from serl_launcher.residual.runtime.actor_support import clear_obs_cache
-from serl_launcher.residual.runtime.actor_support import ensure_training_runtime_started
-from serl_launcher.residual.runtime.actor_support import flush_external_agentlace_actor
-from serl_launcher.residual.runtime.actor_support import initialize_actor_loop_state
-from serl_launcher.residual.runtime.actor_support import new_progress
-from serl_launcher.residual.runtime.actor_support import replay_progress_size
-from serl_launcher.residual.runtime.actor_support import resolve_train_gate
-from serl_launcher.residual.runtime.actor_warmup import run_base_only_warmup
-from serl_launcher.residual.runtime.actor_support import save_checkpoint_at_step
-from serl_launcher.residual.runtime.actor_support import send_agentlace_timer_stats
-from serl_launcher.residual.runtime.actor_support import sync_async_bounded_lag_baseline
-from serl_launcher.residual.runtime.actor_support import update_train_progress
-from serl_launcher.residual.runtime.actor_support import wait_for_async_learner_budget
-from serl_launcher.residual.runtime.actor_episode import EpisodeSpec
-from serl_launcher.residual.runtime.actor_episode import run_policy_episode
-from serl_launcher.residual.runtime.config_utils import sample_probing_steps
-from serl_launcher.residual.runtime.obs_utils import _clone_obs_dict
-from serl_launcher.residual.runtime.obs_utils import _zero_obs_like
+from serl_launcher.residual.train.async_eval import _append_async_eval_request
+from serl_launcher.residual.train.async_eval import _init_async_eval_tb_sync_state
+from serl_launcher.residual.train.async_eval import _start_async_eval_watcher
+from serl_launcher.residual.train.async_eval import _stop_async_eval_watcher
+from serl_launcher.residual.train.async_eval import _sync_async_eval_results_to_tb
+from serl_launcher.training.async_runtime.agentlace import _AsyncLearner
+from serl_launcher.training.async_runtime.agentlace import _MixedBatchPrefetcher
+from serl_launcher.training.async_runtime.agentlace import _ProcessAsyncLearner
+from serl_launcher.training.async_runtime.agentlace import _sample_mixed_batch
+from serl_launcher.training.async_runtime.bridge import advance_async_target_update_calls
+from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeConfig
+from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeState
+from serl_launcher.training.async_runtime.bridge import create_agentlace_async_learner
+from serl_launcher.training.async_runtime.bridge import maybe_send_agentlace_timer_stats
+from serl_launcher.training.async_runtime.bridge import maybe_wait_for_async_learner_budget
+from serl_launcher.training.async_runtime.bridge import save_actor_bootstrap
+from serl_launcher.training.async_runtime.bridge import (
+    sync_async_bounded_lag_baseline_from_learner,
+)
+from serl_launcher.residual.train.actor.support import ActorLoopState
+from serl_launcher.residual.train.actor.support import ActorRuntimeContext
+from serl_launcher.residual.train.actor.support import (
+    advance_async_update_calls as advance_async_update_calls_impl,
+)
+from serl_launcher.residual.train.actor.support import build_chunk_step_record
+from serl_launcher.residual.train.actor.support import build_policy_input
+from serl_launcher.residual.train.actor.support import build_step_obs_profiled
+from serl_launcher.residual.train.actor.support import clear_obs_cache
+from serl_launcher.residual.train.actor.support import ensure_training_runtime_started
+from serl_launcher.residual.train.actor.support import flush_external_agentlace_actor
+from serl_launcher.residual.train.actor.support import initialize_actor_loop_state
+from serl_launcher.residual.train.actor.support import new_progress
+from serl_launcher.residual.train.actor.support import replay_progress_size
+from serl_launcher.residual.train.actor.support import resolve_train_gate
+from serl_launcher.residual.train.actor.warmup import run_base_only_warmup
+from serl_launcher.residual.train.actor.support import save_checkpoint_at_step
+from serl_launcher.residual.train.actor.support import send_agentlace_timer_stats
+from serl_launcher.residual.train.actor.support import sync_async_bounded_lag_baseline
+from serl_launcher.residual.train.actor.support import update_train_progress
+from serl_launcher.residual.train.actor.support import wait_for_async_learner_budget
+from serl_launcher.residual.train.actor.episode import EpisodeSpec
+from serl_launcher.residual.train.actor.episode import run_policy_episode
+from serl_launcher.residual.train.config import sample_probing_steps
+from serl_launcher.residual.train.obs_utils import _clone_obs_dict
+from serl_launcher.residual.train.obs_utils import _zero_obs_like
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.profiling import _emit_profiling_snapshot
 from serl_launcher.training.profiling import _profile_call
 from serl_launcher.training.replay_batch import _consume_prepared_replay_batch
 from serl_launcher.training.replay_batch import _prepare_replay_batch
-from serl_launcher.residual.runtime.schedules import _scheduled_alpha
-from serl_launcher.residual.runtime.tb_metrics import _append_tb_step_window
-from serl_launcher.residual.runtime.tb_metrics import _flush_tb_step_window
-from serl_launcher.residual.runtime.tb_metrics import _log_update_metrics
-from serl_launcher.residual.runtime.tb_metrics import _new_tb_step_window
-from serl_launcher.residual.runtime.train_loop_utils import _count_env_step_update_triggers
-from serl_launcher.residual.runtime.train_loop_utils import _insert_online_transition
-from serl_launcher.residual.runtime.train_loop_utils import _iter_period_hits
-from serl_launcher.residual.runtime.train_loop_utils import _remaining_train_budget_steps
+from serl_launcher.residual.train.schedules import _scheduled_alpha
+from serl_launcher.residual.train.telemetry import _append_tb_step_window
+from serl_launcher.residual.train.telemetry import _flush_tb_step_window
+from serl_launcher.residual.train.telemetry import _log_update_metrics
+from serl_launcher.residual.train.telemetry import _new_tb_step_window
+from serl_launcher.residual.train.transitions import _insert_online_transition
+from serl_launcher.training.loop_utils import _count_env_step_update_triggers
+from serl_launcher.training.loop_utils import _iter_period_hits
+from serl_launcher.training.loop_utils import _remaining_train_budget_steps
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.alpha_utils import validate_alpha
 from serl_launcher.utils.serialization import _to_jsonable
@@ -299,9 +303,8 @@ def run_actor_loop(
     ) -> None:
         _sync_shared_state()
         state.train_env_step = int(train_step_after)
-        advance_async_update_calls(
+        advance_async_update_calls_impl(
             ctx,
-            state,
             phase_train_flag=bool(phase_train_flag),
             train_step_before=int(train_step_before),
             train_step_after=int(train_step_after),
@@ -309,9 +312,15 @@ def run_actor_loop(
             replay_size_after=int(replay_size_after),
         )
 
-    def _update_train_progress(*, force_postfix: bool = False) -> None:
+    def _update_train_progress(
+        *,
+        force_postfix: bool = False,
+        train_env_step_value: Optional[int] = None,
+    ) -> None:
         nonlocal train_progress_last_step
         _sync_shared_state()
+        if train_env_step_value is not None:
+            state.train_env_step = int(train_env_step_value)
         update_train_progress(ctx, state, force_postfix=force_postfix)
         train_progress_last_step = int(state.train_progress_last_step)
 

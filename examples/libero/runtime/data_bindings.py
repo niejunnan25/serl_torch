@@ -9,7 +9,7 @@ from typing import Any
 from omegaconf import DictConfig
 from serl_launcher.data.normalizer import StateActionNormalizer
 from serl_launcher.data.normalizer import load_normalizer
-from serl_launcher.residual.runtime.bindings import ResidualDataBindings
+from serl_launcher.residual.train.bindings import ResidualDataBindings
 
 from ..config import resolve_libero_cfg_image_keys
 from ..training_config import LIBERO_RESIDUAL_BASE_CONFIG

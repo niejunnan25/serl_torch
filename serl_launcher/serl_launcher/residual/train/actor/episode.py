@@ -7,15 +7,15 @@ import numpy as np
 from concurrent.futures import Future
 
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.runtime.actor_episode_chunk import execute_chunk_decision
-from serl_launcher.residual.runtime.actor_episode_shared import build_episode_result
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeResult
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeSpec
-from serl_launcher.residual.runtime.actor_episode_shared import EpisodeState
-from serl_launcher.residual.runtime.actor_episode_shared import flush_episode_step_window
-from serl_launcher.residual.runtime.actor_episode_step import execute_step_decision
-from serl_launcher.residual.runtime.actor_support import build_policy_input
-from serl_launcher.residual.runtime.config_utils import sample_probing_steps
+from serl_launcher.residual.train.actor.episode_chunk import execute_chunk_decision
+from serl_launcher.residual.train.actor.episode_shared import build_episode_result
+from serl_launcher.residual.train.actor.episode_shared import EpisodeResult
+from serl_launcher.residual.train.actor.episode_shared import EpisodeSpec
+from serl_launcher.residual.train.actor.episode_shared import EpisodeState
+from serl_launcher.residual.train.actor.episode_shared import flush_episode_step_window
+from serl_launcher.residual.train.actor.episode_step import execute_step_decision
+from serl_launcher.residual.train.actor.support import build_policy_input
+from serl_launcher.residual.train.config import sample_probing_steps
 from serl_launcher.training.profiling import _profile_call
 
 
@@ -72,7 +72,7 @@ def _run_probing_steps(
             state.episode_steps += 1
             if spec.phase_train:
                 state.train_env_step += 1
-                update_train_progress()
+                update_train_progress(train_env_step_value=state.train_env_step)
             probing_remaining -= 1
             state.episode_return += float(reward)
             state.episode_success = bool(info["success"])
