@@ -11,6 +11,7 @@ from typing import Optional
 from omegaconf import DictConfig
 from serl_launcher.data.normalizer import StateActionNormalizer
 from serl_launcher.data.normalizer import load_normalizer
+from serl_launcher.residual.runtime.bindings import ResidualDataBindings
 from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 from serl_launcher.residual.runtime.profiling import _profile_call
@@ -25,13 +26,17 @@ from .policy_adapter import build_libero_policy_input
 
 
 @dataclass
-class LiberoRuntimeBindings(ResidualRuntimeBindings):
-    env: Any
+class LiberoDataBindings(ResidualDataBindings):
     image_keys: tuple[str, ...]
     normalizer: StateActionNormalizer | None
-    obs_cache: LiberoObservationCache
     task_key: str
     data_config: Any
+
+
+@dataclass
+class LiberoRuntimeBindings(LiberoDataBindings, ResidualRuntimeBindings):
+    env: Any
+    obs_cache: LiberoObservationCache
 
     def build_policy_input(
         self,
@@ -106,6 +111,31 @@ class LiberoRuntimeBindings(ResidualRuntimeBindings):
         )
 
 
+def build_libero_data_bindings(
+    cfg: DictConfig,
+    *,
+    logger: logging.Logger,
+) -> LiberoDataBindings:
+    normalizer: StateActionNormalizer | None = None
+    norm_cfg = cfg.get("normalization", None)
+    task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
+    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
+        stats_dir = norm_cfg.get(
+            "stats_dir",
+            str(Path(__file__).resolve().parents[1] / "data" / "stats"),
+        )
+        normalizer = load_normalizer(task_key, stats_dir=stats_dir)
+        if normalizer is not None:
+            logger.info("Loaded normalizer for task_key=%s", task_key)
+
+    return LiberoDataBindings(
+        image_keys=tuple(resolve_libero_cfg_image_keys(cfg)),
+        normalizer=normalizer,
+        task_key=task_key,
+        data_config=LIBERO_RESIDUAL_BASE_CONFIG,
+    )
+
+
 def build_libero_runtime_bindings(
     cfg: DictConfig,
     *,
@@ -119,23 +149,12 @@ def build_libero_runtime_bindings(
         env.current_instruction,
     )
 
-    normalizer: StateActionNormalizer | None = None
-    norm_cfg = cfg.get("normalization", None)
-    task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
-    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
-        stats_dir = norm_cfg.get(
-            "stats_dir",
-            str(Path(__file__).resolve().parents[1] / "data" / "stats"),
-        )
-        normalizer = load_normalizer(task_key, stats_dir=stats_dir)
-        if normalizer is not None:
-            logger.info("Loaded normalizer for task_key=%s", task_key)
-
+    data_bindings = build_libero_data_bindings(cfg, logger=logger)
     return LiberoRuntimeBindings(
         env=env,
-        image_keys=tuple(resolve_libero_cfg_image_keys(cfg)),
-        normalizer=normalizer,
+        image_keys=data_bindings.image_keys,
+        normalizer=data_bindings.normalizer,
         obs_cache=LiberoObservationCache(),
-        task_key=task_key,
-        data_config=LIBERO_RESIDUAL_BASE_CONFIG,
+        task_key=data_bindings.task_key,
+        data_config=data_bindings.data_config,
     )

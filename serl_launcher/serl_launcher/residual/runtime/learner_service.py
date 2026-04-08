@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import Callable
 from typing import Any, Dict, Optional, Tuple
 
 try:
@@ -16,12 +15,12 @@ except ModuleNotFoundError:
     sys.modules["gym"] = gym
 import numpy as np
 import torch
-from omegaconf import DictConfig, OmegaConf
-from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
+from omegaconf import DictConfig
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 from serl_launcher.residual.runtime.async_learning import _apply_agent_snapshot_payload
 from serl_launcher.residual.runtime.async_learning import run_agentlace_learner_service
+from serl_launcher.residual.runtime.bindings import ResidualDataBindings
 from serl_launcher.residual.runtime.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.residual.runtime.config_utils import build_drq_agent
 from serl_launcher.residual.runtime.config_utils import build_residual_action_transform
@@ -302,8 +301,7 @@ def run_residual_learner_service(
     *,
     run_dir: Path,
     logger: logging.Logger,
-    data_config: Any,
-    resolve_cfg_image_keys: Callable[[DictConfig], tuple[str, ...]],
+    bindings: ResidualDataBindings,
 ) -> None:
     async_cfg = cfg.training.get("async", None)
     async_enabled = (
@@ -402,7 +400,7 @@ def run_residual_learner_service(
     step_action_dim = int(bootstrap["step_action_dim"])
     agent_action_dim = int(bootstrap["agent_action_dim"])
     critic_action_dim = int(bootstrap["critic_action_dim"])
-    image_keys = tuple(bootstrap.get("image_keys", resolve_cfg_image_keys(cfg)))
+    image_keys = tuple(bootstrap.get("image_keys", tuple(bindings.image_keys)))
     chunk_step_enabled = bool(bootstrap.get("chunk_step_enabled", False))
     chunk_horizon = int(bootstrap.get("chunk_horizon", int(cfg.residual.chunk_horizon)))
     state_mode = str(
@@ -430,19 +428,10 @@ def run_residual_learner_service(
             clip_gripper=bool(cfg.residual.get("clip_gripper", True)),
         )
 
-    task_key = f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}"
-    normalizer: StateActionNormalizer | None = None
-    norm_cfg = cfg.get("normalization", None)
-    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
-        stats_dir = norm_cfg.get(
-            "stats_dir",
-            str(Path(__file__).resolve().parents[1] / "data" / "stats"),
-        )
-        normalizer = load_normalizer(
-            task_key, stats_dir=stats_dir
-        )
-        if normalizer is not None:
-            logger.info("Loaded normalizer for task_key=%s", task_key)
+    task_key = str(bindings.task_key)
+    normalizer = bindings.normalizer
+    if normalizer is not None:
+        logger.info("Loaded normalizer for task_key=%s", task_key)
 
     replay_buffer = _build_online_replay(
         cfg,
@@ -526,7 +515,7 @@ def run_residual_learner_service(
             stack_horizon=int(cfg.sac.obs_stack_horizon),
             chunk_step_enabled=bool(chunk_step_enabled),
             logger=logger,
-            data_config=data_config,
+            data_config=bindings.data_config,
             normalizer=normalizer,
             profiler=None,
             state_mode=state_mode,
@@ -579,7 +568,7 @@ def run_residual_learner_service(
             stack_horizon=int(cfg.sac.obs_stack_horizon),
             chunk_step_enabled=bool(chunk_step_enabled),
             logger=logger,
-            data_config=data_config,
+            data_config=bindings.data_config,
             normalizer=normalizer,
             profiler=None,
             max_episodes=int(configured_warmup_episodes),

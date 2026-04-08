@@ -17,8 +17,7 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.config import resolve_libero_cfg_image_keys
-from serl_torch.examples.libero.training_config import LIBERO_RESIDUAL_BASE_CONFIG
+from serl_torch.examples.libero.runtime.runtime_bindings import build_libero_data_bindings
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train_residual_sac")
@@ -35,12 +34,12 @@ def main(cfg: DictConfig) -> None:
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
     set_global_seeds(int(cfg.seed))
+    bindings = build_libero_data_bindings(cfg, logger=logger)
     run_residual_learner_service(
         cfg,
         run_dir=run_dir,
         logger=logger,
-        data_config=LIBERO_RESIDUAL_BASE_CONFIG,
-        resolve_cfg_image_keys=resolve_libero_cfg_image_keys,
+        bindings=bindings,
     )
 
 

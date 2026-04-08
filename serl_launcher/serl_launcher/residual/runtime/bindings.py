@@ -1,4 +1,4 @@
-"""Shared environment-binding protocol for residual runtime entrypoints."""
+"""Shared binding protocols for residual runtime entrypoints."""
 from __future__ import annotations
 
 from typing import Any
@@ -11,15 +11,20 @@ from serl_launcher.policy.base import PolicyInput
 from serl_launcher.residual.runtime.profiling import _RuntimeProfiler
 
 
-class ResidualRuntimeBindings(Protocol):
+class ResidualDataBindings(Protocol):
+    """Dataset- and task-facing binding contract used by runtime services."""
+
+    image_keys: tuple[str, ...]
+    normalizer: StateActionNormalizer | None
+    task_key: str
+    data_config: Any
+
+
+class ResidualRuntimeBindings(ResidualDataBindings, Protocol):
     """Environment-specific runtime contract consumed by residual actor/learner code."""
 
     env: Any
-    image_keys: tuple[str, ...]
-    normalizer: StateActionNormalizer | None
     obs_cache: Any
-    task_key: str
-    data_config: Any
 
     def build_policy_input(
         self,

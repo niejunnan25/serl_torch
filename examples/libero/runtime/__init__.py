@@ -14,6 +14,7 @@ from .obs_adapter import extract_residual_images
 from .policy_adapter import build_libero_policy_input
 
 if TYPE_CHECKING:
+    from .runtime_bindings import LiberoDataBindings
     from .runtime_bindings import LiberoRuntimeBindings
 
 
@@ -32,7 +33,12 @@ def build_residual_step_obs_profiled(
 
 
 def __getattr__(name: str):
-    if name in {"LiberoRuntimeBindings", "build_libero_runtime_bindings"}:
+    if name in {
+        "LiberoDataBindings",
+        "LiberoRuntimeBindings",
+        "build_libero_data_bindings",
+        "build_libero_runtime_bindings",
+    }:
         from . import runtime_bindings as _runtime_bindings
 
         return getattr(_runtime_bindings, name)
@@ -40,9 +46,11 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "LiberoDataBindings",
     "LiberoObservationCache",
     "LiberoRuntimeBindings",
     "build_libero_state",
+    "build_libero_data_bindings",
     "build_libero_runtime_bindings",
     "build_libero_policy_input",
     "build_residual_step_core",
