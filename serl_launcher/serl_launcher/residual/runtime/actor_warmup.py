@@ -75,11 +75,11 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
 
         while (episode_steps < max_episode_steps) and (not episode_done):
             if cached_base_chunk is None:
-                openpi_chunk, infer_info = ctx.openpi_client.infer_chunk(
+                policy_chunk, infer_info = ctx.policy_client.infer_chunk(
                     build_policy_input(ctx, obs_raw, ctx.env.current_instruction)
                 )
                 base_chunk = select_action_chunk_window(
-                    openpi_chunk,
+                    policy_chunk,
                     horizon=ctx.chunk_horizon,
                     action_dim=ctx.env_action_dim,
                 )
@@ -203,11 +203,11 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                         break
 
                 if not done:
-                    next_openpi_chunk, next_infer_info = ctx.openpi_client.infer_chunk(
+                    next_policy_chunk, next_infer_info = ctx.policy_client.infer_chunk(
                         build_policy_input(ctx, next_obs_raw, ctx.env.current_instruction)
                     )
                     next_base_chunk = select_action_chunk_window(
-                        next_openpi_chunk,
+                        next_policy_chunk,
                         horizon=ctx.chunk_horizon,
                         action_dim=ctx.env_action_dim,
                     )
@@ -255,9 +255,9 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                 if (
                     (not done)
                     and chunk_step == (ctx.chunk_horizon - 1)
-                    and ctx.openpi_prefetcher is not None
+                    and ctx.policy_prefetcher is not None
                 ):
-                    next_chunk_future = ctx.openpi_prefetcher.submit(
+                    next_chunk_future = ctx.policy_prefetcher.submit(
                         build_policy_input(ctx, next_obs_raw, ctx.env.current_instruction)
                     )
                 if done:
@@ -278,15 +278,15 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                     mask = 1.0
                 else:
                     if next_chunk_future is not None:
-                        next_openpi_chunk, next_infer_info = next_chunk_future.result()
+                        next_policy_chunk, next_infer_info = next_chunk_future.result()
                     else:
-                        next_openpi_chunk, next_infer_info = ctx.openpi_client.infer_chunk(
+                        next_policy_chunk, next_infer_info = ctx.policy_client.infer_chunk(
                             build_policy_input(
                                 ctx, next_obs_raw, ctx.env.current_instruction
                             )
                         )
                     next_base_chunk = select_action_chunk_window(
-                        next_openpi_chunk,
+                        next_policy_chunk,
                         horizon=ctx.chunk_horizon,
                         action_dim=ctx.env_action_dim,
                     )

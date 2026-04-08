@@ -18,8 +18,10 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
-from serl_launcher.policy.openpi.client import OpenPIPolicyClient
-from serl_launcher.policy.openpi.prefetch import AsyncOpenPIPolicyPrefetcher
+from serl_launcher.policy.base import PolicyPrefetcher
+from serl_launcher.policy.factory import build_policy_backend_info
+from serl_launcher.policy.factory import build_policy_client
+from serl_launcher.policy.factory import build_policy_prefetcher
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
@@ -82,11 +84,9 @@ def build_actor_runtime_session(
         bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
     )
 
-    openpi_client = OpenPIPolicyClient(
-        host=str(cfg.openpi.host),
-        port=int(cfg.openpi.port),
-        logger=logger,
-    )
+    policy_backend_info = build_policy_backend_info(cfg)
+    policy_client = build_policy_client(cfg, logger=logger)
+    logger.info("Chunk policy backend: %s", policy_backend_info["type"])
     stack_horizon = int(cfg.sac.obs_stack_horizon)
     if stack_horizon != 1:
         raise ValueError("Only obs_stack_horizon=1 is currently supported")
@@ -574,7 +574,7 @@ def build_actor_runtime_session(
     sync_replay_lock: Optional[threading.Lock] = None
     sync_replay_prefetcher: Optional[_MixedBatchPrefetcher] = None
     checkpoint_writer: Optional[_AsyncCheckpointWriter] = None
-    openpi_prefetcher: Optional[AsyncOpenPIPolicyPrefetcher] = None
+    policy_prefetcher: Optional[PolicyPrefetcher] = None
     replay_buffer = None
     offline_buffer = None
     offline_stats: Dict[str, Any] = {
@@ -705,11 +705,7 @@ def build_actor_runtime_session(
 
     step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
     episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
-    openpi_prefetcher = AsyncOpenPIPolicyPrefetcher(
-        host=str(cfg.openpi.host),
-        port=int(cfg.openpi.port),
-        logger=logger,
-    )
+    policy_prefetcher = build_policy_prefetcher(cfg, logger=logger)
     if profiling_enabled:
         profiling_logger = JsonlLogger(run_dir / profiling_log_file)
     tb_writer = SummaryWriter(log_dir=str(run_dir / "tb"))
@@ -800,11 +796,11 @@ def build_actor_runtime_session(
         seed=int(cfg.task.seed_base),
         init_episode_idx=-1,
     )
-    sample_openpi_chunk, _ = openpi_client.infer_chunk(
+    sample_policy_chunk, _ = policy_client.infer_chunk(
         _policy_input(sample_obs_raw, env.current_instruction)
     )
     sample_base_chunk = select_action_chunk_window(
-        sample_openpi_chunk,
+        sample_policy_chunk,
         horizon=chunk_horizon,
         action_dim=env_action_dim,
     )
@@ -1263,8 +1259,9 @@ def build_actor_runtime_session(
         data_config=data_config,
         build_residual_step_obs_profiled=build_residual_step_obs_profiled,
         build_residual_step_core=build_residual_step_core,
-        openpi_client=openpi_client,
-        openpi_prefetcher=openpi_prefetcher,
+        policy_backend_info=policy_backend_info,
+        policy_client=policy_client,
+        policy_prefetcher=policy_prefetcher,
         stack_horizon=stack_horizon,
         obs_state_mode=obs_state_mode,
         env_action_dim=env_action_dim,

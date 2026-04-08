@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 """
-LIBERO residual policy training (OpenPI + DrQ-SAC).
+Residual policy training runtime (chunk base policy + DrQ-SAC).
 
 Minimal residual RL loop:
-1. OpenPI predicts a base action chunk.
+1. A chunk policy backend predicts a base action chunk.
 2. Residual policy predicts a residual action (step mode) or residual chunk (chunk mode).
 3. Final action = base action + bounded residual.
 4. Step mode writes step transitions; chunk mode writes a step stream that replay assembles into chunk windows.
 5. DrQ-SAC updates from online replay or mixed online/offline replay.
 
 Recommended runtime split:
-- OpenPI server + LIBERO env server: run in the `libero` conda env.
+- Base policy server + env server: run in the environment-specific stack.
 - This trainer: run in a serl_torch / newer PyTorch env.
 """
 
@@ -38,8 +38,6 @@ import numpy as np
 import torch
 from tqdm.auto import tqdm
 from omegaconf import DictConfig, OmegaConf
-from serl_launcher.policy.openpi.client import OpenPIPolicyClient
-from serl_launcher.policy.openpi.prefetch import AsyncOpenPIPolicyPrefetcher
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action
@@ -143,8 +141,8 @@ def run_actor_loop(
     data_config = ctx.data_config
     build_residual_step_obs_profiled = ctx.build_residual_step_obs_profiled
     build_residual_step_core = ctx.build_residual_step_core
-    openpi_client = ctx.openpi_client
-    openpi_prefetcher = ctx.openpi_prefetcher
+    policy_client = ctx.policy_client
+    policy_prefetcher = ctx.policy_prefetcher
     stack_horizon = int(ctx.stack_horizon)
     obs_state_mode = str(ctx.obs_state_mode)
     env_action_dim = int(ctx.env_action_dim)
@@ -449,7 +447,7 @@ def run_actor_loop(
                                 probe_chunk, probe_info = probe_future.result()
                                 probe_future = None
                             else:
-                                probe_chunk, probe_info = openpi_client.infer_chunk(
+                                probe_chunk, probe_info = policy_client.infer_chunk(
                                     build_policy_input(ctx, obs_raw, env.current_instruction)
                                 )
                             probe_base_chunk = select_action_chunk_window(
@@ -488,9 +486,9 @@ def run_actor_loop(
                                     (not done)
                                     and probe_step == (chunk_horizon - 1)
                                     and probing_remaining > 0
-                                    and openpi_prefetcher is not None
+                                    and policy_prefetcher is not None
                                 ):
-                                    probe_future = openpi_prefetcher.submit(
+                                    probe_future = policy_prefetcher.submit(
                                         build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                     )
                                 step_logger.write(
@@ -552,11 +550,11 @@ def run_actor_loop(
 
                     while (episode_steps < max_episode_steps) and (not episode_done):
                         if cached_base_chunk is None:
-                            openpi_chunk, infer_info = openpi_client.infer_chunk(
+                            policy_chunk, infer_info = policy_client.infer_chunk(
                                 build_policy_input(ctx, obs_raw, env.current_instruction)
                             )
                             base_chunk = select_action_chunk_window(
-                                openpi_chunk,
+                                policy_chunk,
                                 horizon=chunk_horizon,
                                 action_dim=env_action_dim,
                             )
@@ -861,13 +859,13 @@ def run_actor_loop(
                             train_env_step_after_chunk = int(train_env_step)
                             if not done:
                                 (
-                                    next_openpi_chunk,
+                                    next_policy_chunk,
                                     next_infer_info,
-                                ) = openpi_client.infer_chunk(
+                                ) = policy_client.infer_chunk(
                                     build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                 )
                                 next_base_chunk = select_action_chunk_window(
-                                    next_openpi_chunk,
+                                    next_policy_chunk,
                                     horizon=chunk_horizon,
                                     action_dim=env_action_dim,
                                 )
@@ -1288,9 +1286,9 @@ def run_actor_loop(
                                 if (
                                     (not done)
                                     and chunk_step == (chunk_horizon - 1)
-                                    and openpi_prefetcher is not None
+                                    and policy_prefetcher is not None
                                 ):
-                                    next_chunk_future = openpi_prefetcher.submit(
+                                    next_chunk_future = policy_prefetcher.submit(
                                         build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                     )
 
@@ -1386,21 +1384,27 @@ def run_actor_loop(
                                 else:
                                     if next_chunk_future is not None:
                                         (
-                                            next_openpi_chunk,
+                                            next_policy_chunk,
                                             next_infer_info,
                                         ) = next_chunk_future.result()
                                     else:
                                         (
-                                            next_openpi_chunk,
+                                            next_policy_chunk,
                                             next_infer_info,
-                                        ) = openpi_client.infer_chunk(
+                                        ) = policy_client.infer_chunk(
                                             build_policy_input(ctx, next_obs_raw, env.current_instruction)
                                         )
-                                    next_base_chunk = select_action_chunk_window(
-                                        next_openpi_chunk,
-                                        horizon=chunk_horizon,
-                                        action_dim=env_action_dim,
-                                    )
+                                        next_base_chunk = select_action_chunk_window(
+                                            next_policy_chunk,
+                                            horizon=chunk_horizon,
+                                            action_dim=env_action_dim,
+                                        )
+                                    if next_chunk_future is not None:
+                                        next_base_chunk = select_action_chunk_window(
+                                            next_policy_chunk,
+                                            horizon=chunk_horizon,
+                                            action_dim=env_action_dim,
+                                        )
                                     next_obs_input = build_residual_step_obs_profiled(
                                         profiler,
                                         next_obs_raw,
@@ -2150,8 +2154,8 @@ def run_actor_loop(
             checkpoint_writer.close(wait=True)
         if sync_replay_prefetcher is not None:
             sync_replay_prefetcher.stop()
-        if openpi_prefetcher is not None:
-            openpi_prefetcher.close()
+        if policy_prefetcher is not None:
+            policy_prefetcher.close()
         if phase_progress is not None:
             phase_progress.close()
         if warmup_progress is not None:
