@@ -196,3 +196,6 @@ reference/
 
 # Temporary scratch files and directories
 tmp*
+
+# macOS Finder metadata
+.DS_Store

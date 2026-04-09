@@ -72,6 +72,7 @@ class ActorLoopState:
     skipped_seeds: int
     seed_cursor: int
     stopped_by_env_budget: bool
+    profiling_last_flush_step: int = -1
     last_update_info: Dict[str, Any] = field(default_factory=dict)
     saved_checkpoint_steps: set[int] = field(default_factory=set)
     train_recent_successes: deque[int] = field(
@@ -103,6 +104,7 @@ def initialize_actor_loop_state(ctx: ActorRuntimeContext) -> ActorLoopState:
         skipped_seeds=0,
         seed_cursor=int(ctx.cfg.task.seed_base) + int(ctx.online_prefill_loaded_episodes),
         stopped_by_env_budget=False,
+        profiling_last_flush_step=int(ctx.profiling_last_flush_step),
         warmup_recent_successes=warmup_recent_successes,
     )
     if int(ctx.max_train_env_steps) > 0:

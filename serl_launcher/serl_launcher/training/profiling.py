@@ -5,12 +5,14 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import numpy as np
-from torch.utils.tensorboard import SummaryWriter
 
 from serl_launcher.utils.logger import JsonlLogger
+
+if TYPE_CHECKING:
+    from torch.utils.tensorboard import SummaryWriter
 
 
 class _RuntimeProfiler:
