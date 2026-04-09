@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=examples/agibot_real/tools/common.sh
+source "$ROOT_DIR/tools/common.sh"
+
 HOST="127.0.0.1"
 PORT="32000"
 EXTRA_ARGS=()
@@ -28,32 +31,15 @@ done
 echo "=========================================="
 echo "  AgiBot Remote Env Server"
 echo "=========================================="
+echo "  Mode        : optional RPC bridge for env.backend=remote"
 echo "  Working dir : $ROOT_DIR"
 echo "  Address     : http://${HOST}:${PORT}"
 echo "=========================================="
 
-CONDA_SH="/vla/miniconda3/etc/profile.d/conda.sh"
-if [[ -f "$CONDA_SH" ]]; then
-    source "$CONDA_SH"
-    if [[ -n "${AGIBOT_CONDA_PREFIX:-}" ]]; then
-        conda activate "$AGIBOT_CONDA_PREFIX"
-    elif [[ -n "${AGIBOT_CONDA_ENV:-}" ]]; then
-        conda activate "$AGIBOT_CONDA_ENV"
-    elif [[ -n "${SERL_CONDA_PREFIX:-}" ]]; then
-        conda activate "$SERL_CONDA_PREFIX"
-    elif [[ -n "${SERL_CONDA_ENV:-}" ]]; then
-        conda activate "$SERL_CONDA_ENV"
-    elif [[ -d "/vla/miniconda3/envs/serl_torch" ]]; then
-        conda activate serl_torch
-    fi
-fi
+AGIBOT_CONDA_PREFIX_EFFECTIVE="${AGIBOT_CONDA_PREFIX:-${SERL_CONDA_PREFIX:-}}"
+AGIBOT_CONDA_ENV_EFFECTIVE="${AGIBOT_CONDA_ENV:-${SERL_CONDA_ENV:-}}"
+codex_activate_conda "$AGIBOT_CONDA_PREFIX_EFFECTIVE" "$AGIBOT_CONDA_ENV_EFFECTIVE" "serl_torch"
 
-PYTHON_BIN="${AGIBOT_PYTHON_BIN:-${SERL_PYTHON_BIN:-python}}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    if command -v python3 >/dev/null 2>&1; then
-        PYTHON_BIN="python3"
-    fi
-fi
+PYTHON_BIN="$(codex_python_bin "${AGIBOT_PYTHON_BIN:-${SERL_PYTHON_BIN:-python}}")"
 
 exec "$PYTHON_BIN" scripts/services/serve_env.py --host "$HOST" --port "$PORT" "${EXTRA_ARGS[@]}"
-

@@ -29,11 +29,24 @@ robot:
 
 env:
   action_dim: 14
-  backend: remote
+  backend: local
   remote:
     host: 127.0.0.1
     port: 32000
     timeout_sec: 180.0
+
+controller:
+  enabled: true
+  interface: terminal
+  poll_interval_sec: 0.05
+  terminal_grace_sec: 0.15
+  keys:
+    ready: g
+    pause: p
+    reset: r
+    success: s
+    fail: f
+    help: h
 
 residual:
   image_keys: [head_image, wrist_left_image, wrist_right_image]
@@ -55,7 +68,7 @@ residual:
   chunk_horizon: 5
 
 chunk_step:
-  enabled: false
+  enabled: true
   sample_stride: 1
   require_full_horizon: false
   pad_action_to_horizon: true
@@ -70,7 +83,7 @@ sac:
   critic_layer_norm: true
   encoder_type: resnet
   resnet:
-    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: ${oc.env:SERL_RESNET_MODEL,microsoft/resnet-18}
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings

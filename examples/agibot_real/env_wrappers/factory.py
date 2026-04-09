@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from omegaconf import DictConfig
+from omegaconf import OmegaConf
 
 from .remote_task_env import RemoteAgiBotTaskEnv
 from .task_env import AgiBotTaskEnv
@@ -29,6 +30,7 @@ def _resolve_robot_asset_path(
 
 def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, object]:
     task_cfg = cfg.get("task", {})
+    controller_cfg = cfg.get("controller", {})
     return {
         "task_name": str(task_cfg.get("name", "agibot_real_task")),
         "prompt": str(task_cfg.get("prompt", task_cfg.get("name", "agibot_real_task"))),
@@ -44,6 +46,7 @@ def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, o
             "retargeter_camera_extrinsic_path",
             "head_extrinsic_ours.json",
         ),
+        "controller": OmegaConf.to_container(controller_cfg, resolve=True),
         "reset_hook": task_cfg.get("reset_hook", None),
         "success_hook": task_cfg.get("success_hook", None),
         "expert_precheck_hook": task_cfg.get("expert_precheck_hook", None),
@@ -65,4 +68,3 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
             **common_kwargs,
         )
     raise ValueError(f"env.backend must be 'local' or 'remote', got {env_backend}")
-

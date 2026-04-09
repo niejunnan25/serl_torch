@@ -6,6 +6,11 @@ from typing import Any
 
 import numpy as np
 
+try:
+    import ruckig
+except ImportError:
+    ruckig = None  # type: ignore[assignment]
+
 
 class AgiBotRobotNode:
     """Thin wrapper around the external AgiBot DDS / controller SDK."""
@@ -99,6 +104,56 @@ class AgiBotRobotNode:
             raise ValueError(f"Expected 16D joint action, got {action_arr.shape}")
         target_positions = np.concatenate((action_arr[:7], action_arr[8:15]))
         self.robot.move_arm(target_positions)
+        self.robot.move_gripper([float(action_arr[7]), float(action_arr[15])])
+
+    def publish_joint_command_reset(self, action: np.ndarray) -> None:
+        """Smooth move to 16D joint+gripper target (same idea as tangyili utils_robot.RobotNode).
+
+        Uses ruckig when installed; otherwise one-shot ``publish_joint_command_direct``.
+        """
+        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action_arr.shape[0] != 16:
+            raise ValueError(f"Expected 16D joint action, got {action_arr.shape}")
+        target_positions = np.concatenate((action_arr[:7], action_arr[8:15]))
+
+        if ruckig is None:
+            self.publish_joint_command_direct(action_arr)
+            return
+
+        current_positions, _ = self.robot.arm_joint_states()
+        if not current_positions:
+            raise RuntimeError("Failed to get arm joint states for reset trajectory")
+
+        dof = 14
+        interval = 0.01
+        cur = list(map(float, current_positions))
+        tgt = list(map(float, np.asarray(target_positions).reshape(-1)))
+        if len(cur) != dof or len(tgt) != dof:
+            raise RuntimeError(f"Expected {dof} arm joints, got cur={len(cur)} tgt={len(tgt)}")
+
+        try:
+            rk = ruckig.Ruckig(dof, interval)
+            rk_input = ruckig.InputParameter(dof)
+            rk_output = ruckig.OutputParameter(dof)
+
+            rk_input.current_position = cur
+            rk_input.current_velocity = [0.0] * dof
+            rk_input.current_acceleration = [0.0] * dof
+            rk_input.target_position = tgt
+            rk_input.target_velocity = [0.0] * dof
+            rk_input.target_acceleration = [0.0] * dof
+            rk_input.max_velocity = [2.0] * dof
+            rk_input.max_acceleration = [1.0] * dof
+            rk_input.max_jerk = [5.0] * dof
+
+            while rk.update(rk_input, rk_output) == ruckig.Result.Working:
+                self.robot.move_arm(rk_output.new_position)
+                rk_output.pass_to_input(rk_input)
+                time.sleep(interval)
+        except Exception:
+            self.publish_joint_command_direct(action_arr)
+            return
+
         self.robot.move_gripper([float(action_arr[7]), float(action_arr[15])])
 
     def publish_head_command(self, target_positions: np.ndarray) -> None:

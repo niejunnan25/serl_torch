@@ -4,6 +4,7 @@ All configuration is passed explicitly via constructor arguments
 (typically from YAML config).  No module-level mutable state.
 """
 
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -29,6 +30,37 @@ VARIANT_CONFIGS = {
         layer_type="bottleneck",
     ),
 }
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_model_name(model_name: str) -> str:
+    if model_name.startswith(("http://", "https://")):
+        return model_name
+
+    candidates = []
+    model_path = Path(model_name)
+    if model_path.is_absolute():
+        candidates.append(model_path)
+    else:
+        candidates.append(model_path)
+        candidates.append(_project_root() / model_path)
+        candidates.append(
+            _project_root() / "pretrained_models" / model_name.replace("/", "--")
+        )
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            resolved = str(candidate.resolve())
+            if resolved != model_name:
+                print(
+                    "[ResNetEncoder] Resolved local mirror: "
+                    f"{model_name} -> {resolved}"
+                )
+            return resolved
+    return model_name
 
 
 def _to_bchw(x: torch.Tensor):
@@ -136,16 +168,18 @@ class ResNetEncoder(nn.Module):
         """
         from transformers import ResNetConfig, ResNetModel
 
+        resolved_model_name = _resolve_model_name(model_name)
+
         if pretrained:
-            backbone = ResNetModel.from_pretrained(model_name)
-            print(f"[ResNetEncoder] Loaded pretrained: {model_name}")
+            backbone = ResNetModel.from_pretrained(resolved_model_name)
+            print(f"[ResNetEncoder] Loaded pretrained: {resolved_model_name}")
         else:
-            if model_name in VARIANT_CONFIGS:
-                config = ResNetConfig(**VARIANT_CONFIGS[model_name])
+            if resolved_model_name in VARIANT_CONFIGS:
+                config = ResNetConfig(**VARIANT_CONFIGS[resolved_model_name])
             else:
-                config = ResNetConfig.from_pretrained(model_name)
+                config = ResNetConfig.from_pretrained(resolved_model_name)
             backbone = ResNetModel(config)
-            print(f"[ResNetEncoder] Random init: {model_name}")
+            print(f"[ResNetEncoder] Random init: {resolved_model_name}")
 
         if freeze:
             backbone.requires_grad_(False)

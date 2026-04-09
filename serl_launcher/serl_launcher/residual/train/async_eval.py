@@ -7,10 +7,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import IO, Any, Dict, Optional
+from typing import TYPE_CHECKING, IO, Any, Dict, Optional
 
 from omegaconf import DictConfig
-from torch.utils.tensorboard import SummaryWriter
+
+if TYPE_CHECKING:
+    from torch.utils.tensorboard import SummaryWriter
 
 
 def _start_async_eval_watcher(

@@ -2,15 +2,25 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Mapping
 from typing import Optional
 from typing import Tuple
 
 import numpy as np
 
+from .controller import ExecutedTransition
+from .controller import ManualEpisodeController
+from .controller import STATE_RUNNING
+from .controller import TERMINAL_FAIL
+from .controller import TERMINAL_HOOK
+from .controller import TERMINAL_RESET
+from .controller import TERMINAL_SUCCESS
+from .controller import TERMINAL_TIMEOUT
 from ..robot.hooks import call_optional_hook
 from ..robot.hooks import coerce_precheck_result
 from ..robot.hooks import coerce_success_result
@@ -39,6 +49,7 @@ class AgiBotTaskEnv:
         max_episode_steps: Optional[int] = None,
         retargeter_urdf_path: Optional[str] = None,
         retargeter_camera_extrinsic_path: Optional[str] = None,
+        controller: Optional[Mapping[str, Any]] = None,
         reset_hook: Optional[str] = None,
         success_hook: Optional[str] = None,
         expert_precheck_hook: Optional[str] = None,
@@ -77,10 +88,37 @@ class AgiBotTaskEnv:
         self.current_init_state_idx: Optional[int] = None
         self.episode_count = 0
         self._last_obs: Optional[Dict[str, Any]] = None
+        self._controller_cfg = dict(controller or {})
+        self._controller_enabled = bool(self._controller_cfg.get("enabled", False))
 
         self._reset_hook = resolve_hook(reset_hook)
         self._success_hook = resolve_hook(success_hook)
         self._expert_precheck_hook = resolve_hook(expert_precheck_hook)
+        self._controller: Optional[ManualEpisodeController] = None
+        self._control_thread: Optional[threading.Thread] = None
+        self._control_stop = threading.Event()
+        if self._controller_enabled:
+            key_cfg = self._controller_cfg.get("keys", {})
+            self._controller = ManualEpisodeController(
+                enabled=True,
+                interface=str(self._controller_cfg.get("interface", "terminal")),
+                poll_interval_sec=float(
+                    self._controller_cfg.get("poll_interval_sec", 0.05)
+                ),
+                keys=key_cfg if isinstance(key_cfg, Mapping) else None,
+                logger=self.logger,
+            )
+            try:
+                self._controller.set_latest_obs(self._get_obs())
+            except Exception:  # noqa: BLE001
+                pass
+            self._controller.start_operator_interface()
+            self._control_thread = threading.Thread(
+                target=self._controller_loop,
+                name="agibot-controller-loop",
+                daemon=True,
+            )
+            self._control_thread.start()
 
     @property
     def current_instruction(self) -> str:
@@ -101,6 +139,10 @@ class AgiBotTaskEnv:
     @property
     def action_dim(self) -> int:
         return int(self._action_dim)
+
+    @property
+    def controller_enabled(self) -> bool:
+        return bool(self._controller_enabled)
 
     def _get_obs(self) -> Dict[str, np.ndarray]:
         img_head = self.robot_node.get_img_head()
@@ -203,6 +245,360 @@ class AgiBotTaskEnv:
             trajectory_reference_time=self.trajectory_time,
         )
 
+    def _controller_error_obs(self) -> Dict[str, Any]:
+        if self._controller is not None:
+            obs = self._controller.get_latest_obs()
+            if obs is not None:
+                return obs
+        if self._last_obs is not None:
+            return _clone_obs_tree(self._last_obs)
+        try:
+            return self._get_obs()
+        except Exception as obs_exc:  # noqa: BLE001
+            self.logger.warning(
+                "Failed to refresh AgiBot observation after controller error: %s",
+                obs_exc,
+            )
+        return {}
+
+    def _handle_controller_step_exception(
+        self,
+        *,
+        sequence_id: int,
+        exc: Exception,
+    ) -> None:
+        assert self._controller is not None
+        error_message = f"{type(exc).__name__}: {exc}"
+        self.logger.exception(
+            "Controller step failed for sequence_id=%s: %s",
+            int(sequence_id),
+            error_message,
+        )
+        self._controller.push_transition(
+            ExecutedTransition(
+                sequence_id=int(sequence_id),
+                obs=self._controller_error_obs(),
+                reward=0.0,
+                done=True,
+                truncated=False,
+                info={
+                    "success": False,
+                    "controller_error": error_message,
+                    "controller_sequence_id": int(sequence_id),
+                    "take_action_cnt": int(self._take_action_cnt),
+                    "step_lim": int(self._step_limit),
+                    "task_description": self._task_description,
+                    "task_name": self.task_name,
+                    "init_state_idx": self.current_init_state_idx,
+                },
+            )
+        )
+
+    def _controller_loop(self) -> None:
+        assert self._controller is not None
+        period_sec = max(1.0 / max(float(self.hz), 1.0), 0.001)
+        while not self._control_stop.is_set():
+            loop_t0 = time.perf_counter()
+            queued = self._controller.pop_next_action()
+            if queued is not None:
+                try:
+                    self._step_cartesian(queued.action)
+                    self._take_action_cnt += 1
+                    obs = self._get_obs()
+                    step_result = self._resolve_step_result(
+                        obs=obs,
+                        action=queued.action,
+                        controller_mode=True,
+                    )
+                    if bool(step_result["truncated"]) and bool(
+                        step_result["info"].get("time_limit_reached", False)
+                    ):
+                        self._controller.mark_timeout(info=step_result["info"])
+                    self._controller.push_transition(
+                        ExecutedTransition(
+                            sequence_id=int(queued.sequence_id),
+                            obs=obs,
+                            reward=float(step_result["reward"]),
+                            done=bool(step_result["done"]),
+                            truncated=bool(step_result["truncated"]),
+                            info=dict(step_result["info"]),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._handle_controller_step_exception(
+                        sequence_id=int(queued.sequence_id),
+                        exc=exc,
+                    )
+            sleep_sec = max(0.0, period_sec - (time.perf_counter() - loop_t0))
+            if sleep_sec > 0.0:
+                time.sleep(sleep_sec)
+
+    def _resolve_step_result(
+        self,
+        *,
+        obs: Dict[str, Any],
+        action: np.ndarray,
+        controller_mode: bool,
+    ) -> Dict[str, Any]:
+        info_dict: Dict[str, Any] = {
+            "success": False,
+            "take_action_cnt": int(self._take_action_cnt),
+            "step_lim": int(self._step_limit),
+            "task_description": self._task_description,
+            "task_name": self.task_name,
+            "init_state_idx": self.current_init_state_idx,
+        }
+        success_result = coerce_success_result(
+            call_optional_hook(
+                self._success_hook,
+                env=self,
+                obs=obs,
+                action=np.asarray(action, dtype=np.float32),
+                step_count=int(self._take_action_cnt),
+                step_limit=int(self._step_limit),
+                task_name=self.task_name,
+                prompt=self._current_instruction,
+            )
+        )
+        reward = float(success_result["reward"])
+        done = bool(success_result["done"])
+        truncated = bool(success_result["truncated"])
+        success = bool(success_result["success"])
+        info_dict.update(success_result["info"])
+
+        if controller_mode and self._controller is not None:
+            ctrl_meta = self._controller.get_meta()
+            terminal_signal = ctrl_meta.get("terminal_signal", None)
+            terminal_info = ctrl_meta.get("terminal_info", {})
+            if terminal_signal == TERMINAL_SUCCESS:
+                reward = 1.0
+                done = True
+                truncated = False
+                success = True
+                info_dict.update(dict(terminal_info))
+                info_dict["human_success"] = True
+            elif terminal_signal == TERMINAL_FAIL:
+                reward = 0.0
+                done = True
+                truncated = False
+                success = False
+                info_dict.update(dict(terminal_info))
+                info_dict["human_fail"] = True
+            elif terminal_signal == TERMINAL_RESET:
+                reward = 0.0
+                done = False
+                truncated = True
+                success = False
+                info_dict.update(dict(terminal_info))
+                info_dict["human_reset"] = True
+
+        info_dict["success"] = success
+        if (not done) and (not truncated) and self._take_action_cnt >= self._step_limit:
+            truncated = True
+            info_dict["time_limit_reached"] = True
+        return {
+            "reward": float(reward),
+            "done": bool(done),
+            "truncated": bool(truncated),
+            "success": bool(success),
+            "info": info_dict,
+        }
+
+    def get_controller_meta(self) -> Dict[str, Any]:
+        if not self._controller_enabled or self._controller is None:
+            return {
+                "enabled": False,
+                "state": None,
+                "terminal_signal": None,
+                "queue_depth": 0,
+            }
+        return self._controller.get_meta()
+
+    def request_ready(self) -> Dict[str, Any]:
+        if not self._controller_enabled or self._controller is None:
+            raise RuntimeError("controller mode is disabled")
+        return self._controller.request_ready()
+
+    def request_pause(self) -> Dict[str, Any]:
+        if not self._controller_enabled or self._controller is None:
+            raise RuntimeError("controller mode is disabled")
+        return self._controller.request_pause()
+
+    def request_reset(self) -> Dict[str, Any]:
+        if not self._controller_enabled or self._controller is None:
+            raise RuntimeError("controller mode is disabled")
+        return self._controller.request_reset()
+
+    def mark_success(self) -> Dict[str, Any]:
+        if not self._controller_enabled or self._controller is None:
+            raise RuntimeError("controller mode is disabled")
+        return self._controller.mark_success()
+
+    def mark_fail(self) -> Dict[str, Any]:
+        if not self._controller_enabled or self._controller is None:
+            raise RuntimeError("controller mode is disabled")
+        return self._controller.mark_fail()
+
+    def get_latest_obs(self) -> Dict[str, Any]:
+        if not self._controller_enabled or self._controller is None:
+            return self._get_obs()
+        obs = self._get_obs()
+        self._controller.set_latest_obs(obs)
+        return obs
+
+    def enqueue_action_chunk(self, actions: np.ndarray) -> list[int]:
+        if not self._controller_enabled or self._controller is None:
+            raise RuntimeError("controller mode is disabled")
+        return self._controller.enqueue_action_chunk(actions)
+
+    def poll_controller_transitions(self, *, max_items: int = 64) -> list[Dict[str, Any]]:
+        if not self._controller_enabled or self._controller is None:
+            raise RuntimeError("controller mode is disabled")
+        transitions = self._controller.poll_transitions(max_items=max_items)
+        payloads: list[Dict[str, Any]] = []
+        for transition in transitions:
+            payloads.append(
+                {
+                    "sequence_id": int(transition.sequence_id),
+                    "obs": _clone_obs_tree(transition.obs),
+                    "reward": float(transition.reward),
+                    "done": bool(transition.done),
+                    "truncated": bool(transition.truncated),
+                    "info": dict(transition.info),
+                }
+            )
+        return payloads
+
+    def _override_transition_for_terminal_meta(
+        self,
+        transition: Dict[str, Any],
+        meta: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        payload = dict(transition)
+        info = dict(payload.get("info", {}))
+        terminal_signal = meta.get("terminal_signal", None)
+        terminal_info = meta.get("terminal_info", {})
+        if isinstance(terminal_info, Mapping):
+            info.update(dict(terminal_info))
+        if terminal_signal == TERMINAL_SUCCESS:
+            payload["reward"] = 1.0
+            payload["done"] = True
+            payload["truncated"] = False
+            info["success"] = True
+            info["human_success"] = True
+        elif terminal_signal == TERMINAL_FAIL:
+            payload["reward"] = 0.0
+            payload["done"] = True
+            payload["truncated"] = False
+            info["success"] = False
+            info["human_fail"] = True
+        elif terminal_signal == TERMINAL_RESET:
+            payload["reward"] = 0.0
+            payload["done"] = False
+            payload["truncated"] = True
+            info["success"] = False
+            info["human_reset"] = True
+        elif terminal_signal == TERMINAL_TIMEOUT:
+            payload["reward"] = 0.0
+            payload["done"] = False
+            payload["truncated"] = True
+            info["success"] = False
+            info["time_limit_reached"] = True
+        elif terminal_signal == TERMINAL_HOOK:
+            info.setdefault("success", bool(info.get("success", False)))
+        payload["info"] = info
+        return payload
+
+    def _controller_execute_chunk_blocking(self, actions: np.ndarray) -> list[Dict[str, Any]]:
+        assert self._controller is not None
+        action_chunk = np.asarray(actions, dtype=np.float32)
+        if action_chunk.ndim != 2:
+            raise ValueError(f"Expected 2-D action chunk, got {action_chunk.shape}")
+        accepted_ids = self.enqueue_action_chunk(action_chunk)
+        if not accepted_ids:
+            return []
+        accepted_cursor = 0
+        transitions: list[Dict[str, Any]] = []
+        pending: Optional[Dict[str, Any]] = None
+        while True:
+            polled = self.poll_controller_transitions(max_items=len(accepted_ids))
+            for payload in polled:
+                if accepted_cursor >= len(accepted_ids):
+                    raise RuntimeError(
+                        "controller returned more transitions than accepted actions"
+                    )
+                expected_sequence_id = int(accepted_ids[accepted_cursor])
+                observed_sequence_id = int(payload["sequence_id"])
+                if expected_sequence_id != observed_sequence_id:
+                    raise RuntimeError(
+                        "controller transition sequence mismatch: "
+                        f"expected={expected_sequence_id} observed={observed_sequence_id}"
+                    )
+                accepted_cursor += 1
+                if pending is not None:
+                    transitions.append(pending)
+                pending = payload
+                if bool(payload["done"]) or bool(payload["truncated"]):
+                    transitions.append(pending)
+                    return transitions
+            meta = self.get_controller_meta()
+            next_expected_sequence_id = (
+                int(accepted_ids[accepted_cursor])
+                if accepted_cursor < len(accepted_ids)
+                else None
+            )
+            inflight_sequence_id = meta.get("inflight_sequence_id", None)
+            if inflight_sequence_id is not None:
+                try:
+                    inflight_sequence_id = int(inflight_sequence_id)
+                except (TypeError, ValueError):
+                    inflight_sequence_id = None
+            if (
+                meta.get("terminal_signal", None) in {
+                    TERMINAL_SUCCESS,
+                    TERMINAL_FAIL,
+                    TERMINAL_RESET,
+                    TERMINAL_TIMEOUT,
+                }
+                and meta.get("state", None) != STATE_RUNNING
+            ):
+                if (
+                    next_expected_sequence_id is not None
+                    and inflight_sequence_id == next_expected_sequence_id
+                ):
+                    time.sleep(
+                        float(
+                            self._controller_cfg.get(
+                                "poll_interval_sec",
+                                0.05,
+                            )
+                        )
+                    )
+                    continue
+                if pending is not None:
+                    transitions.append(
+                        self._override_transition_for_terminal_meta(pending, meta)
+                    )
+                remaining_count = int(len(accepted_ids) - accepted_cursor)
+                if remaining_count > 0:
+                    self.logger.warning(
+                        "controller terminal=%s canceled %s unexecuted queued actions",
+                        meta.get("terminal_signal", None),
+                        remaining_count,
+                    )
+                return transitions
+            if accepted_cursor >= len(accepted_ids) and pending is not None:
+                transitions.append(pending)
+                return transitions
+            time.sleep(
+                float(
+                    self._controller_cfg.get(
+                        "poll_interval_sec",
+                        0.05,
+                    )
+                )
+            )
+
     def expert_precheck(
         self,
         seed: int,
@@ -242,45 +638,46 @@ class AgiBotTaskEnv:
             if prompt is not None:
                 self._current_instruction = str(prompt)
                 self._task_description = str(prompt)
-        return self._get_obs()
+        obs = self._get_obs()
+        if self._controller_enabled and self._controller is not None:
+            self._controller.start_episode()
+            self._controller.set_latest_obs(obs)
+            self._controller.transition_after_reset()
+        return obs
 
     def step(
         self,
         action: np.ndarray,
     ) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
+        if self._controller_enabled and self._controller is not None:
+            results = self._controller_execute_chunk_blocking(
+                np.asarray(action, dtype=np.float32).reshape(1, -1)
+            )
+            if not results:
+                raise RuntimeError("controller step produced no executed transition")
+            payload = results[-1]
+            return (
+                payload["obs"],
+                float(payload["reward"]),
+                bool(payload["done"]),
+                bool(payload["truncated"]),
+                dict(payload["info"]),
+            )
         self._step_cartesian(action)
         self._take_action_cnt += 1
         obs = self._get_obs()
-        info_dict: Dict[str, Any] = {
-            "success": False,
-            "take_action_cnt": int(self._take_action_cnt),
-            "step_lim": int(self._step_limit),
-            "task_description": self._task_description,
-            "task_name": self.task_name,
-            "init_state_idx": self.current_init_state_idx,
-        }
-        success_result = coerce_success_result(
-            call_optional_hook(
-                self._success_hook,
-                env=self,
-                obs=obs,
-                action=np.asarray(action, dtype=np.float32),
-                step_count=int(self._take_action_cnt),
-                step_limit=int(self._step_limit),
-                task_name=self.task_name,
-                prompt=self._current_instruction,
-            )
+        step_result = self._resolve_step_result(
+            obs=obs,
+            action=np.asarray(action, dtype=np.float32),
+            controller_mode=False,
         )
-        reward = float(success_result["reward"])
-        done = bool(success_result["done"])
-        truncated = bool(success_result["truncated"])
-        success = bool(success_result["success"])
-        info_dict.update(success_result["info"])
-        info_dict["success"] = success
-        if (not done) and (not truncated) and self._take_action_cnt >= self._step_limit:
-            truncated = True
-            info_dict["time_limit_reached"] = True
-        return obs, reward, done, truncated, info_dict
+        return (
+            obs,
+            float(step_result["reward"]),
+            bool(step_result["done"]),
+            bool(step_result["truncated"]),
+            dict(step_result["info"]),
+        )
 
     def step_chunk(self, actions: np.ndarray) -> Dict[str, Any]:
         action_chunk = np.asarray(actions, dtype=np.float32)
@@ -293,6 +690,27 @@ class AgiBotTaskEnv:
             action_chunk = action_chunk.reshape(-1, self._action_dim)
         if action_chunk.ndim != 2 or action_chunk.shape[1] != self._action_dim:
             raise ValueError(f"Unexpected action chunk shape: {action_chunk.shape}")
+        if self._controller_enabled and self._controller is not None:
+            transitions = self._controller_execute_chunk_blocking(action_chunk)
+            if not transitions:
+                raise RuntimeError("controller step_chunk produced no executed transitions")
+            observations = [_clone_obs_tree(v["obs"]) for v in transitions]
+            rewards = [float(v["reward"]) for v in transitions]
+            dones = [bool(v["done"]) for v in transitions]
+            infos = [dict(v["info"]) for v in transitions]
+            truncated = bool(transitions[-1]["truncated"])
+            return {
+                "obs": observations[-1],
+                "observations": observations,
+                "reward_sum": float(sum(rewards)),
+                "rewards": rewards,
+                "dones": dones,
+                "done": bool(dones[-1]),
+                "truncated": bool(truncated),
+                "infos": infos,
+                "info": dict(infos[-1]),
+                "num_steps": int(len(rewards)),
+            }
 
         observations: List[Dict[str, Any]] = []
         rewards: List[float] = []
@@ -325,8 +743,12 @@ class AgiBotTaskEnv:
 
     def close(self, clear_cache: bool = False) -> None:
         del clear_cache
+        self._control_stop.set()
+        if self._control_thread is not None and self._control_thread.is_alive():
+            self._control_thread.join(timeout=1.0)
+        if self._controller is not None:
+            self._controller.shutdown()
         try:
             self.robot_node.shutdown()
         except Exception:  # noqa: BLE001
             pass
-

@@ -7,6 +7,20 @@ from typing import Tuple
 
 AGIBOT_IMAGE_SLOT_KEYS = ("image_rgb_0", "image_rgb_1", "image_rgb_2")
 AGIBOT_DEFAULT_IMAGE_KEYS = AGIBOT_IMAGE_SLOT_KEYS
+AGIBOT_CONTROLLER_STATES = (
+    "WAIT_READY",
+    "RUNNING",
+    "PAUSED",
+    "RESETTING",
+    "EPISODE_DONE",
+)
+AGIBOT_TERMINAL_SIGNALS = (
+    "success",
+    "fail",
+    "reset",
+    "timeout",
+    "hook",
+)
 AGIBOT_IMAGE_VIEW_TO_SLOT = {
     "image": "image_rgb_0",
     "head_image": "image_rgb_0",
@@ -53,4 +67,3 @@ def sanitize_agibot_task_name(task_name: str) -> str:
 
 def build_agibot_task_key(task_name: str) -> str:
     return f"agibot_real_{sanitize_agibot_task_name(task_name)}"
-

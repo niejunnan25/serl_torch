@@ -6,7 +6,7 @@ import sys
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import IO, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, IO, Any, Dict, Optional, Tuple
 
 try:
     import gym
@@ -16,7 +16,6 @@ except ModuleNotFoundError:
     sys.modules["gym"] = gym
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.tensorboard import SummaryWriter
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
 from serl_launcher.policy.base import PolicyPrefetcher
@@ -60,6 +59,9 @@ from serl_launcher.residual.train.telemetry import _new_tb_step_window
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.alpha_utils import validate_alpha
 from serl_launcher.utils.logger import JsonlLogger
+
+if TYPE_CHECKING:
+    from torch.utils.tensorboard import SummaryWriter
 
 
 def build_actor_runtime_session(
@@ -717,6 +719,10 @@ def build_actor_runtime_session(
     policy_prefetcher = build_policy_prefetcher(cfg, logger=logger)
     if profiling_enabled:
         profiling_logger = JsonlLogger(run_dir / profiling_log_file)
+    # Import TensorBoard lazily so real-robot env setup can initialize the
+    # AgiBot DDS stack before TensorFlow/tensorboard side effects occur.
+    from torch.utils.tensorboard import SummaryWriter
+
     tb_writer = SummaryWriter(log_dir=str(run_dir / "tb"))
     tb_step_period = int(cfg.logging.get("tb_step_period", 100))
     tb_histogram_period = max(

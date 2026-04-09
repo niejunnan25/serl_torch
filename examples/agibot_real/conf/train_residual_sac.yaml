@@ -6,6 +6,7 @@ seed: 0
 # ---------------------------
 # Task / Environment
 # ---------------------------
+# reset_hook: 每回合按 task.name 调用 init_node_pos（见 robot/task_init_pos.py）；设 null 可关闭。
 task:
   name: agibot_real_default
   task_key: null
@@ -16,13 +17,13 @@ task:
   trajectory_time: null
   use_smooth_trajectory: false
   max_episode_steps: 150
-  reset_hook: null
+  reset_hook: serl_torch.examples.agibot_real.robot.reset_hooks:reset_to_task_initial_pose
   success_hook: null
   expert_precheck_hook: null
 
 openpi:
   host: localhost
-  port: 30001
+  port: 9000
 
 policy:
   type: openpi
@@ -35,11 +36,24 @@ robot:
 
 env:
   action_dim: 14
-  backend: remote
+  backend: local
   remote:
     host: 127.0.0.1
     port: 32000
     timeout_sec: 180.0
+
+controller:
+  enabled: true
+  interface: terminal
+  poll_interval_sec: 0.05
+  terminal_grace_sec: 0.15
+  keys:
+    ready: g
+    pause: p
+    reset: r
+    success: s
+    fail: f
+    help: h
 
 # ---------------------------
 # Residual Policy
@@ -61,10 +75,10 @@ residual:
   action_mask: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
-  chunk_horizon: 5
+  chunk_horizon: 50
 
 chunk_step:
-  enabled: false
+  enabled: true
   sample_stride: 1
   require_full_horizon: false
   pad_action_to_horizon: true
@@ -82,7 +96,7 @@ sac:
   critic_layer_norm: true
   encoder_type: resnet
   resnet:
-    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: ${oc.env:SERL_RESNET_MODEL,microsoft/resnet-18}
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings
@@ -267,4 +281,3 @@ launch:
 hydra:
   run:
     dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
-

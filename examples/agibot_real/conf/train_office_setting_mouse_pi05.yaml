@@ -1,0 +1,42 @@
+# office_setting + pi05 残差 RL（与 tangyili/run_agibot.sh 语义对齐）
+#
+# - task.name / task.prompt 对应 run_agibot.sh 的 <task_name> 与 <instruction>（语言指令发给 OpenPI）。
+# - 每回合 reset 会调用 robot/reset_hooks.py：init_node_pos(task.name) + 头/腰/关节目标，
+#   与 tangyili/code/agibot/agi_robot.py 中 AgiRobot.reset 一致。可选环境变量：
+#   AGIBOT_CODE_ROOT=/path/to/tangyili/code/agibot 以使用那边的 init_node_pos.py
+#   AGIBOT_RESET_SLEEP_HEAD_WAIST_SEC / AGIBOT_RESET_SLEEP_ARM_SEC
+#
+# 启动示例（在 examples/agibot_real 下）：
+#   bash tools/run_actor.sh conf/train_office_setting_mouse_pi05.yaml ...
+#   bash tools/run_learner.sh conf/train_office_setting_mouse_pi05.yaml ...
+#
+# OpenPI：tools/serve_openpi.sh 的端口需与 openpi.port 一致；POLICY_CONFIG / POLICY_DIR 指向你的 pi05。
+
+defaults:
+  - train_residual_sac
+  - _self_
+
+task:
+  name: office_setting
+  task_key: null
+  prompt: "The right arm picks up the white mouse from the desk and places the mouse on the black mouse pad"
+  seed_base: 7
+  control_mode: camera_position
+  hz: 5.0
+  trajectory_time: null
+  use_smooth_trajectory: false
+  max_episode_steps: 150
+  reset_hook: serl_torch.examples.agibot_real.robot.reset_hooks:reset_to_task_initial_pose
+  success_hook: null
+  expert_precheck_hook: null
+
+policy:
+  type: openpi
+  id: pi05_agibot
+
+openpi:
+  host: localhost
+  port: 9000
+
+launch:
+  output_root: outputs/agibot_real/office_setting_mouse_pi05
