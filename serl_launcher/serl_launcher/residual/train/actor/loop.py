@@ -25,7 +25,7 @@ from collections import deque
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
-from typing import IO, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, IO, Any, Dict, Optional, Tuple
 
 try:
     import gym
@@ -108,7 +108,8 @@ from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.alpha_utils import validate_alpha
 from serl_launcher.utils.serialization import _to_jsonable
 
-from torch.utils.tensorboard import SummaryWriter
+if TYPE_CHECKING:
+    from torch.utils.tensorboard import SummaryWriter
 
 
 def run_actor_loop(

@@ -1,6 +1,7 @@
 """Generic OpenPI policy client."""
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 import time
@@ -58,13 +59,26 @@ class OpenPIPolicyClient:
         self._client = self._make_client()
 
     def _make_client(self):
-        return self._client_ctor(
-            host=self._host,
-            port=self._port,
-            open_timeout=self._connect_timeout_sec,
-            ping_interval=self._ping_interval_sec,
-            ping_timeout=self._ping_timeout_sec,
-        )
+        kwargs = {
+            "host": self._host,
+            "port": self._port,
+            "open_timeout": self._connect_timeout_sec,
+            "ping_interval": self._ping_interval_sec,
+            "ping_timeout": self._ping_timeout_sec,
+        }
+        supported = set(inspect.signature(self._client_ctor.__init__).parameters)
+        filtered_kwargs = {
+            key: value for key, value in kwargs.items() if key in supported and value is not None
+        }
+        unsupported = sorted(key for key in kwargs if key not in supported)
+        if unsupported:
+            self._logger.debug(
+                "OpenPI client %s does not support kwargs %s; constructing with %s",
+                self._client_ctor.__name__,
+                unsupported,
+                sorted(filtered_kwargs),
+            )
+        return self._client_ctor(**filtered_kwargs)
 
     def _reconnect_locked(self) -> None:
         old_client = self._client

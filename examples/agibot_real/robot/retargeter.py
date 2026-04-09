@@ -156,10 +156,14 @@ class BodyRetargeter:
             t_cam_left = self.T_head_to_cam @ t_head_left
             t_cam_right = self.T_head_to_cam @ t_head_right
 
-            left_positions[idx] = t_cam_left[:3, 3]
-            right_positions[idx] = t_cam_right[:3, 3]
-            left_axisangles[idx] = self.R.from_matrix(t_cam_left[:3, :3]).as_rotvec()
-            right_axisangles[idx] = self.R.from_matrix(t_cam_right[:3, :3]).as_rotvec()
+            left_positions[idx] = np.asarray(t_cam_left[:3, 3], dtype=np.float64).reshape(3)
+            right_positions[idx] = np.asarray(t_cam_right[:3, 3], dtype=np.float64).reshape(3)
+            left_axisangles[idx] = self.R.from_matrix(
+                np.asarray(t_cam_left[:3, :3], dtype=np.float64).reshape(3, 3)
+            ).as_rotvec()
+            right_axisangles[idx] = self.R.from_matrix(
+                np.asarray(t_cam_right[:3, :3], dtype=np.float64).reshape(3, 3)
+            ).as_rotvec()
 
         if squeeze_output:
             return (
@@ -222,13 +226,17 @@ class BodyRetargeter:
             t_base_left = t_base_head @ t_head_left
             t_base_right = t_base_head @ t_head_right
 
-            left_pos_base[idx] = t_base_left[:3, 3]
-            right_pos_base[idx] = t_base_right[:3, 3]
-            left_euler[idx] = self.R.from_matrix(t_base_left[:3, :3]).as_euler(
+            left_pos_base[idx] = np.asarray(t_base_left[:3, 3], dtype=np.float64).reshape(3)
+            right_pos_base[idx] = np.asarray(t_base_right[:3, 3], dtype=np.float64).reshape(3)
+            left_euler[idx] = self.R.from_matrix(
+                np.asarray(t_base_left[:3, :3], dtype=np.float64).reshape(3, 3)
+            ).as_euler(
                 euler_order,
                 degrees=False,
             )
-            right_euler[idx] = self.R.from_matrix(t_base_right[:3, :3]).as_euler(
+            right_euler[idx] = self.R.from_matrix(
+                np.asarray(t_base_right[:3, :3], dtype=np.float64).reshape(3, 3)
+            ).as_euler(
                 euler_order,
                 degrees=False,
             )
@@ -236,4 +244,3 @@ class BodyRetargeter:
         if squeeze_output:
             return (left_pos_base[0], left_euler[0]), (right_pos_base[0], right_euler[0])
         return (left_pos_base, left_euler), (right_pos_base, right_euler)
-
