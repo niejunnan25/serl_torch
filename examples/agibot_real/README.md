@@ -265,6 +265,15 @@ bash tools/eval.sh \
 This expects the env server and OpenPI server to already be running unless you
 are evaluating inside another orchestration flow.
 
+When `controller.enabled=true`, evaluation uses the same env-side controller
+runtime as training:
+
+- the env stays in `WAIT_READY` after `reset()`
+- press `g` in the env terminal to start the rollout
+- `p/r/s/f` keep their training meanings during evaluation
+- the eval script now enqueues chunks and consumes controller transitions instead
+  of calling `env.step()` in a tight loop
+
 ### 3. Convert offline demos into residual-training PKLs
 
 ```bash
@@ -303,6 +312,14 @@ bash tools/collect_online_prefill.sh \
   openpi.host=127.0.0.1 \
   openpi.port=30001
 ```
+
+With `controller.enabled=true`, online prefill also waits on the env-side
+controller:
+
+- after `reset()`, the env remains idle until the operator presses `g`
+- the script feeds base-policy chunks into the controller queue
+- `p` pauses, `r` truncates the current episode, and `s/f` mark success/fail
+- the saved PKL metadata records `controller_enabled=true`
 
 ### 5. One-shot launcher
 

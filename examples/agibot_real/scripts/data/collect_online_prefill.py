@@ -31,6 +31,15 @@ from serl_launcher.residual.data.materialize import materialize_with_config
 from serl_launcher.training.seeding import set_global_seeds
 from serl_torch.examples.agibot_real.config import resolve_agibot_cfg_task_key
 from serl_torch.examples.agibot_real.env_wrappers.factory import _create_env
+from serl_torch.examples.agibot_real.runtime.controller_rollout import (
+    ControllerExecutedStep,
+)
+from serl_torch.examples.agibot_real.runtime.controller_rollout import (
+    ControllerPlannedStep,
+)
+from serl_torch.examples.agibot_real.runtime.controller_rollout import (
+    run_controller_episode,
+)
 from serl_torch.examples.agibot_real.runtime.policy_adapter import build_agibot_policy_input
 from serl_torch.examples.agibot_real.training_config import AGIBOT_ONLINE_TRAINING_CONFIG
 
@@ -111,6 +120,7 @@ def main() -> None:
     task_output_dir.mkdir(parents=True, exist_ok=True)
 
     env = _create_env(cfg, logger)
+    controller_enabled = bool(getattr(env, "controller_enabled", False))
     policy_backend_info = build_policy_backend_info(cfg)
     policy_client = build_policy_client(cfg, logger=logger)
     logger.info(
@@ -148,33 +158,99 @@ def main() -> None:
             if cfg.training.max_env_steps_per_episode is not None:
                 max_episode_steps = min(max_episode_steps, int(cfg.training.max_env_steps_per_episode))
 
-            while episode_steps < max_episode_steps:
-                action_chunk, _ = policy_client.infer_chunk(
-                    build_agibot_policy_input(obs_raw, prompt)
-                )
-                base_chunk = select_action_chunk_window(action_chunk, horizon=chunk_horizon)
-                base_chunks.append(np.asarray(base_chunk, dtype=np.float32))
+            if controller_enabled:
+                def _plan_prefill_chunk(
+                    controller_obs: Dict[str, Any],
+                    remaining_steps: int,
+                ) -> list[ControllerPlannedStep]:
+                    action_chunk, _ = policy_client.infer_chunk(
+                        build_agibot_policy_input(controller_obs, prompt)
+                    )
+                    base_chunk = select_action_chunk_window(action_chunk, horizon=chunk_horizon)
+                    execute_horizon = int(min(int(base_chunk.shape[0]), int(remaining_steps)))
+                    final_chunk = np.asarray(base_chunk[:execute_horizon], dtype=np.float32)
+                    sequence_ids = env.enqueue_action_chunk(final_chunk)
+                    accepted_horizon = int(len(sequence_ids))
+                    if accepted_horizon <= 0:
+                        logger.warning(
+                            "Prefill controller enqueue accepted no actions; "
+                            "the operator may have changed controller state during planning."
+                        )
+                        return []
+                    if accepted_horizon != execute_horizon:
+                        logger.warning(
+                            "Prefill controller enqueue accepted %s/%s actions; truncating the plan.",
+                            accepted_horizon,
+                            execute_horizon,
+                        )
+                        execute_horizon = int(accepted_horizon)
+                        final_chunk = final_chunk[:execute_horizon]
+                    base_chunks.append(np.asarray(final_chunk, dtype=np.float32))
+                    return [
+                        ControllerPlannedStep(
+                            sequence_id=int(sequence_id),
+                            obs_before=(controller_obs if chunk_step == 0 else None),
+                            final_action=np.asarray(final_chunk[chunk_step], dtype=np.float32),
+                            chunk_step=int(chunk_step),
+                            executed_horizon=int(execute_horizon),
+                        )
+                        for chunk_step, sequence_id in enumerate(sequence_ids)
+                    ]
 
-                decision_done = False
-                for chunk_step in range(int(base_chunk.shape[0])):
-                    if episode_steps >= max_episode_steps:
-                        decision_done = True
+                def _on_prefill_step(executed: ControllerExecutedStep, _current_step: int) -> None:
+                    obs_before = executed.planned.obs_before
+                    if obs_before is None:
+                        raise RuntimeError(
+                            "controller prefill step is missing the pre-action observation"
+                        )
+                    _append_frame(buffers, obs_before)
+                    buffers["actions"].append(
+                        np.asarray(executed.planned.final_action, dtype=np.float32).copy()
+                    )
+                    buffers["rewards"].append(float(executed.reward))
+                    buffers["dones"].append(bool(executed.done or executed.truncated))
+
+                controller_summary = run_controller_episode(
+                    env=env,
+                    initial_obs=obs_raw,
+                    max_episode_steps=max_episode_steps,
+                    chunk_horizon=chunk_horizon,
+                    cfg=cfg,
+                    logger=logger,
+                    plan_chunk_fn=_plan_prefill_chunk,
+                    on_step_fn=_on_prefill_step,
+                )
+                episode_steps = int(controller_summary.episode_steps)
+                episode_return = float(controller_summary.episode_return)
+                success = bool(controller_summary.success)
+            else:
+                while episode_steps < max_episode_steps:
+                    action_chunk, _ = policy_client.infer_chunk(
+                        build_agibot_policy_input(obs_raw, prompt)
+                    )
+                    base_chunk = select_action_chunk_window(action_chunk, horizon=chunk_horizon)
+                    base_chunks.append(np.asarray(base_chunk, dtype=np.float32))
+
+                    decision_done = False
+                    for chunk_step in range(int(base_chunk.shape[0])):
+                        if episode_steps >= max_episode_steps:
+                            decision_done = True
+                            break
+                        _append_frame(buffers, obs_raw)
+                        final_action = np.asarray(base_chunk[chunk_step], dtype=np.float32)
+                        next_obs_raw, reward, done, truncated, info = env.step(final_action)
+                        buffers["actions"].append(final_action)
+                        buffers["rewards"].append(float(reward))
+                        buffers["dones"].append(bool(done or truncated))
+                        episode_steps += 1
+                        episode_return += float(reward)
+                        success = bool(info.get("success", success))
+                        obs_raw = next_obs_raw
+                        if done or truncated:
+                            decision_done = True
+                            break
+                    if decision_done:
                         break
-                    _append_frame(buffers, obs_raw)
-                    final_action = np.asarray(base_chunk[chunk_step], dtype=np.float32)
-                    next_obs_raw, reward, done, truncated, info = env.step(final_action)
-                    buffers["actions"].append(final_action)
-                    buffers["rewards"].append(float(reward))
-                    buffers["dones"].append(bool(done or truncated))
-                    episode_steps += 1
-                    episode_return += float(reward)
-                    success = bool(info.get("success", success))
-                    obs_raw = next_obs_raw
-                    if done or truncated:
-                        decision_done = True
-                        break
-                if decision_done:
-                    break
 
             payload = materialize_with_config(
                 {
@@ -202,6 +278,7 @@ def main() -> None:
                         "base_policy_type": str(policy_backend_info["type"]),
                         "base_policy_id": str(policy_backend_info["id"]),
                         "task_name": str(cfg.task.name),
+                        "controller_enabled": bool(controller_enabled),
                     },
                 },
                 data_config=AGIBOT_ONLINE_TRAINING_CONFIG,
@@ -233,6 +310,7 @@ def main() -> None:
             "base_policy_type": str(policy_backend_info["type"]),
             "base_policy_id": str(policy_backend_info["id"]),
             "success_episodes": int(success_episodes),
+            "controller_enabled": bool(controller_enabled),
             "elapsed_sec": float(time.time() - t0),
         },
     )
@@ -250,4 +328,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

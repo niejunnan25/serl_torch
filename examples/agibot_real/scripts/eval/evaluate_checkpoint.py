@@ -46,6 +46,18 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.agibot_real.config import resolve_agibot_cfg_image_keys
 from serl_torch.examples.agibot_real.config import resolve_agibot_cfg_task_key
 from serl_torch.examples.agibot_real.env_wrappers.factory import _create_env
+from serl_torch.examples.agibot_real.runtime.controller_rollout import (
+    ControllerExecutedStep,
+)
+from serl_torch.examples.agibot_real.runtime.controller_rollout import (
+    ControllerPlannedStep,
+)
+from serl_torch.examples.agibot_real.runtime.controller_rollout import (
+    require_controller_rollout_capability,
+)
+from serl_torch.examples.agibot_real.runtime.controller_rollout import (
+    run_controller_episode,
+)
 from serl_torch.examples.agibot_real.runtime.obs_adapter import AgiBotObservationCache
 from serl_torch.examples.agibot_real.runtime.obs_adapter import build_residual_step_obs
 from serl_torch.examples.agibot_real.runtime.policy_adapter import build_agibot_policy_input
@@ -105,6 +117,13 @@ def main(cfg: DictConfig) -> None:
     epsilon_gating_enabled = _epsilon_gating_enabled(cfg)
     epsilon_gating_eval_force_on = _epsilon_gating_eval_force_on(cfg)
     chunk_step_enabled = bool(cfg.get("chunk_step", {}).get("enabled", False))
+    controller_enabled = bool(getattr(env, "controller_enabled", False))
+    if controller_enabled:
+        require_controller_rollout_capability(
+            env=env,
+            chunk_step_enabled=chunk_step_enabled,
+            script_name="evaluate_checkpoint",
+        )
     agent_action_dim = int(step_action_dim * chunk_horizon) if chunk_step_enabled else int(step_action_dim)
     critic_action_dim = int(env_action_dim * chunk_horizon) if chunk_step_enabled else int(env_action_dim)
     residual_limits = build_residual_limits(
@@ -176,47 +195,31 @@ def main(cfg: DictConfig) -> None:
             if cfg.eval.max_env_steps_per_episode is not None:
                 max_episode_steps = min(max_episode_steps, int(cfg.eval.max_env_steps_per_episode))
 
-            decision_done = False
-            while (not decision_done) and episode_steps < max_episode_steps:
-                action_chunk, infer_info = policy_client.infer_chunk(
-                    build_agibot_policy_input(obs_raw, env.current_instruction, obs_cache=obs_cache)
-                )
-                base_chunk = select_action_chunk_window(action_chunk, horizon=chunk_horizon)
-                if base_chunk.ndim != 2 or int(base_chunk.shape[1]) != env_action_dim:
-                    raise ValueError(
-                        f"Unexpected base action chunk shape: {base_chunk.shape}, expected [H,{env_action_dim}]"
-                    )
+            if controller_enabled:
+                controller_success = False
 
-                if checkpoint_path and agent is None:
-                    sample_obs = build_residual_step_obs(
-                        obs_raw,
-                        base_chunk[0],
-                        image_keys=image_keys,
-                        stack_horizon=stack_horizon,
-                        normalizer=normalizer,
-                        obs_cache=obs_cache,
-                        base_action_chunk=(base_chunk if chunk_step_enabled else None),
-                        alpha=float(residual_alpha),
-                        state_mode=obs_state_mode,
-                        action_dim=env_action_dim,
+                def _plan_eval_chunk(
+                    controller_obs: Dict[str, Any],
+                    remaining_steps: int,
+                ) -> list[ControllerPlannedStep]:
+                    nonlocal agent, checkpoint_loaded, total_policy_steps
+                    action_chunk, infer_info = policy_client.infer_chunk(
+                        build_agibot_policy_input(
+                            controller_obs,
+                            env.current_instruction,
+                            obs_cache=obs_cache,
+                        )
                     )
-                    agent = build_drq_agent(
-                        cfg,
-                        sample_obs=sample_obs,
-                        action_dim=agent_action_dim,
-                        image_keys=image_keys,
-                        critic_action_dim=critic_action_dim,
-                        action_transform=action_transform,
-                    )
-                    agent = load_agent_checkpoint(checkpoint_path, agent)
-                    checkpoint_loaded = True
-                    logger.info("Loaded residual checkpoint from: %s", checkpoint_path)
+                    base_chunk = select_action_chunk_window(action_chunk, horizon=chunk_horizon)
+                    if base_chunk.ndim != 2 or int(base_chunk.shape[1]) != env_action_dim:
+                        raise ValueError(
+                            "Unexpected base action chunk shape: "
+                            f"{base_chunk.shape}, expected [H,{env_action_dim}]"
+                        )
 
-                if chunk_step_enabled:
-                    gate_prob, gate_on = _resolve_eval_gate(float(residual_alpha))
-                    if checkpoint_loaded and agent is not None:
-                        obs_input = build_residual_step_obs(
-                            obs_raw,
+                    if checkpoint_path and agent is None:
+                        sample_obs = build_residual_step_obs(
+                            controller_obs,
                             base_chunk[0],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
@@ -227,16 +230,55 @@ def main(cfg: DictConfig) -> None:
                             state_mode=obs_state_mode,
                             action_dim=env_action_dim,
                         )
-                        sampled = agent.sample_actions(obs_input, deterministic=bool(cfg.eval.deterministic))
-                        residual_chunk = as_numpy_action_chunk(sampled, action_dim=step_action_dim, chunk_horizon=chunk_horizon)
+                        agent = build_drq_agent(
+                            cfg,
+                            sample_obs=sample_obs,
+                            action_dim=agent_action_dim,
+                            image_keys=image_keys,
+                            critic_action_dim=critic_action_dim,
+                            action_transform=action_transform,
+                        )
+                        agent = load_agent_checkpoint(checkpoint_path, agent)
+                        checkpoint_loaded = True
+                        logger.info("Loaded residual checkpoint from: %s", checkpoint_path)
+
+                    gate_prob, gate_on = _resolve_eval_gate(float(residual_alpha))
+                    if checkpoint_loaded and agent is not None:
+                        obs_input = build_residual_step_obs(
+                            controller_obs,
+                            base_chunk[0],
+                            image_keys=image_keys,
+                            stack_horizon=stack_horizon,
+                            normalizer=normalizer,
+                            obs_cache=obs_cache,
+                            base_action_chunk=base_chunk,
+                            alpha=float(residual_alpha),
+                            state_mode=obs_state_mode,
+                            action_dim=env_action_dim,
+                        )
+                        sampled = agent.sample_actions(
+                            obs_input,
+                            deterministic=bool(cfg.eval.deterministic),
+                        )
+                        residual_chunk = as_numpy_action_chunk(
+                            sampled,
+                            action_dim=step_action_dim,
+                            chunk_horizon=chunk_horizon,
+                        )
                     else:
-                        residual_chunk = np.zeros((chunk_horizon, step_action_dim), dtype=np.float32)
+                        residual_chunk = np.zeros(
+                            (chunk_horizon, step_action_dim),
+                            dtype=np.float32,
+                        )
                     if not gate_on:
                         residual_chunk = np.zeros_like(residual_chunk)
 
-                    execute_horizon = int(min(chunk_horizon, max_episode_steps - episode_steps))
-                    executed_base_chunk = base_chunk[:execute_horizon]
-                    executed_residual_chunk = residual_chunk[:execute_horizon]
+                    execute_horizon = int(min(chunk_horizon, int(remaining_steps)))
+                    executed_base_chunk = np.asarray(base_chunk[:execute_horizon], dtype=np.float32)
+                    executed_residual_chunk = np.asarray(
+                        residual_chunk[:execute_horizon],
+                        dtype=np.float32,
+                    )
                     delta_chunk, final_chunk = compose_residual_action_chunk(
                         base_chunk=executed_base_chunk,
                         residual_chunk=executed_residual_chunk,
@@ -245,117 +287,291 @@ def main(cfg: DictConfig) -> None:
                         alpha=residual_alpha,
                         clip_gripper=bool(cfg.residual.clip_gripper),
                     )
-                    total_policy_steps += 1
-                    chunk_result = env.step_chunk(final_chunk)
-                    obs_raw = chunk_result["obs"]
-                    chunk_rewards = [float(v) for v in chunk_result["rewards"]]
-                    chunk_infos = [dict(v) for v in chunk_result["infos"]]
-                    chunk_dones = [bool(v) for v in chunk_result["dones"]]
-                    for executed_step in range(len(chunk_rewards)):
-                        reward = float(chunk_rewards[executed_step])
-                        info = chunk_infos[executed_step]
-                        episode_steps += 1
-                        total_env_steps += 1
-                        episode_return += reward
-                        success = bool(info.get("success", success))
-                        timeout = bool(episode_steps >= max_episode_steps)
-                        done = bool(chunk_dones[executed_step] or timeout)
-                        step_logger.write(
-                            {
-                                "global_env_step": int(total_env_steps),
-                                "global_policy_step": int(total_policy_steps),
-                                "episode_id": episode_id,
-                                "episode_step": episode_steps,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
-                                "replan_point": bool(executed_step == 0),
-                                "chunk_step": int(executed_step),
-                                "chunk_horizon": int(execute_horizon),
-                                "infer_e2e_ms": infer_info.get("e2e_ms") if executed_step == 0 else None,
-                                "infer_policy_ms": infer_info.get("policy_ms") if executed_step == 0 else None,
-                                "infer_server_ms": infer_info.get("server_ms") if executed_step == 0 else None,
-                                "a_base": executed_base_chunk[executed_step].tolist(),
-                                "a_res": delta_chunk[executed_step].tolist(),
-                                "a_final": final_chunk[executed_step].tolist(),
-                                "epsilon_gate_prob": float(gate_prob),
-                                "epsilon_gate_on": bool(gate_on),
-                                "reward": float(reward),
-                                "done": bool(done),
-                                "success": bool(success),
-                            }
+                    sequence_ids = env.enqueue_action_chunk(final_chunk)
+                    accepted_horizon = int(len(sequence_ids))
+                    if accepted_horizon <= 0:
+                        logger.warning(
+                            "Eval controller enqueue accepted no actions; "
+                            "the operator may have changed controller state during planning."
                         )
-                        if done:
-                            decision_done = True
-                            break
-                else:
-                    for chunk_step in range(chunk_horizon):
-                        if episode_steps >= max_episode_steps:
-                            decision_done = True
-                            break
-                        obs_input = build_residual_step_obs(
+                        return []
+                    if accepted_horizon != execute_horizon:
+                        logger.warning(
+                            "Eval controller enqueue accepted %s/%s actions; truncating the plan.",
+                            accepted_horizon,
+                            execute_horizon,
+                        )
+                        execute_horizon = int(accepted_horizon)
+                        executed_base_chunk = executed_base_chunk[:execute_horizon]
+                        executed_residual_chunk = executed_residual_chunk[:execute_horizon]
+                        delta_chunk = delta_chunk[:execute_horizon]
+                        final_chunk = final_chunk[:execute_horizon]
+                    total_policy_steps += 1
+                    return [
+                        ControllerPlannedStep(
+                            sequence_id=int(sequence_id),
+                            obs_before=(controller_obs if chunk_step == 0 else None),
+                            final_action=np.asarray(final_chunk[chunk_step], dtype=np.float32),
+                            chunk_step=int(chunk_step),
+                            executed_horizon=int(execute_horizon),
+                            metadata={
+                                "base_action": np.asarray(
+                                    executed_base_chunk[chunk_step],
+                                    dtype=np.float32,
+                                ),
+                                "delta_action": np.asarray(
+                                    delta_chunk[chunk_step],
+                                    dtype=np.float32,
+                                ),
+                                "gate_prob": float(gate_prob),
+                                "gate_on": bool(gate_on),
+                                "infer_info": dict(infer_info),
+                            },
+                        )
+                        for chunk_step, sequence_id in enumerate(sequence_ids)
+                    ]
+
+                def _on_eval_step(executed: ControllerExecutedStep, current_step: int) -> None:
+                    nonlocal total_env_steps, controller_success
+                    total_env_steps += 1
+                    controller_success = bool(
+                        executed.info.get("success", controller_success)
+                    )
+                    metadata = executed.planned.metadata
+                    infer_info = dict(metadata.get("infer_info", {}))
+                    step_logger.write(
+                        {
+                            "global_env_step": int(total_env_steps),
+                            "global_policy_step": int(total_policy_steps),
+                            "episode_id": episode_id,
+                            "episode_step": int(current_step),
+                            "seed": int(env.last_seed if env.last_seed is not None else seed),
+                            "replan_point": bool(executed.planned.chunk_step == 0),
+                            "chunk_step": int(executed.planned.chunk_step),
+                            "chunk_horizon": int(executed.planned.executed_horizon),
+                            "infer_e2e_ms": infer_info.get("e2e_ms")
+                            if executed.planned.chunk_step == 0
+                            else None,
+                            "infer_policy_ms": infer_info.get("policy_ms")
+                            if executed.planned.chunk_step == 0
+                            else None,
+                            "infer_server_ms": infer_info.get("server_ms")
+                            if executed.planned.chunk_step == 0
+                            else None,
+                            "a_base": np.asarray(
+                                metadata["base_action"],
+                                dtype=np.float32,
+                            ).tolist(),
+                            "a_res": np.asarray(
+                                metadata["delta_action"],
+                                dtype=np.float32,
+                            ).tolist(),
+                            "a_final": np.asarray(
+                                executed.planned.final_action,
+                                dtype=np.float32,
+                            ).tolist(),
+                            "epsilon_gate_prob": float(metadata["gate_prob"]),
+                            "epsilon_gate_on": bool(metadata["gate_on"]),
+                            "reward": float(executed.reward),
+                            "done": bool(executed.done or executed.truncated),
+                            "success": bool(controller_success),
+                        }
+                    )
+
+                controller_summary = run_controller_episode(
+                    env=env,
+                    initial_obs=obs_raw,
+                    max_episode_steps=max_episode_steps,
+                    chunk_horizon=chunk_horizon,
+                    cfg=cfg,
+                    logger=logger,
+                    plan_chunk_fn=_plan_eval_chunk,
+                    on_step_fn=_on_eval_step,
+                )
+                success = bool(controller_summary.success)
+                episode_steps = int(controller_summary.episode_steps)
+                episode_return = float(controller_summary.episode_return)
+            else:
+                decision_done = False
+                while (not decision_done) and episode_steps < max_episode_steps:
+                    action_chunk, infer_info = policy_client.infer_chunk(
+                        build_agibot_policy_input(obs_raw, env.current_instruction, obs_cache=obs_cache)
+                    )
+                    base_chunk = select_action_chunk_window(action_chunk, horizon=chunk_horizon)
+                    if base_chunk.ndim != 2 or int(base_chunk.shape[1]) != env_action_dim:
+                        raise ValueError(
+                            f"Unexpected base action chunk shape: {base_chunk.shape}, expected [H,{env_action_dim}]"
+                        )
+
+                    if checkpoint_path and agent is None:
+                        sample_obs = build_residual_step_obs(
                             obs_raw,
-                            base_chunk[chunk_step],
+                            base_chunk[0],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
                             normalizer=normalizer,
                             obs_cache=obs_cache,
-                            base_action_chunk=None,
+                            base_action_chunk=(base_chunk if chunk_step_enabled else None),
                             alpha=float(residual_alpha),
                             state_mode=obs_state_mode,
                             action_dim=env_action_dim,
                         )
+                        agent = build_drq_agent(
+                            cfg,
+                            sample_obs=sample_obs,
+                            action_dim=agent_action_dim,
+                            image_keys=image_keys,
+                            critic_action_dim=critic_action_dim,
+                            action_transform=action_transform,
+                        )
+                        agent = load_agent_checkpoint(checkpoint_path, agent)
+                        checkpoint_loaded = True
+                        logger.info("Loaded residual checkpoint from: %s", checkpoint_path)
+
+                    if chunk_step_enabled:
                         gate_prob, gate_on = _resolve_eval_gate(float(residual_alpha))
                         if checkpoint_loaded and agent is not None:
-                            sampled = agent.sample_actions(
-                                obs_input,
-                                deterministic=bool(cfg.eval.deterministic),
+                            obs_input = build_residual_step_obs(
+                                obs_raw,
+                                base_chunk[0],
+                                image_keys=image_keys,
+                                stack_horizon=stack_horizon,
+                                normalizer=normalizer,
+                                obs_cache=obs_cache,
+                                base_action_chunk=base_chunk,
+                                alpha=float(residual_alpha),
+                                state_mode=obs_state_mode,
+                                action_dim=env_action_dim,
                             )
-                            residual_step_action = as_numpy_action(sampled, step_action_dim)
+                            sampled = agent.sample_actions(obs_input, deterministic=bool(cfg.eval.deterministic))
+                            residual_chunk = as_numpy_action_chunk(sampled, action_dim=step_action_dim, chunk_horizon=chunk_horizon)
                         else:
-                            residual_step_action = np.zeros((step_action_dim,), dtype=np.float32)
+                            residual_chunk = np.zeros((chunk_horizon, step_action_dim), dtype=np.float32)
                         if not gate_on:
-                            residual_step_action = np.zeros_like(residual_step_action)
-                        delta_action, final_action = compose_residual_action(
-                            base_action=base_chunk[chunk_step],
-                            residual_action=residual_step_action,
+                            residual_chunk = np.zeros_like(residual_chunk)
+
+                        execute_horizon = int(min(chunk_horizon, max_episode_steps - episode_steps))
+                        executed_base_chunk = base_chunk[:execute_horizon]
+                        executed_residual_chunk = residual_chunk[:execute_horizon]
+                        delta_chunk, final_chunk = compose_residual_action_chunk(
+                            base_chunk=executed_base_chunk,
+                            residual_chunk=executed_residual_chunk,
                             indices=control_indices,
                             limits=residual_limits,
                             alpha=residual_alpha,
                             clip_gripper=bool(cfg.residual.clip_gripper),
                         )
                         total_policy_steps += 1
-                        obs_raw, reward, env_done, truncated, info = env.step(final_action)
-                        episode_steps += 1
-                        total_env_steps += 1
-                        episode_return += float(reward)
-                        success = bool(info.get("success", success))
-                        timeout = bool(episode_steps >= max_episode_steps)
-                        done = bool(env_done or truncated or timeout)
-                        step_logger.write(
-                            {
-                                "global_env_step": int(total_env_steps),
-                                "global_policy_step": int(total_policy_steps),
-                                "episode_id": episode_id,
-                                "episode_step": episode_steps,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
-                                "replan_point": bool(chunk_step == 0),
-                                "chunk_step": int(chunk_step),
-                                "chunk_horizon": int(chunk_horizon),
-                                "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                                "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                                "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
-                                "a_base": base_chunk[chunk_step].tolist(),
-                                "a_res": delta_action.tolist(),
-                                "a_final": final_action.tolist(),
-                                "epsilon_gate_prob": float(gate_prob),
-                                "epsilon_gate_on": bool(gate_on),
-                                "reward": float(reward),
-                                "done": bool(done),
-                                "success": bool(success),
-                            }
-                        )
-                        if done:
-                            decision_done = True
-                            break
+                        chunk_result = env.step_chunk(final_chunk)
+                        obs_raw = chunk_result["obs"]
+                        chunk_rewards = [float(v) for v in chunk_result["rewards"]]
+                        chunk_infos = [dict(v) for v in chunk_result["infos"]]
+                        chunk_dones = [bool(v) for v in chunk_result["dones"]]
+                        for executed_step in range(len(chunk_rewards)):
+                            reward = float(chunk_rewards[executed_step])
+                            info = chunk_infos[executed_step]
+                            episode_steps += 1
+                            total_env_steps += 1
+                            episode_return += reward
+                            success = bool(info.get("success", success))
+                            timeout = bool(episode_steps >= max_episode_steps)
+                            done = bool(chunk_dones[executed_step] or timeout)
+                            step_logger.write(
+                                {
+                                    "global_env_step": int(total_env_steps),
+                                    "global_policy_step": int(total_policy_steps),
+                                    "episode_id": episode_id,
+                                    "episode_step": episode_steps,
+                                    "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                    "replan_point": bool(executed_step == 0),
+                                    "chunk_step": int(executed_step),
+                                    "chunk_horizon": int(execute_horizon),
+                                    "infer_e2e_ms": infer_info.get("e2e_ms") if executed_step == 0 else None,
+                                    "infer_policy_ms": infer_info.get("policy_ms") if executed_step == 0 else None,
+                                    "infer_server_ms": infer_info.get("server_ms") if executed_step == 0 else None,
+                                    "a_base": executed_base_chunk[executed_step].tolist(),
+                                    "a_res": delta_chunk[executed_step].tolist(),
+                                    "a_final": final_chunk[executed_step].tolist(),
+                                    "epsilon_gate_prob": float(gate_prob),
+                                    "epsilon_gate_on": bool(gate_on),
+                                    "reward": float(reward),
+                                    "done": bool(done),
+                                    "success": bool(success),
+                                }
+                            )
+                            if done:
+                                decision_done = True
+                                break
+                    else:
+                        for chunk_step in range(chunk_horizon):
+                            if episode_steps >= max_episode_steps:
+                                decision_done = True
+                                break
+                            obs_input = build_residual_step_obs(
+                                obs_raw,
+                                base_chunk[chunk_step],
+                                image_keys=image_keys,
+                                stack_horizon=stack_horizon,
+                                normalizer=normalizer,
+                                obs_cache=obs_cache,
+                                base_action_chunk=None,
+                                alpha=float(residual_alpha),
+                                state_mode=obs_state_mode,
+                                action_dim=env_action_dim,
+                            )
+                            gate_prob, gate_on = _resolve_eval_gate(float(residual_alpha))
+                            if checkpoint_loaded and agent is not None:
+                                sampled = agent.sample_actions(
+                                    obs_input,
+                                    deterministic=bool(cfg.eval.deterministic),
+                                )
+                                residual_step_action = as_numpy_action(sampled, step_action_dim)
+                            else:
+                                residual_step_action = np.zeros((step_action_dim,), dtype=np.float32)
+                            if not gate_on:
+                                residual_step_action = np.zeros_like(residual_step_action)
+                            delta_action, final_action = compose_residual_action(
+                                base_action=base_chunk[chunk_step],
+                                residual_action=residual_step_action,
+                                indices=control_indices,
+                                limits=residual_limits,
+                                alpha=residual_alpha,
+                                clip_gripper=bool(cfg.residual.clip_gripper),
+                            )
+                            total_policy_steps += 1
+                            obs_raw, reward, env_done, truncated, info = env.step(final_action)
+                            episode_steps += 1
+                            total_env_steps += 1
+                            episode_return += float(reward)
+                            success = bool(info.get("success", success))
+                            timeout = bool(episode_steps >= max_episode_steps)
+                            done = bool(env_done or truncated or timeout)
+                            step_logger.write(
+                                {
+                                    "global_env_step": int(total_env_steps),
+                                    "global_policy_step": int(total_policy_steps),
+                                    "episode_id": episode_id,
+                                    "episode_step": episode_steps,
+                                    "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                    "replan_point": bool(chunk_step == 0),
+                                    "chunk_step": int(chunk_step),
+                                    "chunk_horizon": int(chunk_horizon),
+                                    "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
+                                    "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
+                                    "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                                    "a_base": base_chunk[chunk_step].tolist(),
+                                    "a_res": delta_action.tolist(),
+                                    "a_final": final_action.tolist(),
+                                    "epsilon_gate_prob": float(gate_prob),
+                                    "epsilon_gate_on": bool(gate_on),
+                                    "reward": float(reward),
+                                    "done": bool(done),
+                                    "success": bool(success),
+                                }
+                            )
+                            if done:
+                                decision_done = True
+                                break
 
             total_success += int(bool(success))
             episode_payload = {
