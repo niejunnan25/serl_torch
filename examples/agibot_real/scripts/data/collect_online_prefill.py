@@ -141,6 +141,7 @@ def main() -> None:
             seed = int(cfg.task.seed_base) + int(episode_index)
             obs_raw = env.reset(seed=seed, init_episode_idx=episode_index)
             prompt = str(env.current_instruction)
+            controller_summary = None
             buffers: Dict[str, List[np.ndarray]] = {
                 "head_image": [],
                 "left_wrist_image": [],
@@ -251,6 +252,24 @@ def main() -> None:
                             break
                     if decision_done:
                         break
+
+            if episode_steps <= 0 or not buffers["actions"]:
+                logger.warning(
+                    "Skipping online prefill episode=%s because no steps were executed "
+                    "(terminal=%s info=%s).",
+                    episode_index,
+                    (
+                        controller_summary.terminal_signal
+                        if controller_summary is not None
+                        else None
+                    ),
+                    (
+                        controller_summary.terminal_info
+                        if controller_summary is not None
+                        else {}
+                    ),
+                )
+                continue
 
             payload = materialize_with_config(
                 {

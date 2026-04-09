@@ -88,6 +88,7 @@ class ManualEpisodeController:
         self._queue: Deque[QueuedAction] = deque()
         self._transitions: Deque[ExecutedTransition] = deque()
         self._next_sequence_id = 0
+        self._inflight_action: Optional[QueuedAction] = None
         self._state = STATE_WAIT_READY
         self._episode_active = False
         self._terminal_signal: Optional[str] = None
@@ -104,6 +105,7 @@ class ManualEpisodeController:
         with self._lock:
             self._queue.clear()
             self._transitions.clear()
+            self._inflight_action = None
             self._terminal_signal = None
             self._terminal_info = {}
             self._episode_active = True
@@ -130,6 +132,12 @@ class ManualEpisodeController:
                 "terminal_signal": self._terminal_signal,
                 "terminal_info": dict(self._terminal_info),
                 "queue_depth": int(len(self._queue)),
+                "transition_depth": int(len(self._transitions)),
+                "inflight_sequence_id": (
+                    int(self._inflight_action.sequence_id)
+                    if self._inflight_action is not None
+                    else None
+                ),
                 "latest_obs_ready": self._latest_obs is not None,
                 "latest_obs_timestamp_ns": self._latest_obs_timestamp_ns,
             }
@@ -160,11 +168,14 @@ class ManualEpisodeController:
                 return None
             if self._state != STATE_RUNNING or (not self._queue):
                 return None
-            return self._queue.popleft()
+            queued = self._queue.popleft()
+            self._inflight_action = queued
+            return queued
 
     def push_transition(self, transition: ExecutedTransition) -> None:
         with self._lock:
             self._transitions.append(transition)
+            self._inflight_action = None
             self._latest_obs = _clone_obs_tree(transition.obs)
             self._latest_obs_timestamp_ns = int(time.time_ns())
             if bool(transition.done) or bool(transition.truncated):

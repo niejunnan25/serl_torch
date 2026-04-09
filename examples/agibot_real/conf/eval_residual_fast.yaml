@@ -29,7 +29,7 @@ robot:
 
 env:
   action_dim: 14
-  backend: remote
+  backend: local
   remote:
     host: 127.0.0.1
     port: 32000

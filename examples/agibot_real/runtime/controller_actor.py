@@ -128,6 +128,22 @@ def _controller_poll_sec(cfg: DictConfig) -> float:
     return max(0.01, float(controller_cfg.get("poll_interval_sec", 0.05)))
 
 
+def _controller_inflight_matches_planned_step(
+    meta: Dict[str, Any],
+    planned_steps: Deque[_PlannedStep],
+) -> bool:
+    if not planned_steps:
+        return False
+    inflight_sequence_id = meta.get("inflight_sequence_id", None)
+    if inflight_sequence_id is None:
+        return False
+    try:
+        inflight_sequence_id = int(inflight_sequence_id)
+    except (TypeError, ValueError):
+        return False
+    return int(planned_steps[0].sequence_id) == inflight_sequence_id
+
+
 def _override_buffered_step_from_meta(
     buffered: _BufferedStep,
     meta: Dict[str, Any],
@@ -496,7 +512,6 @@ def _run_controller_episode(
     planned_steps: Deque[_PlannedStep] = deque()
     buffered_step: Optional[_BufferedStep] = None
     queue_empty_since: Optional[float] = None
-    terminal_wait_since: Optional[float] = None
     current_obs_raw = obs_raw
 
     while not state.episode_done and int(state.episode_steps) < int(spec.max_episode_steps):
@@ -539,7 +554,6 @@ def _run_controller_episode(
         polled = env.poll_controller_transitions(max_items=int(ctx.chunk_horizon))
         if polled:
             queue_empty_since = None
-            terminal_wait_since = None
             for payload in polled:
                 if not planned_steps:
                     ctx.logger.warning(
@@ -608,37 +622,35 @@ def _run_controller_episode(
             }
             and controller_state != STATE_RUNNING
         ):
-            if terminal_wait_since is None:
-                terminal_wait_since = time.time()
-            if (time.time() - float(terminal_wait_since)) >= float(terminal_grace_sec):
-                if buffered_step is not None:
-                    patched = _override_buffered_step_from_meta(buffered_step, meta)
-                    _flush_buffered_step(
-                        ctx,
-                        spec,
-                        state,
-                        buffered=patched,
-                        update_train_progress_fn=update_train_progress_fn,
-                        advance_async_update_calls_fn=advance_async_update_calls_fn,
-                        maybe_send_agentlace_timer_stats_fn=maybe_send_agentlace_timer_stats_fn,
-                        maybe_wait_for_async_learner_budget_fn=maybe_wait_for_async_learner_budget_fn,
-                        save_checkpoint_at_step_fn=save_checkpoint_at_step_fn,
-                        timer_train_episode_id=int(timer_train_episode_id),
-                    )
-                    buffered_step = None
-                else:
-                    if planned_steps:
-                        ctx.logger.warning(
-                            "Controller terminal=%s dropped %s unexecuted planned steps",
-                            terminal_signal,
-                            len(planned_steps),
-                        )
-                    state.episode_success = bool(terminal_signal == TERMINAL_SUCCESS)
-                    state.episode_done = True
-                planned_steps.clear()
-                break
-        else:
-            terminal_wait_since = None
+            if _controller_inflight_matches_planned_step(meta, planned_steps):
+                time.sleep(poll_sec)
+                continue
+            if buffered_step is not None:
+                patched = _override_buffered_step_from_meta(buffered_step, meta)
+                _flush_buffered_step(
+                    ctx,
+                    spec,
+                    state,
+                    buffered=patched,
+                    update_train_progress_fn=update_train_progress_fn,
+                    advance_async_update_calls_fn=advance_async_update_calls_fn,
+                    maybe_send_agentlace_timer_stats_fn=maybe_send_agentlace_timer_stats_fn,
+                    maybe_wait_for_async_learner_budget_fn=maybe_wait_for_async_learner_budget_fn,
+                    save_checkpoint_at_step_fn=save_checkpoint_at_step_fn,
+                    timer_train_episode_id=int(timer_train_episode_id),
+                )
+                buffered_step = None
+            else:
+                state.episode_success = bool(terminal_signal == TERMINAL_SUCCESS)
+                state.episode_done = True
+            if planned_steps:
+                ctx.logger.warning(
+                    "Controller terminal=%s dropped %s unexecuted planned steps",
+                    terminal_signal,
+                    len(planned_steps),
+                )
+            planned_steps.clear()
+            break
 
         if controller_state == STATE_RUNNING and (not planned_steps):
             current_obs_raw = env.get_latest_obs()

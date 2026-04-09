@@ -78,6 +78,22 @@ def controller_terminal_signals() -> set[str]:
     }
 
 
+def controller_inflight_matches_planned_step(
+    meta: Mapping[str, Any],
+    planned_steps: Sequence[ControllerPlannedStep],
+) -> bool:
+    if not planned_steps:
+        return False
+    inflight_sequence_id = meta.get("inflight_sequence_id", None)
+    if inflight_sequence_id is None:
+        return False
+    try:
+        inflight_sequence_id = int(inflight_sequence_id)
+    except (TypeError, ValueError):
+        return False
+    return int(planned_steps[0].sequence_id) == inflight_sequence_id
+
+
 def require_controller_rollout_capability(
     *,
     env: Any,
@@ -160,7 +176,6 @@ def run_controller_episode(
     planned_steps: Deque[ControllerPlannedStep] = deque()
     buffered_step: Optional[ControllerExecutedStep] = None
     queue_empty_since: Optional[float] = None
-    terminal_wait_since: Optional[float] = None
     current_obs_raw = initial_obs
 
     def _commit_step(executed: ControllerExecutedStep) -> None:
@@ -195,7 +210,6 @@ def run_controller_episode(
         polled = env.poll_controller_transitions(max_items=max(1, int(chunk_horizon)))
         if polled:
             queue_empty_since = None
-            terminal_wait_since = None
             for payload in polled:
                 if not planned_steps:
                     logger.warning(
@@ -240,28 +254,26 @@ def run_controller_episode(
             continue
 
         if terminal_signal in terminal_signals and controller_state != STATE_RUNNING:
-            if terminal_wait_since is None:
-                terminal_wait_since = time.time()
-            if (time.time() - float(terminal_wait_since)) >= float(terminal_grace_sec):
-                summary.terminal_signal = str(terminal_signal)
-                if isinstance(meta.get("terminal_info", {}), MappingABC):
-                    summary.terminal_info = dict(meta.get("terminal_info", {}))
-                if buffered_step is not None:
-                    patched = _override_executed_step_from_meta(buffered_step, meta)
-                    _commit_step(patched)
-                    buffered_step = None
-                else:
-                    if planned_steps:
-                        logger.warning(
-                            "Controller terminal=%s dropped %s unexecuted planned steps",
-                            terminal_signal,
-                            len(planned_steps),
-                        )
-                    summary.success = bool(terminal_signal == TERMINAL_SUCCESS)
-                planned_steps.clear()
-                break
-        else:
-            terminal_wait_since = None
+            if controller_inflight_matches_planned_step(meta, planned_steps):
+                time.sleep(poll_sec)
+                continue
+            summary.terminal_signal = str(terminal_signal)
+            if isinstance(meta.get("terminal_info", {}), MappingABC):
+                summary.terminal_info = dict(meta.get("terminal_info", {}))
+            if buffered_step is not None:
+                patched = _override_executed_step_from_meta(buffered_step, meta)
+                _commit_step(patched)
+                buffered_step = None
+            else:
+                summary.success = bool(terminal_signal == TERMINAL_SUCCESS)
+            if planned_steps:
+                logger.warning(
+                    "Controller terminal=%s dropped %s unexecuted planned steps",
+                    terminal_signal,
+                    len(planned_steps),
+                )
+            planned_steps.clear()
+            break
 
         if controller_state == STATE_RUNNING and (not planned_steps):
             remaining_steps = int(max_episode_steps) - int(summary.episode_steps)

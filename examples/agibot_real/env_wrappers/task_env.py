@@ -245,6 +245,55 @@ class AgiBotTaskEnv:
             trajectory_reference_time=self.trajectory_time,
         )
 
+    def _controller_error_obs(self) -> Dict[str, Any]:
+        if self._controller is not None:
+            obs = self._controller.get_latest_obs()
+            if obs is not None:
+                return obs
+        if self._last_obs is not None:
+            return _clone_obs_tree(self._last_obs)
+        try:
+            return self._get_obs()
+        except Exception as obs_exc:  # noqa: BLE001
+            self.logger.warning(
+                "Failed to refresh AgiBot observation after controller error: %s",
+                obs_exc,
+            )
+        return {}
+
+    def _handle_controller_step_exception(
+        self,
+        *,
+        sequence_id: int,
+        exc: Exception,
+    ) -> None:
+        assert self._controller is not None
+        error_message = f"{type(exc).__name__}: {exc}"
+        self.logger.exception(
+            "Controller step failed for sequence_id=%s: %s",
+            int(sequence_id),
+            error_message,
+        )
+        self._controller.push_transition(
+            ExecutedTransition(
+                sequence_id=int(sequence_id),
+                obs=self._controller_error_obs(),
+                reward=0.0,
+                done=True,
+                truncated=False,
+                info={
+                    "success": False,
+                    "controller_error": error_message,
+                    "controller_sequence_id": int(sequence_id),
+                    "take_action_cnt": int(self._take_action_cnt),
+                    "step_lim": int(self._step_limit),
+                    "task_description": self._task_description,
+                    "task_name": self.task_name,
+                    "init_state_idx": self.current_init_state_idx,
+                },
+            )
+        )
+
     def _controller_loop(self) -> None:
         assert self._controller is not None
         period_sec = max(1.0 / max(float(self.hz), 1.0), 0.001)
@@ -252,28 +301,34 @@ class AgiBotTaskEnv:
             loop_t0 = time.perf_counter()
             queued = self._controller.pop_next_action()
             if queued is not None:
-                self._step_cartesian(queued.action)
-                self._take_action_cnt += 1
-                obs = self._get_obs()
-                step_result = self._resolve_step_result(
-                    obs=obs,
-                    action=queued.action,
-                    controller_mode=True,
-                )
-                if bool(step_result["truncated"]) and bool(
-                    step_result["info"].get("time_limit_reached", False)
-                ):
-                    self._controller.mark_timeout(info=step_result["info"])
-                self._controller.push_transition(
-                    ExecutedTransition(
-                        sequence_id=int(queued.sequence_id),
+                try:
+                    self._step_cartesian(queued.action)
+                    self._take_action_cnt += 1
+                    obs = self._get_obs()
+                    step_result = self._resolve_step_result(
                         obs=obs,
-                        reward=float(step_result["reward"]),
-                        done=bool(step_result["done"]),
-                        truncated=bool(step_result["truncated"]),
-                        info=dict(step_result["info"]),
+                        action=queued.action,
+                        controller_mode=True,
                     )
-                )
+                    if bool(step_result["truncated"]) and bool(
+                        step_result["info"].get("time_limit_reached", False)
+                    ):
+                        self._controller.mark_timeout(info=step_result["info"])
+                    self._controller.push_transition(
+                        ExecutedTransition(
+                            sequence_id=int(queued.sequence_id),
+                            obs=obs,
+                            reward=float(step_result["reward"]),
+                            done=bool(step_result["done"]),
+                            truncated=bool(step_result["truncated"]),
+                            info=dict(step_result["info"]),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._handle_controller_step_exception(
+                        sequence_id=int(queued.sequence_id),
+                        exc=exc,
+                    )
             sleep_sec = max(0.0, period_sec - (time.perf_counter() - loop_t0))
             if sleep_sec > 0.0:
                 time.sleep(sleep_sec)
@@ -459,26 +514,45 @@ class AgiBotTaskEnv:
         action_chunk = np.asarray(actions, dtype=np.float32)
         if action_chunk.ndim != 2:
             raise ValueError(f"Expected 2-D action chunk, got {action_chunk.shape}")
-        terminal_grace_sec = float(self._controller_cfg.get("terminal_grace_sec", 0.15))
         accepted_ids = self.enqueue_action_chunk(action_chunk)
         if not accepted_ids:
             return []
-        accepted_remaining = set(int(v) for v in accepted_ids)
+        accepted_cursor = 0
         transitions: list[Dict[str, Any]] = []
         pending: Optional[Dict[str, Any]] = None
-        terminal_wait_since: Optional[float] = None
         while True:
             polled = self.poll_controller_transitions(max_items=len(accepted_ids))
             for payload in polled:
-                terminal_wait_since = None
+                if accepted_cursor >= len(accepted_ids):
+                    raise RuntimeError(
+                        "controller returned more transitions than accepted actions"
+                    )
+                expected_sequence_id = int(accepted_ids[accepted_cursor])
+                observed_sequence_id = int(payload["sequence_id"])
+                if expected_sequence_id != observed_sequence_id:
+                    raise RuntimeError(
+                        "controller transition sequence mismatch: "
+                        f"expected={expected_sequence_id} observed={observed_sequence_id}"
+                    )
+                accepted_cursor += 1
                 if pending is not None:
                     transitions.append(pending)
                 pending = payload
-                accepted_remaining.discard(int(payload["sequence_id"]))
                 if bool(payload["done"]) or bool(payload["truncated"]):
                     transitions.append(pending)
                     return transitions
             meta = self.get_controller_meta()
+            next_expected_sequence_id = (
+                int(accepted_ids[accepted_cursor])
+                if accepted_cursor < len(accepted_ids)
+                else None
+            )
+            inflight_sequence_id = meta.get("inflight_sequence_id", None)
+            if inflight_sequence_id is not None:
+                try:
+                    inflight_sequence_id = int(inflight_sequence_id)
+                except (TypeError, ValueError):
+                    inflight_sequence_id = None
             if (
                 meta.get("terminal_signal", None) in {
                     TERMINAL_SUCCESS,
@@ -488,23 +562,32 @@ class AgiBotTaskEnv:
                 }
                 and meta.get("state", None) != STATE_RUNNING
             ):
-                if terminal_wait_since is None:
-                    terminal_wait_since = time.time()
-                if (time.time() - float(terminal_wait_since)) >= float(terminal_grace_sec):
-                    if pending is not None:
-                        transitions.append(
-                            self._override_transition_for_terminal_meta(pending, meta)
+                if (
+                    next_expected_sequence_id is not None
+                    and inflight_sequence_id == next_expected_sequence_id
+                ):
+                    time.sleep(
+                        float(
+                            self._controller_cfg.get(
+                                "poll_interval_sec",
+                                0.05,
+                            )
                         )
-                    elif accepted_remaining:
-                        self.logger.warning(
-                            "controller terminal=%s canceled %s unexecuted queued actions",
-                            meta.get("terminal_signal", None),
-                            len(accepted_remaining),
-                        )
-                    return transitions
-            else:
-                terminal_wait_since = None
-            if (not accepted_remaining) and pending is not None:
+                    )
+                    continue
+                if pending is not None:
+                    transitions.append(
+                        self._override_transition_for_terminal_meta(pending, meta)
+                    )
+                remaining_count = int(len(accepted_ids) - accepted_cursor)
+                if remaining_count > 0:
+                    self.logger.warning(
+                        "controller terminal=%s canceled %s unexecuted queued actions",
+                        meta.get("terminal_signal", None),
+                        remaining_count,
+                    )
+                return transitions
+            if accepted_cursor >= len(accepted_ids) and pending is not None:
                 transitions.append(pending)
                 return transitions
             time.sleep(

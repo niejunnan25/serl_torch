@@ -31,6 +31,7 @@ done
 echo "=========================================="
 echo "  AgiBot Remote Env Server"
 echo "=========================================="
+echo "  Mode        : optional RPC bridge for env.backend=remote"
 echo "  Working dir : $ROOT_DIR"
 echo "  Address     : http://${HOST}:${PORT}"
 echo "=========================================="

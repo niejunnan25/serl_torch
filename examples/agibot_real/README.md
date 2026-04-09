@@ -88,105 +88,118 @@ relative paths.
 - Train learner: [`scripts/train/run_learner.py`](scripts/train/run_learner.py)
 - Launch async train stack: [`scripts/train/launch_async_train.py`](scripts/train/launch_async_train.py)
   for non-interactive debugging only
-- Serve remote real env: [`scripts/services/serve_env.py`](scripts/services/serve_env.py)
+- Serve optional remote env bridge: [`scripts/services/serve_env.py`](scripts/services/serve_env.py)
 - Evaluate checkpoint: [`scripts/eval/evaluate_checkpoint.py`](scripts/eval/evaluate_checkpoint.py)
 - Process async eval queue: [`scripts/eval/process_eval_queue.py`](scripts/eval/process_eval_queue.py)
 - Prepare offline demos: [`scripts/data/prepare_offline_demos.py`](scripts/data/prepare_offline_demos.py)
 - Collect online prefill: [`scripts/data/collect_online_prefill.py`](scripts/data/collect_online_prefill.py)
 
-## Typical workflows
+## How To Use
 
-### Environment selection
+### TL;DR
 
-The shell wrappers are written to work across different machines and conda
-layouts:
+If you are doing normal real-robot work, use the direct local-env path:
 
-- If your target env is already active, the wrappers reuse the current shell
-  environment.
-- To switch envs per command without changing your current shell, set env vars:
-  - `SERL_CONDA_ENV` or `SERL_CONDA_PREFIX` for training/eval/data scripts
-  - `AGIBOT_CONDA_ENV` or `AGIBOT_CONDA_PREFIX` for the real env server
-  - `OPENPI_CONDA_ENV` or `OPENPI_CONDA_PREFIX` for OpenPI serving
-- If you are not using conda, point the wrappers at a Python binary:
-  - `SERL_PYTHON_BIN`
-  - `AGIBOT_PYTHON_BIN`
+- `env.backend=local`
+- start OpenPI in one terminal
+- start `tools/run_learner.sh` in one terminal
+- start `tools/run_actor.sh` in one terminal
+- operate the robot from the actor terminal
 
-These env vars are consumed by the `tools/*.sh` wrappers. If you invoke
-`python ...` directly, activate the target environment yourself first.
+Only use `tools/serve_env.sh` when you intentionally want a separate remote env
+bridge. Only use `tools/launch_async_train.sh` for non-interactive debugging.
 
-Examples:
+### 1. Choose the workflow
 
-```bash
-cd examples/agibot_real
-SERL_CONDA_ENV=my_serl_env bash tools/eval.sh eval.checkpoint_path=outputs/checkpoint_2500.pt
-```
+There are three ways to run `examples/agibot_real`:
 
-```bash
-cd examples/agibot_real
-AGIBOT_CONDA_ENV=my_robot_env bash tools/serve_env.sh --host 127.0.0.1 --port 32000
-```
+1. Recommended real-robot path: direct local env.
+   `env.backend=local`, no env server, actor/eval/prefill owns the robot env.
+2. Optional remote bridge path: separate env server.
+   `env.backend=remote`, `tools/serve_env.sh` owns the robot env and controller
+   terminal.
+3. Debug-only one-shot launcher.
+   `tools/launch_async_train.sh` manages subprocesses for you, forces remote env
+   defaults, and does not support interactive controller mode.
 
-```bash
-cd examples/agibot_real
-OPENPI_CONDA_ENV=my_openpi_env \
-OPENPI_ROOT=relative/path/to/openpi \
-bash tools/serve_openpi.sh --port 30001 --gpu-id 0
-```
+The default configs already point at the recommended path:
 
-For the vision backbone, the configs default to Hugging Face model id
-`microsoft/resnet-18`. If you want a local mirror or an offline snapshot, set:
+- `conf/train_residual_sac.yaml`: `env.backend=local`
+- `conf/eval_residual_fast.yaml`: `env.backend=local`
+
+### 2. Pick the wrapper you actually want
+
+Training wrappers are split into two families:
+
+- `tools/run_actor.sh` / `tools/run_learner.sh`
+  Default training entrypoints. They are aliases to the agentlace split-process
+  wrappers and are what you should use for the normal actor + learner workflow.
+- `tools/run_actor_agentlace.sh` / `tools/run_learner_agentlace.sh`
+  Explicit agentlace versions of the same split-process workflow.
+- `tools/run_actor_generic.sh`
+  Raw config-driven actor wrapper. It does not force `training.async.*`.
+- `tools/run_learner_generic.sh`
+  Raw config-driven learner wrapper. The current learner entrypoint is still
+  agentlace-only, so this is mainly for advanced debugging and explicit config
+  experiments.
+
+Important:
+
+- `tools/run_actor.sh` and `tools/run_learner.sh` intentionally override
+  `training.async.*` to run the split actor/learner flow.
+- `conf/train_residual_sac.yaml` itself still has `training.async.enabled=false`.
+  That is fine. The default wrappers turn on agentlace for the split workflow.
+- If you use the generic wrappers, you are responsible for making
+  `training.async.*` consistent with the mode you actually want.
+
+### 3. Environment selection
+
+The shell wrappers can reuse the current shell env, or switch envs per command.
+
+- `SERL_CONDA_ENV` or `SERL_CONDA_PREFIX`
+  Used by training, eval, and data wrappers.
+- `AGIBOT_CONDA_ENV` or `AGIBOT_CONDA_PREFIX`
+  Used only by `tools/serve_env.sh` in the remote-bridge workflow.
+- `OPENPI_CONDA_ENV` or `OPENPI_CONDA_PREFIX`
+  Used by `tools/serve_openpi.sh`.
+- `SERL_PYTHON_BIN` / `AGIBOT_PYTHON_BIN`
+  Use these if you are not using conda.
+
+For the recommended local-env workflow, the `SERL` env should be a merged env
+that contains both:
+
+- SERL training/runtime dependencies
+- AgiBot runtime dependencies such as `a2d_sdk.robot` and kinematics packages
+
+For the optional remote bridge workflow, keep:
+
+- `SERL_CONDA_ENV` for actor/learner/eval/prefill
+- `AGIBOT_CONDA_ENV` for the env server
+
+If you want a local mirror for the vision backbone, set:
 
 ```bash
 export SERL_RESNET_MODEL=relative/path/to/resnet-18
 ```
 
-### 1. Required real-robot training workflow: start components separately
+### 4. Recommended training workflow: direct local env
 
-For real-robot training, start the stack in separate terminals.
+This is the main real-robot path and the one you should start from.
 
-This is the required workflow for `examples/agibot_real`. Do not treat the
-one-shot launcher as the standard real-robot entrypoint.
+Use it when:
 
-Reason:
+- actor runs on the robot machine
+- you can maintain one merged Python env for SERL + AgiBot runtime
+- you want the shortest control path
 
-- real-robot training often needs human-in-the-loop `precheck` and
-  `success_hook`
-- controller-driven training needs the env process to stay attached to the
-  operator terminal
-- the env process should stay independently visible and controllable
-- debugging reset/safety/manual-success behavior is much easier when env,
-  OpenPI, learner, and actor are split apart
-
-Prepare a shared bootstrap path that both learner and actor can see:
+Prepare a shared bootstrap output path:
 
 ```bash
 cd examples/agibot_real
 mkdir -p outputs/agibot_real/train_default
 ```
 
-Terminal A: start the real env server.
-
-```bash
-cd examples/agibot_real
-AGIBOT_CONDA_ENV=my_robot_env \
-bash tools/serve_env.sh --host 127.0.0.1 --port 32000
-```
-
-If `controller.enabled=true`, Terminal A is also the operator console. The env
-server listens for single-key commands:
-
-- `g`: ready / resume
-- `p`: pause
-- `r`: mark the current episode as reset / truncated
-- `s`: mark the current episode as success
-- `f`: mark the current episode as fail
-- `h`: print the key help again
-
-The first version of controller mode assumes reset is human-operated. Pressing
-`r` stops the current episode and clears queued actions, but it does not move
-the robot back to a home pose automatically.
-
-Terminal B: start OpenPI for the base policy.
+Terminal A: start OpenPI.
 
 ```bash
 cd examples/agibot_real
@@ -197,9 +210,82 @@ POLICY_DIR=relative/path/to/pi05_agibot/checkpoint \
 bash tools/serve_openpi.sh --port 30001 --gpu-id 0
 ```
 
-`tools/serve_openpi.sh` respects `OPENPI_CONDA_PREFIX` or `OPENPI_CONDA_ENV`.
-`OPENPI_ROOT` must point to your local OpenPI checkout. It can be a relative
-path from the current working directory or an absolute path if you prefer.
+Terminal B: start the learner.
+
+```bash
+cd examples/agibot_real
+SERL_CONDA_ENV=my_robot_serl_env \
+bash tools/run_learner.sh \
+  conf/train_residual_sac.yaml \
+  --bootstrap outputs/agibot_real/train_default/agentlace_bootstrap.pkl \
+  hydra.run.dir=outputs/agibot_real/train_default/learner
+```
+
+Terminal C: start the actor. This terminal is also the controller console.
+
+```bash
+cd examples/agibot_real
+SERL_CONDA_ENV=my_robot_serl_env \
+bash tools/run_actor.sh \
+  conf/train_residual_sac.yaml \
+  --bootstrap outputs/agibot_real/train_default/agentlace_bootstrap.pkl \
+  hydra.run.dir=outputs/agibot_real/train_default/actor
+```
+
+Notes:
+
+- learner and actor must use the same `--bootstrap` path
+- there is no env server in this workflow
+- `controller.enabled=true` by default in the training config
+- `chunk_step.enabled=true` by default in the training config
+- keep the actor terminal in the foreground because it owns the live rollout
+
+### 5. Controller keys
+
+When `controller.enabled=true`, the terminal that owns the env accepts:
+
+- `g`: ready / resume
+- `p`: pause
+- `r`: reset / truncate the current episode
+- `s`: mark success
+- `f`: mark failure
+- `h`: print help again
+
+The owner terminal depends on the backend:
+
+- `env.backend=local`: actor, eval, or prefill terminal
+- `env.backend=remote`: `tools/serve_env.sh` terminal
+
+Current reset behavior is intentionally simple: `r` ends the episode and clears
+queued actions, but it does not move the robot back to a home pose.
+
+### 6. Optional training workflow: remote env bridge
+
+Use this only when you explicitly want the robot env in a separate process, for
+example:
+
+- robot SDK dependencies must stay outside the SERL env
+- you want a separate operator console
+- you want the env process isolated from the actor process
+
+Terminal A: start the env bridge.
+
+```bash
+cd examples/agibot_real
+AGIBOT_CONDA_ENV=my_robot_env \
+bash tools/serve_env.sh --host 127.0.0.1 --port 32000
+```
+
+Terminal B: start OpenPI.
+
+```bash
+cd examples/agibot_real
+OPENPI_ROOT=relative/path/to/openpi \
+OPENPI_CONDA_ENV=my_openpi_env \
+POLICY_CONFIG=pi05_agibot \
+POLICY_DIR=relative/path/to/pi05_agibot/checkpoint \
+bash tools/serve_openpi.sh --port 30001 --gpu-id 0
+```
 
 Terminal C: start the learner.
 
@@ -212,7 +298,7 @@ bash tools/run_learner.sh \
   hydra.run.dir=outputs/agibot_real/train_default/learner
 ```
 
-Terminal D: start the actor.
+Terminal D: start the actor with remote overrides.
 
 ```bash
 cd examples/agibot_real
@@ -220,61 +306,60 @@ SERL_CONDA_ENV=my_serl_env \
 bash tools/run_actor.sh \
   conf/train_residual_sac.yaml \
   --bootstrap outputs/agibot_real/train_default/agentlace_bootstrap.pkl \
-  hydra.run.dir=outputs/agibot_real/train_default/actor
+  hydra.run.dir=outputs/agibot_real/train_default/actor \
+  env.backend=remote \
+  env.remote.host=127.0.0.1 \
+  env.remote.port=32000
 ```
 
-Notes:
+In this workflow, Terminal A is the operator console.
 
-- learner and actor must point to the same `--bootstrap` path
-- actor is the live robot rollout process; keep it in the foreground
-- if you use manual terminal input or any manual success interface, attach it to
-  the env side, not the learner side
-- with `controller.enabled=true`, actor runs in controller-driven chunk mode and
-  expects `chunk_step.enabled=true`
+### 7. Evaluate a checkpoint
 
-### Controller-driven training semantics
-
-When `controller.enabled=true`, the training stack uses the env-side controller
-as the runtime source of truth.
-
-- `reset()` starts a new episode record and returns to `WAIT_READY`
-- pressing `g` transitions the env into `RUNNING`
-- actor only enqueues a chunk when the controller is in `RUNNING`
-- the env executes queued actions at robot control frequency in its own control
-  loop
-- `p` pauses without ending the episode
-- `r` ends the episode as a truncated reset
-- `s` ends the episode with reward `1`
-- `f` ends the episode with reward `0`
-- step-limit timeout ends the episode as truncated with reward `0`
-
-This mode is intentionally different from the old synchronous step/step-chunk
-runtime. The goal is to avoid a "step once, wait once" control pattern on the
-real robot.
-
-### 2. Evaluate a residual checkpoint
+For normal local-env evaluation, start OpenPI first and then run:
 
 ```bash
 cd examples/agibot_real
-SERL_CONDA_ENV=my_serl_env \
+SERL_CONDA_ENV=my_robot_serl_env \
 bash tools/eval.sh \
   eval.checkpoint_path=outputs/checkpoint_2500.pt \
   hydra.run.dir=outputs/agibot_real/eval_default
 ```
 
-This expects the env server and OpenPI server to already be running unless you
-are evaluating inside another orchestration flow.
+`tools/eval.sh` respects the backend in the config or CLI overrides. For the
+optional remote bridge path, add:
 
-When `controller.enabled=true`, evaluation uses the same env-side controller
-runtime as training:
+```bash
+env.backend=remote env.remote.host=127.0.0.1 env.remote.port=32000
+```
 
-- the env stays in `WAIT_READY` after `reset()`
-- press `g` in the env terminal to start the rollout
-- `p/r/s/f` keep their training meanings during evaluation
-- the eval script now enqueues chunks and consumes controller transitions instead
-  of calling `env.step()` in a tight loop
+With controller mode enabled, the terminal that owns the env is also the
+operator console.
 
-### 3. Convert offline demos into residual-training PKLs
+### 8. Collect online prefill data
+
+For normal local-env prefill, start OpenPI first and then run:
+
+```bash
+cd examples/agibot_real
+SERL_CONDA_ENV=my_robot_serl_env \
+bash tools/collect_online_prefill.sh \
+  conf/train_residual_sac.yaml \
+  --episodes 20 \
+  --output_dir data/residual_training/online
+```
+
+`tools/collect_online_prefill.sh` also respects the backend in the config or
+CLI overrides. For the optional remote bridge path, add:
+
+```bash
+env.backend=remote env.remote.host=127.0.0.1 env.remote.port=32000
+```
+
+With controller mode enabled, the terminal that owns the env is also the
+operator console.
+
+### 9. Convert offline demos
 
 ```bash
 cd examples/agibot_real
@@ -292,48 +377,27 @@ bash tools/prepare_offline_demos.sh \
   --output_dir data/residual_training/offline
 ```
 
-By default, exported offline data now records `clip_residual_to_unit=true` so it
-matches the default training config. If you intentionally want unclipped
-projection metadata, pass `--no_clip_residual_to_unit` and make the training
-config match.
+By default, exported offline data records `clip_residual_to_unit=true` so it
+matches the default training config. If you want unclipped projection metadata,
+pass `--no_clip_residual_to_unit` and make the training config match.
 
-### 4. Collect online warmup/prefill data
+### 10. One-shot launcher
 
-```bash
-cd examples/agibot_real
-SERL_CONDA_ENV=my_serl_env \
-bash tools/collect_online_prefill.sh \
-  conf/train_residual_sac.yaml \
-  --episodes 20 \
-  --output_dir data/residual_training/online \
-  env.backend=remote \
-  env.remote.host=127.0.0.1 \
-  env.remote.port=32000 \
-  openpi.host=127.0.0.1 \
-  openpi.port=30001
-```
+`tools/launch_async_train.sh` is a convenience launcher for non-interactive
+debugging only.
 
-With `controller.enabled=true`, online prefill also waits on the env-side
-controller:
+It is not the recommended real-robot path because it backgrounds the env server
+and OpenPI into managed subprocesses. That is a poor fit for human-in-the-loop
+precheck, manual success confirmation, and safety/debugging workflows.
 
-- after `reset()`, the env remains idle until the operator presses `g`
-- the script feeds base-policy chunks into the controller queue
-- `p` pauses, `r` truncates the current episode, and `s/f` mark success/fail
-- the saved PKL metadata records `controller_enabled=true`
+Current launcher behavior:
 
-### 5. One-shot launcher
+- defaults to `env.backend=remote`
+- defaults to `controller.enabled=false`
+- rejects `controller.enabled=true`
 
-`tools/launch_async_train.sh` still exists, but treat it as a convenience
-launcher for non-interactive debugging only.
-
-It is not the recommended real-robot training path because it backgrounds the
-env server and OpenPI into managed subprocesses. That is a poor fit for
-human-in-the-loop `precheck`, manual success confirmation, and safety/debugging
-workflows.
-
-If you still use the one-shot launcher, pass `controller.enabled=false`.
-The launcher now refuses `controller.enabled=true` because the env server would
-otherwise start without an operator-attached TTY.
+If you care about real operator interaction, use the explicit multi-terminal
+workflow instead of the one-shot launcher.
 
 ## Hooks
 
