@@ -87,6 +87,7 @@ relative paths.
 - Train actor: [`scripts/train/run_actor.py`](scripts/train/run_actor.py)
 - Train learner: [`scripts/train/run_learner.py`](scripts/train/run_learner.py)
 - Launch async train stack: [`scripts/train/launch_async_train.py`](scripts/train/launch_async_train.py)
+  for non-interactive debugging only
 - Serve remote real env: [`scripts/services/serve_env.py`](scripts/services/serve_env.py)
 - Evaluate checkpoint: [`scripts/eval/evaluate_checkpoint.py`](scripts/eval/evaluate_checkpoint.py)
 - Process async eval queue: [`scripts/eval/process_eval_queue.py`](scripts/eval/process_eval_queue.py)
@@ -139,31 +140,29 @@ For the vision backbone, the configs default to Hugging Face model id
 export SERL_RESNET_MODEL=relative/path/to/resnet-18
 ```
 
-### 1. One-shot async residual training
+### 1. Required real-robot training workflow: start components separately
 
-Recommended when you want one command to start env server, OpenPI, learner, and
-actor together.
+For real-robot training, start the stack in separate terminals.
+
+This is the required workflow for `examples/agibot_real`. Do not treat the
+one-shot launcher as the standard real-robot entrypoint.
+
+Reason:
+
+- real-robot training often needs human-in-the-loop `precheck` and
+  `success_hook`
+- the env process should stay independently visible and controllable
+- debugging reset/safety/manual-success behavior is much easier when env,
+  OpenPI, learner, and actor are split apart
+
+Prepare a shared bootstrap path that both learner and actor can see:
 
 ```bash
 cd examples/agibot_real
-SERL_CONDA_ENV=my_serl_env \
-bash tools/launch_async_train.sh \
-  conf/train_residual_sac.yaml \
-  hydra.run.dir=outputs/agibot_real/train_default
+mkdir -p outputs/agibot_real/train_default
 ```
 
-Important:
-
-- `launch_async_train.sh` starts the env server and OpenPI itself.
-- Do not manually start `tools/serve_env.sh` or `tools/serve_openpi.sh` on the
-  same ports before calling it, or it will fail fast on port-conflict checks.
-
-### 2. Manual env/OpenPI startup for eval or data scripts
-
-Use this path when you want to run evaluation, offline conversion, or online
-prefill collection without the one-shot launcher.
-
-Start the env server:
+Terminal A: start the real env server.
 
 ```bash
 cd examples/agibot_real
@@ -171,7 +170,7 @@ AGIBOT_CONDA_ENV=my_robot_env \
 bash tools/serve_env.sh --host 127.0.0.1 --port 32000
 ```
 
-Start OpenPI for the base policy:
+Terminal B: start OpenPI for the base policy.
 
 ```bash
 cd examples/agibot_real
@@ -186,7 +185,36 @@ bash tools/serve_openpi.sh --port 30001 --gpu-id 0
 `OPENPI_ROOT` must point to your local OpenPI checkout. It can be a relative
 path from the current working directory or an absolute path if you prefer.
 
-### 3. Evaluate a residual checkpoint
+Terminal C: start the learner.
+
+```bash
+cd examples/agibot_real
+SERL_CONDA_ENV=my_serl_env \
+bash tools/run_learner.sh \
+  conf/train_residual_sac.yaml \
+  --bootstrap outputs/agibot_real/train_default/agentlace_bootstrap.pkl \
+  hydra.run.dir=outputs/agibot_real/train_default/learner
+```
+
+Terminal D: start the actor.
+
+```bash
+cd examples/agibot_real
+SERL_CONDA_ENV=my_serl_env \
+bash tools/run_actor.sh \
+  conf/train_residual_sac.yaml \
+  --bootstrap outputs/agibot_real/train_default/agentlace_bootstrap.pkl \
+  hydra.run.dir=outputs/agibot_real/train_default/actor
+```
+
+Notes:
+
+- learner and actor must point to the same `--bootstrap` path
+- actor is the live robot rollout process; keep it in the foreground
+- if you use manual terminal input or any manual success interface, attach it to
+  the env side, not the learner side
+
+### 2. Evaluate a residual checkpoint
 
 ```bash
 cd examples/agibot_real
@@ -199,7 +227,7 @@ bash tools/eval.sh \
 This expects the env server and OpenPI server to already be running unless you
 are evaluating inside another orchestration flow.
 
-### 4. Convert offline demos into residual-training PKLs
+### 3. Convert offline demos into residual-training PKLs
 
 ```bash
 cd examples/agibot_real
@@ -222,7 +250,7 @@ matches the default training config. If you intentionally want unclipped
 projection metadata, pass `--no_clip_residual_to_unit` and make the training
 config match.
 
-### 5. Collect online warmup/prefill data
+### 4. Collect online warmup/prefill data
 
 ```bash
 cd examples/agibot_real
@@ -237,6 +265,16 @@ bash tools/collect_online_prefill.sh \
   openpi.host=127.0.0.1 \
   openpi.port=30001
 ```
+
+### 5. One-shot launcher
+
+`tools/launch_async_train.sh` still exists, but treat it as a convenience
+launcher for non-interactive debugging only.
+
+It is not the recommended real-robot training path because it backgrounds the
+env server and OpenPI into managed subprocesses. That is a poor fit for
+human-in-the-loop `precheck`, manual success confirmation, and safety/debugging
+workflows.
 
 ## Hooks
 
