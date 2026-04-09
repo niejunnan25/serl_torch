@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 from typing import Dict
+from typing import Mapping
 from typing import Optional
 from typing import Tuple
 
@@ -28,6 +29,7 @@ class RemoteAgiBotTaskEnv:
         max_episode_steps: Optional[int] = None,
         retargeter_urdf_path: Optional[str] = None,
         retargeter_camera_extrinsic_path: Optional[str] = None,
+        controller: Optional[Mapping[str, Any]] = None,
         reset_hook: Optional[str] = None,
         success_hook: Optional[str] = None,
         expert_precheck_hook: Optional[str] = None,
@@ -57,6 +59,7 @@ class RemoteAgiBotTaskEnv:
             if retargeter_camera_extrinsic_path is None
             else str(retargeter_camera_extrinsic_path)
         )
+        self.controller = dict(controller or {})
         self.reset_hook = None if reset_hook is None else str(reset_hook)
         self.success_hook = None if success_hook is None else str(success_hook)
         self.expert_precheck_hook = (
@@ -69,6 +72,9 @@ class RemoteAgiBotTaskEnv:
         self._task_description: str = self.prompt
         self._step_limit: int = int(max_episode_steps or 0)
         self._take_action_cnt: int = 0
+        self._controller_meta: Dict[str, Any] = {
+            "enabled": bool(self.controller.get("enabled", False))
+        }
         self._rpc_client = RemoteHttpRpcClient(
             host=self.host,
             port=self.port,
@@ -90,6 +96,7 @@ class RemoteAgiBotTaskEnv:
                 max_episode_steps=self.max_episode_steps,
                 retargeter_urdf_path=self.retargeter_urdf_path,
                 retargeter_camera_extrinsic_path=self.retargeter_camera_extrinsic_path,
+                controller=self.controller,
                 reset_hook=self.reset_hook,
                 success_hook=self.success_hook,
                 expert_precheck_hook=self.expert_precheck_hook,
@@ -119,6 +126,10 @@ class RemoteAgiBotTaskEnv:
     def action_dim(self) -> int:
         return int(self._action_dim)
 
+    @property
+    def controller_enabled(self) -> bool:
+        return bool(self._controller_meta.get("enabled", False))
+
     def _rpc(self, method: str, **kwargs: Any) -> Any:
         return self._rpc_client.call(method, **kwargs)
 
@@ -139,6 +150,9 @@ class RemoteAgiBotTaskEnv:
         )
         last_seed = meta.get("last_seed", None)
         self.last_seed = int(last_seed) if last_seed is not None else None
+        controller_meta = meta.get("controller", None)
+        if isinstance(controller_meta, dict):
+            self._controller_meta = dict(controller_meta)
 
     def reset(
         self,
@@ -207,3 +221,76 @@ class RemoteAgiBotTaskEnv:
         finally:
             self._rpc_client.close()
 
+    def get_controller_meta(self) -> Dict[str, Any]:
+        result = self._rpc("get_controller_meta")
+        if not isinstance(result, dict):
+            raise RuntimeError("remote get_controller_meta returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return dict(result.get("controller", {}))
+
+    def request_ready(self) -> Dict[str, Any]:
+        result = self._rpc("request_ready")
+        if not isinstance(result, dict):
+            raise RuntimeError("remote request_ready returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return dict(result.get("controller", {}))
+
+    def request_pause(self) -> Dict[str, Any]:
+        result = self._rpc("request_pause")
+        if not isinstance(result, dict):
+            raise RuntimeError("remote request_pause returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return dict(result.get("controller", {}))
+
+    def request_reset(self) -> Dict[str, Any]:
+        result = self._rpc("request_reset")
+        if not isinstance(result, dict):
+            raise RuntimeError("remote request_reset returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return dict(result.get("controller", {}))
+
+    def mark_success(self) -> Dict[str, Any]:
+        result = self._rpc("mark_success")
+        if not isinstance(result, dict):
+            raise RuntimeError("remote mark_success returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return dict(result.get("controller", {}))
+
+    def mark_fail(self) -> Dict[str, Any]:
+        result = self._rpc("mark_fail")
+        if not isinstance(result, dict):
+            raise RuntimeError("remote mark_fail returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return dict(result.get("controller", {}))
+
+    def get_latest_obs(self) -> Dict[str, Any]:
+        result = self._rpc("get_latest_obs")
+        if not isinstance(result, dict) or "obs" not in result:
+            raise RuntimeError("remote get_latest_obs returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        return result["obs"]
+
+    def enqueue_action_chunk(self, actions: np.ndarray) -> list[int]:
+        result = self._rpc(
+            "enqueue_action_chunk",
+            actions=np.asarray(actions, dtype=np.float32),
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("remote enqueue_action_chunk returned invalid payload")
+        self._apply_meta(result.get("meta", {}))
+        ids = result.get("sequence_ids", [])
+        return [int(v) for v in ids]
+
+    def poll_controller_transitions(self, *, max_items: int = 64) -> list[Dict[str, Any]]:
+        result = self._rpc("poll_controller_transitions", max_items=int(max_items))
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "remote poll_controller_transitions returned invalid payload"
+            )
+        self._apply_meta(result.get("meta", {}))
+        payloads = result.get("transitions", [])
+        if not isinstance(payloads, list):
+            raise RuntimeError(
+                "remote poll_controller_transitions payload must be a list"
+            )
+        return [dict(v) for v in payloads]

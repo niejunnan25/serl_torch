@@ -43,6 +43,7 @@ class _EnvState:
                 "last_seed": None,
                 "current_init_state_idx": None,
             }
+        controller_meta = self.env.get_controller_meta()
         return {
             "current_instruction": self.env.current_instruction,
             "task_description": self.env.task_description,
@@ -51,6 +52,7 @@ class _EnvState:
             "action_dim": int(self.env.action_dim),
             "last_seed": self.env.last_seed,
             "current_init_state_idx": self.env.current_init_state_idx,
+            "controller": dict(controller_meta),
         }
 
     def create_env(self, **kwargs: Any) -> Dict[str, Any]:
@@ -113,6 +115,56 @@ class _EnvState:
             self.env = None
         return {"closed": True}
 
+    def get_controller_meta(self, **_: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        return {"controller": self.env.get_controller_meta(), "meta": self._meta()}
+
+    def request_ready(self, **_: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        return {"controller": self.env.request_ready(), "meta": self._meta()}
+
+    def request_pause(self, **_: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        return {"controller": self.env.request_pause(), "meta": self._meta()}
+
+    def request_reset(self, **_: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        return {"controller": self.env.request_reset(), "meta": self._meta()}
+
+    def mark_success(self, **_: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        return {"controller": self.env.mark_success(), "meta": self._meta()}
+
+    def mark_fail(self, **_: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        return {"controller": self.env.mark_fail(), "meta": self._meta()}
+
+    def get_latest_obs(self, **_: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        return {"obs": self.env.get_latest_obs(), "meta": self._meta()}
+
+    def enqueue_action_chunk(self, **kwargs: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        actions = np.asarray(kwargs["actions"], dtype=np.float32)
+        ids = self.env.enqueue_action_chunk(actions)
+        return {"sequence_ids": [int(v) for v in ids], "meta": self._meta()}
+
+    def poll_controller_transitions(self, **kwargs: Any) -> Dict[str, Any]:
+        if self.env is None:
+            raise RuntimeError("env is not created")
+        transitions = self.env.poll_controller_transitions(
+            max_items=int(kwargs.get("max_items", 64))
+        )
+        return {"transitions": transitions, "meta": self._meta()}
+
 
 STATE = _EnvState()
 Handler: type[BaseHTTPRequestHandler] = make_pickle_rpc_handler(
@@ -143,4 +195,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

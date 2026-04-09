@@ -159,6 +159,12 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(
             f"launch_async_train requires env.backend=remote, got {cfg.get('env', {}).get('backend')}"
         )
+    if bool(cfg.get("controller", {}).get("enabled", False)):
+        raise ValueError(
+            "launch_async_train does not support controller.enabled=true because the env "
+            "server is backgrounded without an operator TTY. Use split startup for real-robot "
+            "training, or override controller.enabled=false for non-interactive debugging."
+        )
 
     launch_cfg = cfg.get("launch", {})
     default_gpu = _as_int(launch_cfg.get("gpu_id", 0), 0)
@@ -366,4 +372,3 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
-

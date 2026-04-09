@@ -18,6 +18,9 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.agibot_real.runtime.runtime_bindings import build_agibot_runtime_bindings
+from serl_torch.examples.agibot_real.runtime.controller_actor import (
+    run_agibot_controller_actor_loop,
+)
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="train_residual_sac")
@@ -32,15 +35,24 @@ def main(cfg: DictConfig) -> None:
 
     set_global_seeds(int(cfg.seed))
     bindings = build_agibot_runtime_bindings(cfg, logger=logger)
-    run_residual_actor_loop(
-        cfg,
-        run_dir=run_dir,
-        logger=logger,
-        bindings=bindings,
-        async_eval_watcher_path=Path(__file__).resolve().parents[1] / "eval" / "process_eval_queue.py",
-    )
+    async_eval_watcher_path = Path(__file__).resolve().parents[1] / "eval" / "process_eval_queue.py"
+    if bool(cfg.get("controller", {}).get("enabled", False)):
+        run_agibot_controller_actor_loop(
+            cfg,
+            run_dir=run_dir,
+            logger=logger,
+            bindings=bindings,
+            async_eval_watcher_path=async_eval_watcher_path,
+        )
+    else:
+        run_residual_actor_loop(
+            cfg,
+            run_dir=run_dir,
+            logger=logger,
+            bindings=bindings,
+            async_eval_watcher_path=async_eval_watcher_path,
+        )
 
 
 if __name__ == "__main__":
     main()
-

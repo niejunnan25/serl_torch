@@ -151,6 +151,8 @@ Reason:
 
 - real-robot training often needs human-in-the-loop `precheck` and
   `success_hook`
+- controller-driven training needs the env process to stay attached to the
+  operator terminal
 - the env process should stay independently visible and controllable
 - debugging reset/safety/manual-success behavior is much easier when env,
   OpenPI, learner, and actor are split apart
@@ -169,6 +171,20 @@ cd examples/agibot_real
 AGIBOT_CONDA_ENV=my_robot_env \
 bash tools/serve_env.sh --host 127.0.0.1 --port 32000
 ```
+
+If `controller.enabled=true`, Terminal A is also the operator console. The env
+server listens for single-key commands:
+
+- `g`: ready / resume
+- `p`: pause
+- `r`: mark the current episode as reset / truncated
+- `s`: mark the current episode as success
+- `f`: mark the current episode as fail
+- `h`: print the key help again
+
+The first version of controller mode assumes reset is human-operated. Pressing
+`r` stops the current episode and clears queued actions, but it does not move
+the robot back to a home pose automatically.
 
 Terminal B: start OpenPI for the base policy.
 
@@ -213,6 +229,28 @@ Notes:
 - actor is the live robot rollout process; keep it in the foreground
 - if you use manual terminal input or any manual success interface, attach it to
   the env side, not the learner side
+- with `controller.enabled=true`, actor runs in controller-driven chunk mode and
+  expects `chunk_step.enabled=true`
+
+### Controller-driven training semantics
+
+When `controller.enabled=true`, the training stack uses the env-side controller
+as the runtime source of truth.
+
+- `reset()` starts a new episode record and returns to `WAIT_READY`
+- pressing `g` transitions the env into `RUNNING`
+- actor only enqueues a chunk when the controller is in `RUNNING`
+- the env executes queued actions at robot control frequency in its own control
+  loop
+- `p` pauses without ending the episode
+- `r` ends the episode as a truncated reset
+- `s` ends the episode with reward `1`
+- `f` ends the episode with reward `0`
+- step-limit timeout ends the episode as truncated with reward `0`
+
+This mode is intentionally different from the old synchronous step/step-chunk
+runtime. The goal is to avoid a "step once, wait once" control pattern on the
+real robot.
 
 ### 2. Evaluate a residual checkpoint
 
@@ -275,6 +313,10 @@ It is not the recommended real-robot training path because it backgrounds the
 env server and OpenPI into managed subprocesses. That is a poor fit for
 human-in-the-loop `precheck`, manual success confirmation, and safety/debugging
 workflows.
+
+If you still use the one-shot launcher, pass `controller.enabled=false`.
+The launcher now refuses `controller.enabled=true` because the env server would
+otherwise start without an operator-attached TTY.
 
 ## Hooks
 
