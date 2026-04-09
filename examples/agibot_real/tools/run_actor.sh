@@ -4,22 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_CONF_DIR="$ROOT_DIR/conf"
 
-CONDA_SH="/vla/miniconda3/etc/profile.d/conda.sh"
-if [[ -f "$CONDA_SH" ]]; then
-    source "$CONDA_SH"
-    if [[ -n "${SERL_CONDA_PREFIX:-}" ]]; then
-        conda activate "$SERL_CONDA_PREFIX"
-    elif [[ -n "${SERL_CONDA_ENV:-}" ]]; then
-        conda activate "$SERL_CONDA_ENV"
-    elif [[ -d "/vla/miniconda3/envs/serl_torch" ]]; then
-        conda activate serl_torch
-    fi
-fi
+# shellcheck source=examples/agibot_real/tools/common.sh
+source "$ROOT_DIR/tools/common.sh"
 
-PYTHON_BIN="${SERL_PYTHON_BIN:-python}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-fi
+codex_activate_conda "${SERL_CONDA_PREFIX:-}" "${SERL_CONDA_ENV:-}" "serl_torch"
+
+PYTHON_BIN="$(codex_python_bin "${SERL_PYTHON_BIN:-python}")"
 
 CONFIG_ARG=""
 BOOTSTRAP_PATH=""
@@ -28,7 +18,7 @@ EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
-            echo "Usage: bash tools/run_actor.sh <yaml|/abs/path> --bootstrap /abs/path/bootstrap.pkl [--gpu_id N] [extra overrides...]"
+            echo "Usage: bash tools/run_actor.sh <yaml|path/to/config.yaml> --bootstrap path/to/bootstrap.pkl [--gpu_id N] [extra overrides...]"
             exit 0
             ;;
         --bootstrap)
@@ -98,4 +88,3 @@ exec "$PYTHON_BIN" "$ROOT_DIR/scripts/train/run_actor.py" \
     "++training.async.agentlace.spawn_local_worker=false" \
     "++training.async.agentlace.bootstrap_file=$BOOTSTRAP_ABS" \
     "${NORMALIZED_EXTRA_ARGS[@]}"
-

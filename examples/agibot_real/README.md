@@ -1,25 +1,25 @@
 # AgiBot Real Residual RL
 
-`examples/agibot_real` is the self-contained AgiBot real-robot residual RL example tree.
+`examples/agibot_real` is the repo-local AgiBot real-robot residual RL example tree.
 
-It is modeled on `examples/libero`, but it does not depend on
-`reference/VLAPipeline_RL_BY_Niejunnan` at runtime. The reference repo was used only
-to extract the minimum real-robot inference/runtime ideas that were needed here.
+It is modeled on `examples/libero`, but it does not import or execute code from
+`reference/VLAPipeline_RL_BY_Niejunnan` at runtime. The reference repo was only
+used to extract the minimum real-robot inference ideas needed here.
 
 ## What is included
 
-- AgiBot real env wrappers:
-  - local env: [task_env.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/env_wrappers/task_env.py)
-  - remote env: [remote_task_env.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/env_wrappers/remote_task_env.py)
+- AgiBot env wrappers:
+  - local env: [`env_wrappers/task_env.py`](env_wrappers/task_env.py)
+  - remote env: [`env_wrappers/remote_task_env.py`](env_wrappers/remote_task_env.py)
 - Robot-facing runtime helpers:
-  - [interface.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/robot/interface.py)
-  - [retargeter.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/robot/retargeter.py)
-  - [hooks.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/robot/hooks.py)
+  - [`robot/interface.py`](robot/interface.py)
+  - [`robot/retargeter.py`](robot/retargeter.py)
+  - [`robot/hooks.py`](robot/hooks.py)
 - Residual RL runtime/data bindings:
-  - [runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/runtime/runtime_bindings.py)
-  - [data_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/runtime/data_bindings.py)
-  - [obs_adapter.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/runtime/obs_adapter.py)
-  - [policy_adapter.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/runtime/policy_adapter.py)
+  - [`runtime/runtime_bindings.py`](runtime/runtime_bindings.py)
+  - [`runtime/data_bindings.py`](runtime/data_bindings.py)
+  - [`runtime/obs_adapter.py`](runtime/obs_adapter.py)
+  - [`runtime/policy_adapter.py`](runtime/policy_adapter.py)
 - End-to-end scripts:
   - `scripts/train`
   - `scripts/eval`
@@ -30,7 +30,7 @@ to extract the minimum real-robot inference/runtime ideas that were needed here.
 
 ## Robot/action assumptions
 
-The current AgiBot implementation is intentionally narrow and opinionated:
+The current AgiBot implementation is intentionally narrow:
 
 - control mode: `camera_position`
 - env action dimension: `14`
@@ -40,19 +40,20 @@ The current AgiBot implementation is intentionally narrow and opinionated:
   - left wrist image
   - right wrist image
 
-That matches the reference `inference_pi05_camera_position.py` flow, but is reimplemented
-inside this repo.
+That matches the reference `inference_pi05_camera_position.py` flow, but is
+reimplemented inside this repo.
 
 ## External runtime dependencies
 
-This example tree is self-contained inside this repo, but real execution still expects
-the external runtime dependencies to be installed in the active environment:
+This example tree is self-contained inside this repo, but real execution still
+expects these external runtime dependencies in the active environment:
 
 - AgiBot SDK package providing `a2d_sdk.robot`
-- kinematics dependencies used by [retargeter.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/robot/retargeter.py)
-- OpenPI serving environment for the base policy
+- kinematics dependencies used by [`robot/retargeter.py`](robot/retargeter.py)
+- an OpenPI serving environment for the base policy
 
-Those are external packages/runtime services, not dependencies on the reference repo.
+These are external packages/runtime services, not dependencies on the reference
+repo.
 
 ## Directory layout
 
@@ -71,87 +72,165 @@ examples/agibot_real/
   tools/
 ```
 
+## Path convention
+
+The examples below intentionally use repo-relative paths or user-supplied
+relative paths.
+
+- If you `cd examples/agibot_real`, then paths like `conf/train_residual_sac.yaml`
+  or `data/residual_training/offline` are relative to that directory.
+- For external assets that live outside this repo, pass them explicitly with
+  env vars or CLI args instead of editing hard-coded absolute paths into files.
+
 ## Main entrypoints
 
-- Train actor:
-  - [run_actor.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/train/run_actor.py)
-- Train learner:
-  - [run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/train/run_learner.py)
-- Launch async train stack:
-  - [launch_async_train.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/train/launch_async_train.py)
-- Serve remote real env:
-  - [serve_env.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/services/serve_env.py)
-- Evaluate checkpoint:
-  - [evaluate_checkpoint.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/eval/evaluate_checkpoint.py)
-- Process async eval queue:
-  - [process_eval_queue.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/eval/process_eval_queue.py)
-- Prepare offline demos:
-  - [prepare_offline_demos.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/data/prepare_offline_demos.py)
-- Collect online prefill:
-  - [collect_online_prefill.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/data/collect_online_prefill.py)
+- Train actor: [`scripts/train/run_actor.py`](scripts/train/run_actor.py)
+- Train learner: [`scripts/train/run_learner.py`](scripts/train/run_learner.py)
+- Launch async train stack: [`scripts/train/launch_async_train.py`](scripts/train/launch_async_train.py)
+- Serve remote real env: [`scripts/services/serve_env.py`](scripts/services/serve_env.py)
+- Evaluate checkpoint: [`scripts/eval/evaluate_checkpoint.py`](scripts/eval/evaluate_checkpoint.py)
+- Process async eval queue: [`scripts/eval/process_eval_queue.py`](scripts/eval/process_eval_queue.py)
+- Prepare offline demos: [`scripts/data/prepare_offline_demos.py`](scripts/data/prepare_offline_demos.py)
+- Collect online prefill: [`scripts/data/collect_online_prefill.py`](scripts/data/collect_online_prefill.py)
 
-## Typical workflow
+## Typical workflows
 
-### 1. Start an AgiBot env server
+### Environment selection
+
+The shell wrappers are written to work across different machines and conda
+layouts:
+
+- If your target env is already active, the wrappers reuse the current shell
+  environment.
+- To switch envs per command without changing your current shell, set env vars:
+  - `SERL_CONDA_ENV` or `SERL_CONDA_PREFIX` for training/eval/data scripts
+  - `AGIBOT_CONDA_ENV` or `AGIBOT_CONDA_PREFIX` for the real env server
+  - `OPENPI_CONDA_ENV` or `OPENPI_CONDA_PREFIX` for OpenPI serving
+- If you are not using conda, point the wrappers at a Python binary:
+  - `SERL_PYTHON_BIN`
+  - `AGIBOT_PYTHON_BIN`
+
+These env vars are consumed by the `tools/*.sh` wrappers. If you invoke
+`python ...` directly, activate the target environment yourself first.
+
+Examples:
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-bash tools/serve_env.sh --host 127.0.0.1 --port 32000
+cd examples/agibot_real
+SERL_CONDA_ENV=my_serl_env bash tools/eval.sh eval.checkpoint_path=outputs/checkpoint_2500.pt
 ```
 
-### 2. Start OpenPI for the base policy
+```bash
+cd examples/agibot_real
+AGIBOT_CONDA_ENV=my_robot_env bash tools/serve_env.sh --host 127.0.0.1 --port 32000
+```
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-POLICY_CONFIG=pi05_agibot \
-POLICY_DIR=/path/to/pi05_agibot/checkpoint \
+cd examples/agibot_real
+OPENPI_CONDA_ENV=my_openpi_env \
+OPENPI_ROOT=relative/path/to/openpi \
 bash tools/serve_openpi.sh --port 30001 --gpu-id 0
 ```
 
-### 3. Launch async residual training
+For the vision backbone, the configs default to Hugging Face model id
+`microsoft/resnet-18`. If you want a local mirror or an offline snapshot, set:
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+export SERL_RESNET_MODEL=relative/path/to/resnet-18
+```
+
+### 1. One-shot async residual training
+
+Recommended when you want one command to start env server, OpenPI, learner, and
+actor together.
+
+```bash
+cd examples/agibot_real
+SERL_CONDA_ENV=my_serl_env \
 bash tools/launch_async_train.sh \
   conf/train_residual_sac.yaml \
-  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/train_default
+  hydra.run.dir=outputs/agibot_real/train_default
 ```
 
-### 4. Evaluate a residual checkpoint
+Important:
+
+- `launch_async_train.sh` starts the env server and OpenPI itself.
+- Do not manually start `tools/serve_env.sh` or `tools/serve_openpi.sh` on the
+  same ports before calling it, or it will fail fast on port-conflict checks.
+
+### 2. Manual env/OpenPI startup for eval or data scripts
+
+Use this path when you want to run evaluation, offline conversion, or online
+prefill collection without the one-shot launcher.
+
+Start the env server:
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd examples/agibot_real
+AGIBOT_CONDA_ENV=my_robot_env \
+bash tools/serve_env.sh --host 127.0.0.1 --port 32000
+```
+
+Start OpenPI for the base policy:
+
+```bash
+cd examples/agibot_real
+OPENPI_ROOT=relative/path/to/openpi \
+OPENPI_CONDA_ENV=my_openpi_env \
+POLICY_CONFIG=pi05_agibot \
+POLICY_DIR=relative/path/to/pi05_agibot/checkpoint \
+bash tools/serve_openpi.sh --port 30001 --gpu-id 0
+```
+
+`tools/serve_openpi.sh` respects `OPENPI_CONDA_PREFIX` or `OPENPI_CONDA_ENV`.
+`OPENPI_ROOT` must point to your local OpenPI checkout. It can be a relative
+path from the current working directory or an absolute path if you prefer.
+
+### 3. Evaluate a residual checkpoint
+
+```bash
+cd examples/agibot_real
+SERL_CONDA_ENV=my_serl_env \
 bash tools/eval.sh \
-  conf/eval_residual_fast.yaml \
-  eval.checkpoint_path=/path/to/checkpoint_2500.pt \
-  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/eval_default
+  eval.checkpoint_path=outputs/checkpoint_2500.pt \
+  hydra.run.dir=outputs/agibot_real/eval_default
 ```
 
-### 5. Convert offline demos into residual-training PKLs
+This expects the env server and OpenPI server to already be running unless you
+are evaluating inside another orchestration flow.
+
+### 4. Convert offline demos into residual-training PKLs
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-python scripts/data/prepare_offline_demos.py \
+cd examples/agibot_real
+SERL_CONDA_ENV=my_serl_env \
+bash tools/prepare_offline_demos.sh \
   --task_name agibot_pick_place \
   --prompt "Pick up the object with the right hand and place it at the target location." \
-  --input_dir /path/to/demo_pkls \
+  --input_dir data/raw_demos \
   --chunk_horizon 5 \
   --policy_type openpi \
   --policy_id pi05_agibot \
   --openpi_host 127.0.0.1 \
   --openpi_port 30001 \
   --residual_alpha 0.2 \
-  --output_dir /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/data/residual_training/offline
+  --output_dir data/residual_training/offline
 ```
 
-### 6. Collect online warmup/prefill data
+By default, exported offline data now records `clip_residual_to_unit=true` so it
+matches the default training config. If you intentionally want unclipped
+projection metadata, pass `--no_clip_residual_to_unit` and make the training
+config match.
+
+### 5. Collect online warmup/prefill data
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-python scripts/data/collect_online_prefill.py \
+cd examples/agibot_real
+SERL_CONDA_ENV=my_serl_env \
+bash tools/collect_online_prefill.sh \
   conf/train_residual_sac.yaml \
   --episodes 20 \
-  --output_dir /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/data/residual_training/online \
+  --output_dir data/residual_training/online \
   env.backend=remote \
   env.remote.host=127.0.0.1 \
   env.remote.port=32000 \
@@ -161,8 +240,8 @@ python scripts/data/collect_online_prefill.py \
 
 ## Hooks
 
-Task-specific real-robot logic should be plugged in through hook functions instead of
-hard-coding task behavior into the environment wrapper.
+Task-specific real-robot logic should be plugged in through hook functions
+instead of hard-coding task behavior into the environment wrapper.
 
 Supported hook fields in the config:
 
@@ -175,8 +254,7 @@ Each hook can be specified as:
 - `module:function`
 - `module.function`
 
-See [hooks.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/robot/hooks.py) for
-the expected return conventions.
+See [`robot/hooks.py`](robot/hooks.py) for the expected return conventions.
 
 ## Current limitations
 
@@ -186,5 +264,5 @@ the expected return conventions.
 - normalization is disabled by default
 
 That is intentional for the first version: the goal here is to provide a clean,
-repo-local AgiBot residual RL runtime foundation without dragging unrelated reference
-training/model code into `examples/agibot_real`.
+repo-local AgiBot residual RL runtime foundation without dragging unrelated
+reference training/model code into `examples/agibot_real`.

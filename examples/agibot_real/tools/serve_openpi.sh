@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OPENPI_ROOT="${OPENPI_ROOT:-/vla/users/niejunnan/codebase/openpi}"
+OPENPI_ROOT="${OPENPI_ROOT:-}"
 DEFAULT_POLICY_DIR="${DEFAULT_POLICY_DIR:-}"
 PORT="30001"
 GPU_ID="${GPU_ID:-0}"
@@ -10,6 +10,9 @@ USE_CHECKPOINT=true
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_agibot}"
 POLICY_DIR="${POLICY_DIR:-$DEFAULT_POLICY_DIR}"
 EXTRA_ARGS=()
+
+# shellcheck source=examples/agibot_real/tools/common.sh
+source "$ROOT_DIR/tools/common.sh"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -57,25 +60,28 @@ echo "  Config      : $POLICY_CONFIG"
 echo "  Policy dir  : $POLICY_DIR"
 echo "=========================================="
 
-CONDA_SH="/vla/miniconda3/etc/profile.d/conda.sh"
-if [[ -f "$CONDA_SH" ]]; then
-    source "$CONDA_SH"
-    if [[ -n "${OPENPI_CONDA_PREFIX:-}" ]]; then
-        conda activate "$OPENPI_CONDA_PREFIX"
-    elif [[ -n "${OPENPI_CONDA_ENV:-}" ]]; then
-        conda activate "$OPENPI_CONDA_ENV"
-    elif [[ -d "/vla/users/niejunnan/envs/openpi" ]]; then
-        conda activate "/vla/users/niejunnan/envs/openpi"
-    elif [[ -d "/vla/miniconda3/envs/openpi" ]]; then
-        conda activate openpi
-    fi
+codex_activate_conda "${OPENPI_CONDA_PREFIX:-}" "${OPENPI_CONDA_ENV:-}" "openpi-modified" "openpi"
+
+if [[ -z "$OPENPI_ROOT" ]]; then
+    echo "ERROR: OPENPI_ROOT is not set."
+    echo "Set OPENPI_ROOT=relative/path/to/openpi or pass --openpi-root."
+    exit 1
 fi
 
-source /vla/miniconda3/bin/activate base
-conda activate openpi-modified
+OPENPI_ROOT="$(cd "$OPENPI_ROOT" 2>/dev/null && pwd || true)"
+if [[ -z "$OPENPI_ROOT" ]]; then
+    echo "ERROR: failed to resolve OpenPI root."
+    exit 1
+fi
+
+if [[ ! -d "$OPENPI_ROOT" ]]; then
+    echo "ERROR: OpenPI root not found: $OPENPI_ROOT"
+    exit 1
+fi
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "ERROR: 'uv' not found in PATH for tools/serve_openpi.sh"
+    echo "Hint: set OPENPI_CONDA_ENV or OPENPI_CONDA_PREFIX to an env with uv installed."
     exit 1
 fi
 

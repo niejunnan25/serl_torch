@@ -70,7 +70,7 @@ sac:
   critic_layer_norm: true
   encoder_type: resnet
   resnet:
-    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: ${oc.env:SERL_RESNET_MODEL,microsoft/resnet-18}
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings

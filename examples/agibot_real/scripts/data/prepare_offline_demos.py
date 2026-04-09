@@ -328,7 +328,17 @@ def main() -> None:
     parser.add_argument("--action_mask", type=str, default=None)
     parser.add_argument("--action_limits", type=str, default=None)
     parser.add_argument("--expert_reference_scale", type=float, default=1.0)
-    parser.add_argument("--clip_residual_to_unit", action="store_true", default=False)
+    parser.add_argument(
+        "--clip_residual_to_unit",
+        dest="clip_residual_to_unit",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--no_clip_residual_to_unit",
+        dest="clip_residual_to_unit",
+        action="store_false",
+    )
     parser.add_argument("--output_dir", type=str, required=True)
     args = parser.parse_args()
 
@@ -453,4 +463,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
