@@ -29,10 +29,10 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: bash tools/run_actor_generic.sh <yaml|path/to/config.yaml> [--gpu_id N] [extra overrides...]"
             echo
             echo "Config-driven actor wrapper."
+            echo "AgiBot real env is local-only."
             echo "This wrapper does not force training.async.* settings."
             echo "Use it when you want scripts/train/run_actor.py to follow the config exactly."
             echo "Default split-process workflow: tools/run_actor.sh or tools/run_actor_agentlace.sh"
-            echo "The env backend still comes from the config/overrides."
             exit 0
             ;;
         --gpu_id|--gpu-id)
@@ -91,7 +91,7 @@ echo "=========================================="
 echo "  AgiBot Generic Actor Wrapper"
 echo "=========================================="
 echo "  Mode        : config-driven"
-echo "  Env backend : from config/overrides"
+echo "  Env mode    : local AgiBot env"
 echo "  Async mode  : from config/overrides"
 echo "=========================================="
 exec "$PYTHON_BIN" "$ROOT_DIR/scripts/train/run_actor.py" \

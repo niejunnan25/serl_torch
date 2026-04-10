@@ -30,10 +30,6 @@ robot:
 env:
   action_dim: 14
   backend: local
-  remote:
-    host: 127.0.0.1
-    port: 32000
-    timeout_sec: 180.0
 
 controller:
   enabled: true

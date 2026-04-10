@@ -10,9 +10,8 @@ source "$ROOT_DIR/tools/common.sh"
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo "Usage: bash tools/eval.sh [hydra overrides...]"
     echo
-    echo "This wrapper respects the config-selected env backend."
-    echo "Default: conf/eval_residual_fast.yaml uses env.backend=local for direct real-robot eval."
-    echo "Optional remote bridge: pass env.backend=remote env.remote.host=... env.remote.port=..."
+    echo "This wrapper runs the local AgiBot env directly."
+    echo "conf/eval_residual_fast.yaml already matches the local real-robot workflow."
     exit 0
 fi
 
@@ -21,8 +20,7 @@ echo "  AgiBot Residual SAC Evaluation"
 echo "=========================================="
 echo "  Working dir : $ROOT_DIR"
 echo "  Config      : conf/eval_residual_fast.yaml"
-echo "  Env backend : from config/overrides"
-echo "  Default     : env.backend=local"
+echo "  Env mode    : local AgiBot env"
 echo "  Extra args  : $*"
 echo "=========================================="
 

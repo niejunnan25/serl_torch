@@ -30,11 +30,11 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: bash tools/run_actor_agentlace.sh <yaml|path/to/config.yaml> --bootstrap path/to/bootstrap.pkl [--gpu_id N] [extra overrides...]"
             echo
             echo "Explicit split actor wrapper for external agentlace async training."
+            echo "AgiBot real env is local-only."
             echo "This wrapper forces training.async.enabled=true, training.async.backend=agentlace,"
             echo "and training.async.agentlace.spawn_local_worker=false."
             echo "Default alias: tools/run_actor.sh"
             echo "Config-driven alternative: tools/run_actor_generic.sh"
-            echo "The env backend still comes from the config/overrides."
             exit 0
             ;;
         --bootstrap)
@@ -109,8 +109,7 @@ echo "  AgiBot Split Actor Wrapper"
 echo "=========================================="
 echo "  Mode        : explicit agentlace actor"
 echo "  Entry alias : tools/run_actor.sh"
-echo "  Env backend : from config/overrides"
-echo "  Default     : train config uses env.backend=local"
+echo "  Env mode    : local AgiBot env"
 echo "=========================================="
 exec "$PYTHON_BIN" "$ROOT_DIR/scripts/train/run_actor.py" \
     --config-dir "$CONFIG_DIR" \
