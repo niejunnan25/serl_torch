@@ -251,10 +251,6 @@ def _build_eval_command(
     # Explicit eval runtime overrides (last writer wins in Hydra).
     overrides.extend(
         [
-            "env.backend=remote",
-            f"env.remote.host={_to_override_value(eval_cfg['env_host'])}",
-            f"env.remote.port={_to_override_value(eval_cfg['env_port'])}",
-            f"env.remote.timeout_sec={_to_override_value(eval_cfg['env_timeout_sec'])}",
             f"openpi.host={_to_override_value(eval_cfg['openpi_host'])}",
             f"openpi.port={_to_override_value(eval_cfg['openpi_port'])}",
             f"residual.alpha={_to_override_value(eval_residual_alpha)}",
@@ -372,9 +368,16 @@ def main() -> None:
         queue_file = (train_run_dir / queue_file).resolve()
 
     train_env_cfg = train_cfg.get("env", {}) if isinstance(train_cfg, dict) else {}
-    train_remote_cfg = (
-        train_env_cfg.get("remote", {}) if isinstance(train_env_cfg, dict) else {}
+    train_env_backend = (
+        str(train_env_cfg.get("backend", "local")).strip().lower()
+        if isinstance(train_env_cfg, dict)
+        else "local"
     )
+    if train_env_backend != "local":
+        raise ValueError(
+            "AgiBot async eval is local-only; remote env support has been removed, "
+            f"got env.backend={train_env_backend!r}"
+        )
     train_openpi_cfg = (
         train_cfg.get("openpi", {}) if isinstance(train_cfg, dict) else {}
     )
@@ -395,23 +398,6 @@ def main() -> None:
                 async_eval_cfg.get("openpi_port", None),
                 train_openpi_cfg.get("port", 30001),
             )
-        )
-
-    env_host = str(
-        async_eval_cfg.get("env_host", train_remote_cfg.get("host", "127.0.0.1"))
-    )
-    env_port = int(async_eval_cfg.get("env_port", 31014))
-    env_timeout_sec = float(
-        async_eval_cfg.get(
-            "env_timeout_sec", train_remote_cfg.get("timeout_sec", 180.0)
-        )
-    )
-    train_env_port = int(train_remote_cfg.get("port", 30000))
-    if env_port == train_env_port:
-        logger.warning(
-            "async eval env port (%s) equals training env port (%s); this may cause reset/state conflicts",
-            env_port,
-            train_env_port,
         )
 
     episodes = int(async_eval_cfg.get("episodes", 50))
@@ -489,14 +475,16 @@ def main() -> None:
         "probing_alpha": probing_alpha,
         "probing_min_steps": probing_min_steps,
         "probing_max_steps": probing_max_steps,
-        "env_host": env_host,
-        "env_port": env_port,
-        "env_timeout_sec": env_timeout_sec,
         "openpi_host": openpi_host,
         "openpi_port": openpi_port,
         "alpha_mode": alpha_mode,
         "fixed_alpha": fixed_alpha,
     }
+
+    logger.warning(
+        "AgiBot async eval now launches a separate local env process. "
+        "Enable it only when that worker can own the robot exclusively."
+    )
 
     logger.info(
         "watch start: checkpoints=%s queue=%s every_episodes=%s eval_episodes=%s seed=%s alpha_mode=%s fixed_alpha=%s "

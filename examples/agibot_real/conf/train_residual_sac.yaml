@@ -37,10 +37,6 @@ robot:
 env:
   action_dim: 14
   backend: local
-  remote:
-    host: 127.0.0.1
-    port: 32000
-    timeout_sec: 180.0
 
 controller:
   enabled: true
@@ -224,9 +220,6 @@ training:
     probing_alpha: null
     probing_min_steps: 0
     probing_max_steps: 0
-    env_host: 127.0.0.1
-    env_port: 32014
-    env_timeout_sec: 180.0
     reuse_openpi_port: true
     openpi_host: null
     openpi_port: null

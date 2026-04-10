@@ -1,4 +1,4 @@
-"""Environment factory helpers for AgiBot real training/eval."""
+"""Local environment factory helpers for AgiBot real training/eval."""
 from __future__ import annotations
 
 import logging
@@ -7,7 +7,6 @@ from pathlib import Path
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
-from .remote_task_env import RemoteAgiBotTaskEnv
 from .task_env import AgiBotTaskEnv
 
 
@@ -55,16 +54,10 @@ def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, o
 
 
 def _create_env(cfg: DictConfig, logger: logging.Logger):
-    env_backend = str(cfg.get("env", {}).get("backend", "remote")).lower()
-    common_kwargs = _build_common_kwargs(cfg, logger)
-    if env_backend == "local":
-        return AgiBotTaskEnv(**common_kwargs)
-    if env_backend == "remote":
-        remote_cfg = cfg.get("env", {}).get("remote", {})
-        return RemoteAgiBotTaskEnv(
-            host=str(remote_cfg.get("host", "127.0.0.1")),
-            port=int(remote_cfg.get("port", 32000)),
-            timeout_sec=float(remote_cfg.get("timeout_sec", 180.0)),
-            **common_kwargs,
+    env_backend = str(cfg.get("env", {}).get("backend", "local")).strip().lower()
+    if env_backend != "local":
+        raise ValueError(
+            "AgiBot real env is local-only; remote support has been removed, "
+            f"got env.backend={env_backend!r}"
         )
-    raise ValueError(f"env.backend must be 'local' or 'remote', got {env_backend}")
+    return AgiBotTaskEnv(**_build_common_kwargs(cfg, logger))

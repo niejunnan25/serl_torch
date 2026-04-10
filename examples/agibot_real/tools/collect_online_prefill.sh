@@ -10,9 +10,8 @@ source "$ROOT_DIR/tools/common.sh"
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo "Usage: bash tools/collect_online_prefill.sh <yaml|path/to/config.yaml> [--episodes N] [--output_dir DIR] [extra hydra overrides...]"
     echo
-    echo "This wrapper respects the config-selected env backend."
-    echo "Recommended real-robot path: env.backend=local in the training config."
-    echo "Optional remote bridge: pass env.backend=remote env.remote.host=... env.remote.port=..."
+    echo "This wrapper runs the local AgiBot env directly."
+    echo "Use it for human-in-the-loop online prefill on the robot machine."
     exit 0
 fi
 
@@ -24,8 +23,7 @@ echo "=========================================="
 echo "  AgiBot Online Prefill Collection"
 echo "=========================================="
 echo "  Working dir : $ROOT_DIR"
-echo "  Env backend : from config/overrides"
-echo "  Default     : training config uses env.backend=local"
+echo "  Env mode    : local AgiBot env"
 echo "  Extra args  : $*"
 echo "=========================================="
 

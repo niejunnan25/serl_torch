@@ -356,12 +356,9 @@ g
 - `f`: 标记失败
 - `h`: 重新打印帮助
 
-这几个键只对“拥有 env 的终端”生效：
+这几个键只对“拥有 env 的终端”生效。
 
-- `env.backend=local`
-  actor 终端生效
-- `env.backend=remote`
-  `tools/serve_env.sh` 终端生效
+当前 AgiBot 真机环境已经是 local-only，所以默认就是 actor 终端生效。
 
 ### 当前已经验证过的几个关键修复
 
