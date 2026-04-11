@@ -15,7 +15,7 @@ from omegaconf import DictConfig, OmegaConf
 from serl_launcher.data.normalizer import StateActionNormalizer, load_normalizer
 from serl_launcher.policy.factory import build_policy_backend_info
 from serl_launcher.policy.factory import build_policy_client
-from serl_launcher.agents.continuous.builders import build_drq_agent
+from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action
@@ -85,7 +85,9 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
     raise ValueError(f"env.backend must be 'local' or 'remote', got {env_backend}")
 
 
-@hydra.main(version_base=None, config_path="../../conf", config_name="eval_residual_fast")
+@hydra.main(
+    version_base=None, config_path="../../conf", config_name="eval_residual_fast"
+)
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -115,9 +117,7 @@ def main(cfg: DictConfig) -> None:
             "stats_dir",
             str(Path(__file__).resolve().parents[2] / "data" / "stats"),
         )
-        normalizer = load_normalizer(
-            task_key, stats_dir=stats_dir
-        )
+        normalizer = load_normalizer(task_key, stats_dir=stats_dir)
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
     obs_state_mode = resolve_residual_observation_state_mode(cfg)
@@ -358,7 +358,7 @@ def main(cfg: DictConfig) -> None:
                     )
 
                     if checkpoint_path and agent is None:
-                        agent = build_drq_agent(
+                        agent = create_drq_agent_from_cfg(
                             cfg,
                             sample_obs=obs_input,
                             action_dim=agent_action_dim,

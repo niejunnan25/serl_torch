@@ -493,7 +493,6 @@ entrypoints reject enabling those paths.
 - only `camera_position` mode is implemented
 - only 14D residual actions are executed
 - success/reward logic is hook-driven; there is no baked-in AgiBot task reward
-- normalization is disabled by default
 - async eval launches a separate eval process, so keep
   `training.async_eval.enabled=false` unless that worker can own the robot
   exclusively

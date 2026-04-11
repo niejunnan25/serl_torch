@@ -1,10 +1,7 @@
-seed: 0
-
 task:
   name: agibot_real_default
   task_key: null
   prompt: Pick up the object with the right hand and place it at the target location.
-  seed_base: 7
   control_mode: camera_position
   hz: 20.0
   trajectory_time: null
@@ -117,7 +114,6 @@ sac:
 eval:
   episodes: 10
   expert_check: false
-  seed: 7
   max_env_steps_per_episode: null
   deterministic: true
   checkpoint_path: null
@@ -131,10 +127,6 @@ logging:
   episode_log_file: episode_logs.jsonl
   summary_file: summary.json
   tensorboard: true
-
-normalization:
-  enabled: false
-  stats_dir: null
 
 hydra:
   run:

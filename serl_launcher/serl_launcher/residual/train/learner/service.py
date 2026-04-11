@@ -19,7 +19,7 @@ from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
-from serl_launcher.residual.algorithms.base import build_residual_algorithm
+from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
 from serl_launcher.residual.train.bindings import ResidualDataBindings
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
@@ -74,9 +74,7 @@ class _LearnerStatsLogger:
             "episode_steps": int(payload.get("episode_steps", 0)),
             "episode_return": float(payload.get("episode_return", 0.0)),
             "train_env_step": train_env_step,
-            "decision_step": (
-                None if decision_step is None else int(decision_step)
-            ),
+            "decision_step": (None if decision_step is None else int(decision_step)),
             "running_success_rate": payload.get("running_success_rate", None),
             "recent_success_rate": payload.get("recent_success_rate", None),
         }
@@ -302,8 +300,8 @@ def run_residual_learner_service(
     logger: logging.Logger,
     bindings: ResidualDataBindings,
 ) -> None:
-    algorithm = build_residual_algorithm(cfg)
-    logger.info("Residual algorithm: %s", algorithm.name)
+    agent_runtime = create_residual_agent_runtime(cfg)
+    logger.info("Residual runtime: %s", agent_runtime.name)
     async_cfg = cfg.training.get("async", None)
     async_enabled = (
         bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
@@ -430,7 +428,7 @@ def run_residual_learner_service(
         )
 
     task_key = str(bindings.task_key)
-    normalizer = bindings.normalizer
+    normalizer = getattr(bindings, "normalizer", None)
     if normalizer is not None:
         logger.info("Loaded normalizer for task_key=%s", task_key)
 
@@ -445,7 +443,7 @@ def run_residual_learner_service(
         state_mode=state_mode,
     )
 
-    learner_agent = algorithm.build_learner_agent(
+    learner_agent = agent_runtime.create_learner_agent(
         cfg,
         sample_obs=sample_obs,
         action_dim=int(agent_action_dim),
@@ -456,7 +454,7 @@ def run_residual_learner_service(
     )
     bootstrap_initial_payload = bootstrap.get("initial_agent_payload", None)
     if isinstance(bootstrap_initial_payload, dict):
-        algorithm.apply_snapshot_payload(
+        agent_runtime.apply_snapshot_payload(
             learner_agent,
             bootstrap_initial_payload,
             load_optimizers=True,
@@ -483,9 +481,9 @@ def run_residual_learner_service(
     offline_enabled = bool(cfg.offline.enabled)
     if offline_enabled:
         offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
-        has_offline_dataset_paths = bool(offline_dataset_paths_cfg) and len(
-            offline_dataset_paths_cfg
-        ) > 0
+        has_offline_dataset_paths = (
+            bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
+        )
         if not has_offline_dataset_paths:
             raise ValueError(
                 "offline.enabled=true requires offline.dataset_paths to be set "
@@ -625,7 +623,7 @@ def run_residual_learner_service(
         offline_buffer=offline_buffer,
     )
 
-    initial_payload = algorithm.snapshot_checkpoint_payload(
+    initial_payload = agent_runtime.snapshot_checkpoint_payload(
         learner_agent,
         step=int(learner_agent.state.step),
     )
@@ -637,7 +635,7 @@ def run_residual_learner_service(
         tb_writer=tb_writer,
     )
     if int(critic_pretrain.get("enabled", 0)) > 0:
-        initial_payload = algorithm.snapshot_checkpoint_payload(
+        initial_payload = agent_runtime.snapshot_checkpoint_payload(
             learner_agent,
             step=int(learner_agent.state.step),
         )
@@ -676,7 +674,7 @@ def run_residual_learner_service(
             batch_size=int(cfg.replay.batch_size),
             offline_ratio=float(cfg.offline.ratio),
             symmetric_replay=bool(cfg.offline.get("symmetric_replay", False)),
-            algorithm=algorithm,
+            algorithm=agent_runtime,
             host=async_trainer_host,
             port_number=async_trainer_port,
             broadcast_port=async_broadcast_port,

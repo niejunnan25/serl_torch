@@ -61,7 +61,7 @@ from utils.config_utils import (
     set_global_seeds,
     resolve_image_keys,
     resolve_control_indices_from_cfg,
-    build_drq_agent,
+    create_drq_agent,
     sample_probing_steps,
 )
 from data import StateActionNormalizer, load_normalizer
@@ -300,7 +300,15 @@ def _collect_transitions_from_payload(payload: Any) -> List[Dict[str, Any]]:
                 transitions.append(obj)
                 return
 
-            preferred_keys = ("transitions", "samples", "data", "records", "items", "episodes", "trajectories")
+            preferred_keys = (
+                "transitions",
+                "samples",
+                "data",
+                "records",
+                "items",
+                "episodes",
+                "trajectories",
+            )
             expanded = False
             for key in preferred_keys:
                 value = obj.get(key)
@@ -322,7 +330,9 @@ def _collect_transitions_from_payload(payload: Any) -> List[Dict[str, Any]]:
     return transitions
 
 
-def _extract_raw_obs_from_transition(transition: Dict[str, Any], *, next_obs: bool) -> Optional[Dict[str, Any]]:
+def _extract_raw_obs_from_transition(
+    transition: Dict[str, Any], *, next_obs: bool
+) -> Optional[Dict[str, Any]]:
     """从 transition 中提取 RoboTwin 原始观测（含 joint_action/observation）。"""
     candidate_keys = (
         (
@@ -350,7 +360,11 @@ def _extract_raw_obs_from_transition(transition: Dict[str, Any], *, next_obs: bo
 
     for key in candidate_keys:
         value = transition.get(key)
-        if isinstance(value, dict) and "joint_action" in value and "observation" in value:
+        if (
+            isinstance(value, dict)
+            and "joint_action" in value
+            and "observation" in value
+        ):
             return value
     return None
 
@@ -373,7 +387,10 @@ def _extract_chunk_step_index(
 
 def _has_chunk_step_key(transition: Dict[str, Any]) -> bool:
     """离线样本是否显式提供了 chunk 内步号。"""
-    return any(key in transition for key in ("chunk_step", "step_in_chunk", "chunk_index", "step_idx"))
+    return any(
+        key in transition
+        for key in ("chunk_step", "step_in_chunk", "chunk_index", "step_idx")
+    )
 
 
 def _extract_action_sequence_by_keys(
@@ -429,14 +446,20 @@ def _prepare_preconverted_transition(
     if (not explicit_residual) and (not accept_plain_preconverted):
         return None
 
-    obs = _normalize_obs_dict_for_buffer(transition["observations"], sample_obs_template)
-    next_obs = _normalize_obs_dict_for_buffer(transition["next_observations"], sample_obs_template)
+    obs = _normalize_obs_dict_for_buffer(
+        transition["observations"], sample_obs_template
+    )
+    next_obs = _normalize_obs_dict_for_buffer(
+        transition["next_observations"], sample_obs_template
+    )
     if obs is None or next_obs is None:
         return None
 
     step_idx = _extract_chunk_step_index(transition, chunk_horizon)
     has_step_key = _has_chunk_step_key(transition)
-    action_source = transition.get("residual_action", transition.get("residual_actions", transition.get("a_res")))
+    action_source = transition.get(
+        "residual_action", transition.get("residual_actions", transition.get("a_res"))
+    )
     if action_source is None:
         action_source = transition.get("actions", None)
     if action_source is None:
@@ -473,9 +496,15 @@ def _prepare_preconverted_transition(
     except Exception:  # noqa: BLE001
         return None
 
-    done = _safe_bool(transition.get("dones", transition.get("done", False)), default=False)
-    mask = _safe_float(transition.get("masks", 0.0 if done else 1.0), default=0.0 if done else 1.0)
-    reward = _reduce_reward(transition.get("rewards", transition.get("reward", 0.0)), default=0.0)
+    done = _safe_bool(
+        transition.get("dones", transition.get("done", False)), default=False
+    )
+    mask = _safe_float(
+        transition.get("masks", 0.0 if done else 1.0), default=0.0 if done else 1.0
+    )
+    reward = _reduce_reward(
+        transition.get("rewards", transition.get("reward", 0.0)), default=0.0
+    )
 
     return {
         "observations": obs,
@@ -512,9 +541,16 @@ def _convert_expert_transition_to_residual(
     将专家 transition 转成残差 transition。
     关键公式：a_res_raw = (a_expert - a_base) / (limits * xi * expert_reference_scale)。
     """
+
     def _log_fail(reason: str) -> None:
-        if debug_logger is not None and debug_log_counter is not None and debug_log_counter[0] < 1:
-            debug_logger.warning("offline expert->residual convert failed (reason): %s", reason)
+        if (
+            debug_logger is not None
+            and debug_log_counter is not None
+            and debug_log_counter[0] < 1
+        ):
+            debug_logger.warning(
+                "offline expert->residual convert failed (reason): %s", reason
+            )
             debug_log_counter[0] += 1
 
     obs_raw = _extract_raw_obs_from_transition(transition, next_obs=False)
@@ -537,7 +573,14 @@ def _convert_expert_transition_to_residual(
 
     expert_seq = _extract_action_sequence_by_keys(
         transition,
-        keys=("expert_action_chunk", "expert_chunk", "expert_actions", "action_chunk", "actions", "action"),
+        keys=(
+            "expert_action_chunk",
+            "expert_chunk",
+            "expert_actions",
+            "action_chunk",
+            "actions",
+            "action",
+        ),
         full_action_dim=full_action_dim,
     )
     if expert_seq is None:
@@ -558,9 +601,15 @@ def _convert_expert_transition_to_residual(
     )
     obs_input = _normalize_obs_dict_for_buffer(obs_input_raw, sample_obs_template)
     if obs_input is None:
-        raw_keys = set(obs_input_raw.keys()) if isinstance(obs_input_raw, dict) else set()
+        raw_keys = (
+            set(obs_input_raw.keys()) if isinstance(obs_input_raw, dict) else set()
+        )
         tpl_keys = set(sample_obs_template.keys())
-        raw_shapes = {k: np.asarray(obs_input_raw[k]).shape for k in raw_keys} if isinstance(obs_input_raw, dict) else {}
+        raw_shapes = (
+            {k: np.asarray(obs_input_raw[k]).shape for k in raw_keys}
+            if isinstance(obs_input_raw, dict)
+            else {}
+        )
         tpl_shapes = {k: np.asarray(sample_obs_template[k]).shape for k in tpl_keys}
         _log_fail(
             "obs_input normalize failed (key or shape mismatch). "
@@ -574,7 +623,9 @@ def _convert_expert_transition_to_residual(
     scale = max(float(expert_reference_scale), 1e-6)
     xi = max(float(residual_xi), 1e-6)
     denom = residual_limits * xi * scale
-    raw_residual = (expert_action[control_indices] - base_action[control_indices]) / denom
+    raw_residual = (
+        expert_action[control_indices] - base_action[control_indices]
+    ) / denom
 
     clipped_values = int(np.count_nonzero((raw_residual < -1.0) | (raw_residual > 1.0)))
     if clip_residual_to_unit:
@@ -582,15 +633,21 @@ def _convert_expert_transition_to_residual(
 
     residual_step_action = raw_residual.reshape(-1).astype(np.float32)
     if residual_step_action.shape[0] != action_dim:
-        _log_fail(f"residual_step_action shape {residual_step_action.shape} != action_dim {action_dim}")
+        _log_fail(
+            f"residual_step_action shape {residual_step_action.shape} != action_dim {action_dim}"
+        )
         return None
 
     done = _safe_bool(
-        transition.get("dones", transition.get("done", transition.get("terminated", False))),
+        transition.get(
+            "dones", transition.get("done", transition.get("terminated", False))
+        ),
         default=False,
     )
     reward = _reduce_reward(
-        transition.get("rewards", transition.get("reward", transition.get("success", 0.0))),
+        transition.get(
+            "rewards", transition.get("reward", transition.get("success", 0.0))
+        ),
         default=0.0,
     )
 
@@ -619,9 +676,13 @@ def _convert_expert_transition_to_residual(
             )
             if next_base_seq is None:
                 next_openpi_chunk, _ = openpi_client.infer_chunk(next_obs_raw, prompt)
-                next_base_chunk = select_action_chunk_window(next_openpi_chunk, horizon=chunk_horizon)
+                next_base_chunk = select_action_chunk_window(
+                    next_openpi_chunk, horizon=chunk_horizon
+                )
             else:
-                next_base_chunk = select_action_chunk_window(next_base_seq, horizon=chunk_horizon)
+                next_base_chunk = select_action_chunk_window(
+                    next_base_seq, horizon=chunk_horizon
+                )
             next_base_action = next_base_chunk[0]
 
         next_obs_input_raw = build_residual_step_obs(
@@ -631,9 +692,13 @@ def _convert_expert_transition_to_residual(
             stack_horizon=stack_horizon,
             normalizer=normalizer,
         )
-        next_obs_input = _normalize_obs_dict_for_buffer(next_obs_input_raw, sample_obs_template)
+        next_obs_input = _normalize_obs_dict_for_buffer(
+            next_obs_input_raw, sample_obs_template
+        )
         if next_obs_input is None:
-            _log_fail("next_obs_input normalize failed (shape mismatch with sample_obs_template)")
+            _log_fail(
+                "next_obs_input normalize failed (shape mismatch with sample_obs_template)"
+            )
             return None
         mask = 1.0
 
@@ -688,12 +753,18 @@ def _load_offline_residual_buffer(
 
     offline_paths = _resolve_offline_paths(cfg.offline.dataset_paths, Path.cwd())
     stats["files_total"] = len(offline_paths)
-    logger.info("offline dataset_paths resolved: %d pkl files found", len(offline_paths))
+    logger.info(
+        "offline dataset_paths resolved: %d pkl files found", len(offline_paths)
+    )
     if not offline_paths:
         logger.warning("offline.enabled=true but offline.dataset_paths is empty")
         return stats
 
-    max_transitions = int(cfg.offline.max_transitions) if cfg.offline.max_transitions is not None else None
+    max_transitions = (
+        int(cfg.offline.max_transitions)
+        if cfg.offline.max_transitions is not None
+        else None
+    )
 
     # 预统计总 transition 数，用于进度条
     total_transitions = 0
@@ -742,7 +813,9 @@ def _load_offline_residual_buffer(
                 break
             stats["candidates"] += 1
             pbar.update(1)
-            pbar.set_postfix(inserted=stats["inserted"], skipped=stats["skipped"], refresh=False)
+            pbar.set_postfix(
+                inserted=stats["inserted"], skipped=stats["skipped"], refresh=False
+            )
 
             if not isinstance(transition, dict):
                 stats["skipped"] += 1
@@ -756,7 +829,9 @@ def _load_offline_residual_buffer(
                     full_action_dim=full_action_dim,
                     control_indices=control_indices,
                     chunk_horizon=chunk_horizon,
-                    accept_plain_preconverted=bool(cfg.offline.accept_plain_preconverted),
+                    accept_plain_preconverted=bool(
+                        cfg.offline.accept_plain_preconverted
+                    ),
                     clip_residual_to_unit=bool(cfg.offline.clip_residual_to_unit),
                 )
             except Exception as exc:  # noqa: BLE001
@@ -836,7 +911,11 @@ def _sample_mixed_batch(
     注意：这里沿 batch 维拼接（axis=0），保证最终 batch 结构仍是
     与 agent.update_high_utd 兼容的标准 replay batch 格式。
     """
-    if offline_buffer is None or len(offline_buffer) == 0 or ((not symmetric_replay) and offline_ratio <= 0.0):
+    if (
+        offline_buffer is None
+        or len(offline_buffer) == 0
+        or ((not symmetric_replay) and offline_ratio <= 0.0)
+    ):
         return online_buffer.sample(batch_size=batch_size), int(batch_size), 0
 
     if symmetric_replay:
@@ -884,7 +963,9 @@ def _scheduled_scalar(
     if global_policy_step < warmup_steps:
         progress = 0.0
     else:
-        progress = float(global_policy_step - warmup_steps) / float(max(1, anneal_steps))
+        progress = float(global_policy_step - warmup_steps) / float(
+            max(1, anneal_steps)
+        )
     progress = float(np.clip(progress, 0.0, 1.0))
 
     if sched_type == "linear":
@@ -982,10 +1063,14 @@ def _bootstrap_offline_with_base_success(
     stats["enabled"] = 1
     target_success_episodes = int(bootstrap_cfg.get("success_episodes", 0))
     if target_success_episodes <= 0:
-        logger.warning("offline.bootstrap_base.enabled=true but success_episodes<=0, skip bootstrap")
+        logger.warning(
+            "offline.bootstrap_base.enabled=true but success_episodes<=0, skip bootstrap"
+        )
         return stats
 
-    max_seed_attempts = int(bootstrap_cfg.get("max_seed_attempts", max(1000, target_success_episodes * 100)))
+    max_seed_attempts = int(
+        bootstrap_cfg.get("max_seed_attempts", max(1000, target_success_episodes * 100))
+    )
     seed_base_cfg = bootstrap_cfg.get("seed_base", None)
     if seed_base_cfg is None:
         seed_cursor = int(cfg.task.seed_base) + 1_000_000
@@ -1005,19 +1090,26 @@ def _bootstrap_offline_with_base_success(
         logger=logger,
     )
     try:
-        while stats["attempts"] < max_seed_attempts and stats["success_episodes"] < target_success_episodes:
+        while (
+            stats["attempts"] < max_seed_attempts
+            and stats["success_episodes"] < target_success_episodes
+        ):
             seed = int(seed_cursor)
             seed_cursor += 1
             stats["attempts"] += 1
 
             episode_info = None
             if bool(cfg.training.expert_check):
-                passed, episode_info = bootstrap_env.expert_precheck(seed=seed, episode_id=-1)
+                passed, episode_info = bootstrap_env.expert_precheck(
+                    seed=seed, episode_id=-1
+                )
                 if not passed:
                     continue
 
             try:
-                obs_raw = bootstrap_env.reset(seed=seed, episode_id=-1, episode_info=episode_info)
+                obs_raw = bootstrap_env.reset(
+                    seed=seed, episode_id=-1, episode_info=episode_info
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("bootstrap reset failed seed=%s: %s", seed, exc)
                 continue
@@ -1030,8 +1122,12 @@ def _bootstrap_offline_with_base_success(
                 max_episode_steps = min(max_episode_steps, int(max_ep_steps_override))
 
             while episode_steps < max_episode_steps:
-                openpi_chunk, _ = openpi_client.infer_chunk(obs_raw, bootstrap_env.current_instruction)
-                base_chunk = select_action_chunk_window(openpi_chunk, horizon=chunk_horizon)
+                openpi_chunk, _ = openpi_client.infer_chunk(
+                    obs_raw, bootstrap_env.current_instruction
+                )
+                base_chunk = select_action_chunk_window(
+                    openpi_chunk, horizon=chunk_horizon
+                )
                 next_obs_raw = obs_raw
                 decision_done = False
 
@@ -1047,13 +1143,17 @@ def _bootstrap_offline_with_base_success(
                         stack_horizon=stack_horizon,
                         normalizer=normalizer,
                     )
-                    obs_input = _normalize_obs_dict_for_buffer(obs_input, sample_obs_template)
+                    obs_input = _normalize_obs_dict_for_buffer(
+                        obs_input, sample_obs_template
+                    )
                     if obs_input is None:
                         decision_done = True
                         break
 
                     final_action = base_chunk[chunk_step]
-                    next_obs_raw, reward, env_done, _, info = bootstrap_env.step(final_action)
+                    next_obs_raw, reward, env_done, _, info = bootstrap_env.step(
+                        final_action
+                    )
                     episode_steps += 1
                     success = bool(info["success"])
                     timeout = bool(episode_steps >= max_episode_steps)
@@ -1070,7 +1170,9 @@ def _bootstrap_offline_with_base_success(
                             stack_horizon=stack_horizon,
                             normalizer=normalizer,
                         )
-                        next_obs_input = _normalize_obs_dict_for_buffer(next_obs_input_raw, sample_obs_template)
+                        next_obs_input = _normalize_obs_dict_for_buffer(
+                            next_obs_input_raw, sample_obs_template
+                        )
                         if next_obs_input is None:
                             next_obs_input = _zero_obs_like(obs_input)
                             mask = 0.0
@@ -1078,8 +1180,12 @@ def _bootstrap_offline_with_base_success(
                         else:
                             mask = 1.0
                     else:
-                        next_openpi_chunk, _ = openpi_client.infer_chunk(next_obs_raw, bootstrap_env.current_instruction)
-                        next_base_chunk = select_action_chunk_window(next_openpi_chunk, horizon=chunk_horizon)
+                        next_openpi_chunk, _ = openpi_client.infer_chunk(
+                            next_obs_raw, bootstrap_env.current_instruction
+                        )
+                        next_base_chunk = select_action_chunk_window(
+                            next_openpi_chunk, horizon=chunk_horizon
+                        )
                         next_obs_input_raw = build_residual_step_obs(
                             next_obs_raw,
                             next_base_chunk[0],
@@ -1087,7 +1193,9 @@ def _bootstrap_offline_with_base_success(
                             stack_horizon=stack_horizon,
                             normalizer=normalizer,
                         )
-                        next_obs_input = _normalize_obs_dict_for_buffer(next_obs_input_raw, sample_obs_template)
+                        next_obs_input = _normalize_obs_dict_for_buffer(
+                            next_obs_input_raw, sample_obs_template
+                        )
                         if next_obs_input is None:
                             next_obs_input = _zero_obs_like(obs_input)
                             mask = 0.0
@@ -1148,13 +1256,22 @@ def _pretrain_critic_with_calql(
     warm_batch_size = int(calql_cfg.get("batch_size", cfg.replay.batch_size))
     calql_alpha = float(calql_cfg.get("alpha", 0.0))
     calql_n_actions = int(calql_cfg.get("n_actions", cfg.sac.get("cql_n_actions", 10)))
-    calql_temperature = float(calql_cfg.get("temperature", cfg.sac.get("cql_temperature", 1.0)))
-    if warm_steps <= 0 or calql_alpha <= 0.0 or offline_buffer is None or len(offline_buffer) == 0:
+    calql_temperature = float(
+        calql_cfg.get("temperature", cfg.sac.get("cql_temperature", 1.0))
+    )
+    if (
+        warm_steps <= 0
+        or calql_alpha <= 0.0
+        or offline_buffer is None
+        or len(offline_buffer) == 0
+    ):
         return {
             "enabled": 0,
             "steps": 0,
             "requested_steps": int(warm_steps),
-            "offline_buffer_size": int(len(offline_buffer) if offline_buffer is not None else 0),
+            "offline_buffer_size": int(
+                len(offline_buffer) if offline_buffer is not None else 0
+            ),
         }
 
     info_last: Dict[str, Any] = {}
@@ -1255,7 +1372,9 @@ class _AsyncLearner:
         self.update_steps = 0
         self.last_update_info: Dict[str, Any] = {}
 
-    def _sync_actor(self, params: Dict[str, Any], target_params: Dict[str, Any]) -> None:
+    def _sync_actor(
+        self, params: Dict[str, Any], target_params: Dict[str, Any]
+    ) -> None:
         with self.actor_lock:
             self.actor_agent.state.params = params
             self.actor_agent.state.target_params = target_params
@@ -1269,7 +1388,9 @@ class _AsyncLearner:
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._thread = threading.Thread(target=self._run, daemon=True, name="robotwin-async-learner")
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="robotwin-async-learner"
+        )
         self._thread.start()
 
     def stop(self, timeout: float = 10.0) -> None:
@@ -1279,14 +1400,18 @@ class _AsyncLearner:
         # 停止前做一次最终同步，保证 actor 参数是最新版本。
         self.sync_now()
 
-    def sample_actor_action(self, obs_input: Dict[str, np.ndarray], action_dim: int) -> np.ndarray:
+    def sample_actor_action(
+        self, obs_input: Dict[str, np.ndarray], action_dim: int
+    ) -> np.ndarray:
         with self.actor_lock:
             sampled = self.actor_agent.sample_actions(obs_input, deterministic=False)
         return as_numpy_action(sampled, action_dim)
 
     def save_checkpoint(self, checkpoint_dir: str, *, step: int, keep: int) -> None:
         with self.learner_lock:
-            save_agent_checkpoint(checkpoint_dir, self.learner_agent, step=step, keep=keep)
+            save_agent_checkpoint(
+                checkpoint_dir, self.learner_agent, step=step, keep=keep
+            )
 
     def get_last_update_info(self) -> Dict[str, Any]:
         with self.learner_lock:
@@ -1377,7 +1502,9 @@ def main(cfg: DictConfig) -> None:
 
     if env_backend == "local":
         assert robo_root is not None
-        task_args = load_task_args(robo_root, str(cfg.task.name), str(cfg.task.task_config))
+        task_args = load_task_args(
+            robo_root, str(cfg.task.name), str(cfg.task.task_config)
+        )
     else:
         # remote 模式下 task_args 由 robotwin2 环境中的 server 解析，这里只传最小信息。
         task_args = {"task_config": str(cfg.task.task_config)}
@@ -1446,7 +1573,9 @@ def main(cfg: DictConfig) -> None:
     # VLA chunk 长度由配置决定；残差每步输出一次（维度由 control_indices 决定）。
     chunk_horizon = int(cfg.residual.chunk_horizon)
     if chunk_horizon <= 0:
-        raise ValueError(f"residual.chunk_horizon must be positive, got {chunk_horizon}")
+        raise ValueError(
+            f"residual.chunk_horizon must be positive, got {chunk_horizon}"
+        )
     full_action_dim = int(cfg.robot_action_dim)
     per_step_action_dim = int(len(control_indices))
     action_dim = int(per_step_action_dim)
@@ -1465,10 +1594,20 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"offline.ratio must be in [0,1], got {offline_ratio}")
     symmetric_replay = bool(cfg.offline.get("symmetric_replay", False))
     async_cfg = cfg.training.get("async", None)
-    async_enabled = bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
-    async_update_frequency = int(async_cfg.get("update_frequency", 1)) if async_cfg is not None else 1
-    async_idle_sleep_sec = float(async_cfg.get("idle_sleep_sec", 0.002)) if async_cfg is not None else 0.002
-    if async_enabled and any((not bool(phase.get("train", True))) for phase in cfg.training.phases):
+    async_enabled = (
+        bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
+    )
+    async_update_frequency = (
+        int(async_cfg.get("update_frequency", 1)) if async_cfg is not None else 1
+    )
+    async_idle_sleep_sec = (
+        float(async_cfg.get("idle_sleep_sec", 0.002))
+        if async_cfg is not None
+        else 0.002
+    )
+    if async_enabled and any(
+        (not bool(phase.get("train", True))) for phase in cfg.training.phases
+    ):
         logger.warning(
             "Detected non-train phase in training.phases; disable async mode to preserve phase semantics."
         )
@@ -1521,7 +1660,9 @@ def main(cfg: DictConfig) -> None:
 
     tb_writer = SummaryWriter(log_dir=str(run_dir / "tb"))
     tb_step_period = int(cfg.logging.get("tb_step_period", 100))
-    logger.info("TensorBoard log dir: %s (step period=%d)", run_dir / "tb", tb_step_period)
+    logger.info(
+        "TensorBoard log dir: %s (step period=%d)", run_dir / "tb", tb_step_period
+    )
 
     global_env_step = 0
     global_policy_step = 0
@@ -1543,7 +1684,10 @@ def main(cfg: DictConfig) -> None:
             phase_train = bool(phase.get("train", True))
             residual_scale = float(phase.residual_scale)
             phase_seed_attempts = 0
-            max_seed_attempts_cfg = phase.get("max_seed_attempts", cfg.training.get("max_seed_attempts_per_phase", None))
+            max_seed_attempts_cfg = phase.get(
+                "max_seed_attempts",
+                cfg.training.get("max_seed_attempts_per_phase", None),
+            )
             if max_seed_attempts_cfg is None:
                 max_seed_attempts = max(1000, int(phase_episodes) * 100)
             else:
@@ -1575,13 +1719,21 @@ def main(cfg: DictConfig) -> None:
 
                 episode_info = None
                 if bool(cfg.training.expert_check):
-                    passed, episode_info = env.expert_precheck(seed=seed, episode_id=episode_id)
+                    passed, episode_info = env.expert_precheck(
+                        seed=seed, episode_id=episode_id
+                    )
                     if not passed:
                         skipped_seeds += 1
-                        logger.warning("skip seed=%s in phase=%s: expert precheck failed", seed, phase_name)
+                        logger.warning(
+                            "skip seed=%s in phase=%s: expert precheck failed",
+                            seed,
+                            phase_name,
+                        )
                         continue
 
-                obs_raw = env.reset(seed=seed, episode_id=episode_id, episode_info=episode_info)
+                obs_raw = env.reset(
+                    seed=seed, episode_id=episode_id, episode_info=episode_info
+                )
 
                 # 若本轮已提前算出 next_base_chunk，就缓存到下一轮复用，减少一次 OpenPI 调用。
                 # 该缓存只跨“chunk 决策边界”生效，不跨 episode。
@@ -1594,29 +1746,45 @@ def main(cfg: DictConfig) -> None:
 
                 max_episode_steps = int(env.step_limit)
                 if cfg.training.max_env_steps_per_episode is not None:
-                    max_episode_steps = min(max_episode_steps, int(cfg.training.max_env_steps_per_episode))
+                    max_episode_steps = min(
+                        max_episode_steps, int(cfg.training.max_env_steps_per_episode)
+                    )
 
                 # Stage-2 probing: 先用 base policy 随机 rollout 若干步做初始状态分布对齐，
                 # 这些 probing 步仅用于“状态初始化”，不写入 residual replay。
-                probing_steps_target = sample_probing_steps(cfg.training, episode_horizon=max_episode_steps)
+                probing_steps_target = sample_probing_steps(
+                    cfg.training, episode_horizon=max_episode_steps
+                )
                 if probing_steps_target > 0:
-                    probing_remaining = int(min(probing_steps_target, max_episode_steps - episode_steps))
+                    probing_remaining = int(
+                        min(probing_steps_target, max_episode_steps - episode_steps)
+                    )
                     while probing_remaining > 0 and episode_steps < max_episode_steps:
-                        probe_chunk, probe_info = openpi_client.infer_chunk(obs_raw, env.current_instruction)
-                        probe_base_chunk = select_action_chunk_window(probe_chunk, horizon=chunk_horizon)
+                        probe_chunk, probe_info = openpi_client.infer_chunk(
+                            obs_raw, env.current_instruction
+                        )
+                        probe_base_chunk = select_action_chunk_window(
+                            probe_chunk, horizon=chunk_horizon
+                        )
                         probe_done = False
                         for probe_step in range(chunk_horizon):
-                            if probing_remaining <= 0 or episode_steps >= max_episode_steps:
+                            if (
+                                probing_remaining <= 0
+                                or episode_steps >= max_episode_steps
+                            ):
                                 break
                             base_action = probe_base_chunk[probe_step]
-                            next_obs_raw, reward, env_done, _, info = env.step(base_action)
+                            next_obs_raw, reward, env_done, _, info = env.step(
+                                base_action
+                            )
                             episode_steps += 1
                             global_env_step += 1
                             probing_remaining -= 1
                             episode_return += float(reward)
                             episode_success = bool(info["success"])
                             budget_exhausted = bool(
-                                max_online_env_steps > 0 and global_env_step >= max_online_env_steps
+                                max_online_env_steps > 0
+                                and global_env_step >= max_online_env_steps
                             )
 
                             timeout = bool(episode_steps >= max_episode_steps)
@@ -1628,14 +1796,24 @@ def main(cfg: DictConfig) -> None:
                                     "episode_id": episode_id,
                                     "phase": phase_name,
                                     "episode_step": episode_steps,
-                                    "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                    "seed": int(
+                                        env.last_seed
+                                        if env.last_seed is not None
+                                        else seed
+                                    ),
                                     "is_probing": True,
                                     "replan_point": bool(probe_step == 0),
                                     "chunk_step": int(probe_step),
                                     "chunk_horizon": int(chunk_horizon),
-                                    "infer_e2e_ms": probe_info.get("e2e_ms") if probe_step == 0 else None,
-                                    "infer_policy_ms": probe_info.get("policy_ms") if probe_step == 0 else None,
-                                    "infer_server_ms": probe_info.get("server_ms") if probe_step == 0 else None,
+                                    "infer_e2e_ms": probe_info.get("e2e_ms")
+                                    if probe_step == 0
+                                    else None,
+                                    "infer_policy_ms": probe_info.get("policy_ms")
+                                    if probe_step == 0
+                                    else None,
+                                    "infer_server_ms": probe_info.get("server_ms")
+                                    if probe_step == 0
+                                    else None,
                                     "a_base": base_action.tolist(),
                                     "a_res": [0.0] * full_action_dim,
                                     "a_final": base_action.tolist(),
@@ -1654,7 +1832,10 @@ def main(cfg: DictConfig) -> None:
                     if (
                         episode_steps >= max_episode_steps
                         or episode_success
-                        or (max_online_env_steps > 0 and global_env_step >= max_online_env_steps)
+                        or (
+                            max_online_env_steps > 0
+                            and global_env_step >= max_online_env_steps
+                        )
                     ):
                         episode_done = True
                     else:
@@ -1666,8 +1847,12 @@ def main(cfg: DictConfig) -> None:
                     # 1) 取 base chunk：优先复用缓存，否则调用 OpenPI 现推。
                     #    base_chunk 形状为 (chunk_horizon, 14)。
                     if cached_base_chunk is None:
-                        openpi_chunk, infer_info = openpi_client.infer_chunk(obs_raw, env.current_instruction)
-                        base_chunk = select_action_chunk_window(openpi_chunk, horizon=chunk_horizon)
+                        openpi_chunk, infer_info = openpi_client.infer_chunk(
+                            obs_raw, env.current_instruction
+                        )
+                        base_chunk = select_action_chunk_window(
+                            openpi_chunk, horizon=chunk_horizon
+                        )
                     else:
                         base_chunk = cached_base_chunk
                         infer_info = cached_infer_info or {
@@ -1699,7 +1884,7 @@ def main(cfg: DictConfig) -> None:
 
                         # 首次拿到真实观测形状后，初始化 agent 和 replay。
                         if agent is None:
-                            learner_agent = build_drq_agent(
+                            learner_agent = create_drq_agent(
                                 cfg,
                                 sample_obs=obs_input,
                                 action_dim=action_dim,
@@ -1717,25 +1902,31 @@ def main(cfg: DictConfig) -> None:
                                     capacity=int(cfg.offline.capacity),
                                 )
                                 if env_backend == "local":
-                                    bootstrap_stats = _bootstrap_offline_with_base_success(
-                                        cfg,
-                                        env=env,
-                                        openpi_client=openpi_client,
-                                        offline_buffer=offline_buffer,
-                                        sample_obs_template=obs_input,
-                                        action_dim=action_dim,
-                                        image_keys=image_keys,
-                                        stack_horizon=stack_horizon,
-                                        chunk_horizon=chunk_horizon,
-                                        logger=logger,
-                                        normalizer=normalizer,
+                                    bootstrap_stats = (
+                                        _bootstrap_offline_with_base_success(
+                                            cfg,
+                                            env=env,
+                                            openpi_client=openpi_client,
+                                            offline_buffer=offline_buffer,
+                                            sample_obs_template=obs_input,
+                                            action_dim=action_dim,
+                                            image_keys=image_keys,
+                                            stack_horizon=stack_horizon,
+                                            chunk_horizon=chunk_horizon,
+                                            logger=logger,
+                                            normalizer=normalizer,
+                                        )
                                     )
                                 else:
                                     bootstrap_stats = {
                                         "enabled": 0,
                                         "skipped_reason": "remote_env_backend",
                                     }
-                                    if bool(cfg.offline.get("bootstrap_base", {}).get("enabled", False)):
+                                    if bool(
+                                        cfg.offline.get("bootstrap_base", {}).get(
+                                            "enabled", False
+                                        )
+                                    ):
                                         logger.warning(
                                             "offline.bootstrap_base is enabled but skipped in remote env backend. "
                                             "Use local backend for bootstrap, or run a dedicated bootstrap pipeline."
@@ -1747,7 +1938,11 @@ def main(cfg: DictConfig) -> None:
                                             "inserted=%s seed_range=[%s,%s)"
                                         ),
                                         bootstrap_stats.get("success_episodes", 0),
-                                        int(cfg.offline.get("bootstrap_base", {}).get("success_episodes", 0)),
+                                        int(
+                                            cfg.offline.get("bootstrap_base", {}).get(
+                                                "success_episodes", 0
+                                            )
+                                        ),
                                         bootstrap_stats.get("attempts", 0),
                                         bootstrap_stats.get("inserted", 0),
                                         bootstrap_stats.get("seed_start", 0),
@@ -1795,19 +1990,23 @@ def main(cfg: DictConfig) -> None:
 
                             if async_enabled:
                                 # 异步模式：actor 与 learner 使用不同实例，按频率同步参数。
-                                agent = build_drq_agent(
+                                agent = create_drq_agent(
                                     cfg,
                                     sample_obs=obs_input,
                                     action_dim=action_dim,
                                     image_keys=image_keys,
                                 )
                                 agent.state.params = learner_agent.state.params
-                                agent.state.target_params = learner_agent.state.target_params
+                                agent.state.target_params = (
+                                    learner_agent.state.target_params
+                                )
                                 async_learner = _AsyncLearner(
                                     learner_agent=learner_agent,
                                     actor_agent=agent,
                                     online_buffer=replay_buffer,
-                                    offline_buffer=offline_buffer if offline_enabled else None,
+                                    offline_buffer=offline_buffer
+                                    if offline_enabled
+                                    else None,
                                     batch_size=int(cfg.replay.batch_size),
                                     offline_ratio=offline_ratio,
                                     symmetric_replay=symmetric_replay,
@@ -1842,20 +2041,41 @@ def main(cfg: DictConfig) -> None:
                         #    - warmup 或非训练阶段: 随机探索
                         #    - 其余: 策略采样
                         in_warmup_episode = bool(episode_id < warmup_base_episodes)
-                        in_warmup_step = bool(warmup_base_steps > 0 and global_policy_step < warmup_base_steps)
+                        in_warmup_step = bool(
+                            warmup_base_steps > 0
+                            and global_policy_step < warmup_base_steps
+                        )
                         if phase_train and (in_warmup_episode or in_warmup_step):
-                            residual_step_action = np.zeros((action_dim,), dtype=np.float32)
+                            residual_step_action = np.zeros(
+                                (action_dim,), dtype=np.float32
+                            )
                         elif residual_scale_step <= 0.0:
-                            residual_step_action = np.zeros((action_dim,), dtype=np.float32)
-                        elif (not phase_train) or (global_policy_step < int(cfg.training.random_steps)):
-                            residual_step_action = np.random.uniform(-1.0, 1.0, size=(action_dim,)).astype(np.float32)
-                            residual_step_action *= float(cfg.training.random_action_scale)
+                            residual_step_action = np.zeros(
+                                (action_dim,), dtype=np.float32
+                            )
+                        elif (not phase_train) or (
+                            global_policy_step < int(cfg.training.random_steps)
+                        ):
+                            residual_step_action = np.random.uniform(
+                                -1.0, 1.0, size=(action_dim,)
+                            ).astype(np.float32)
+                            residual_step_action *= float(
+                                cfg.training.random_action_scale
+                            )
                         else:
                             if async_learner is not None:
-                                residual_step_action = async_learner.sample_actor_action(obs_input, action_dim)
+                                residual_step_action = (
+                                    async_learner.sample_actor_action(
+                                        obs_input, action_dim
+                                    )
+                                )
                             else:
-                                sampled = agent.sample_actions(obs_input, deterministic=False)
-                                residual_step_action = as_numpy_action(sampled, action_dim)
+                                sampled = agent.sample_actions(
+                                    obs_input, deterministic=False
+                                )
+                                residual_step_action = as_numpy_action(
+                                    sampled, action_dim
+                                )
 
                         # 4) 与当前步 base action 融合成 final action 并执行。
                         #    这里会做 residual clip/limit/scale，然后加到 base_action 上。
@@ -1876,7 +2096,8 @@ def main(cfg: DictConfig) -> None:
                         episode_return += float(reward)
                         episode_success = bool(info["success"])
                         budget_exhausted = bool(
-                            max_online_env_steps > 0 and global_env_step >= max_online_env_steps
+                            max_online_env_steps > 0
+                            and global_env_step >= max_online_env_steps
                         )
 
                         timeout = bool(episode_steps >= max_episode_steps)
@@ -1889,14 +2110,22 @@ def main(cfg: DictConfig) -> None:
                                 "episode_id": episode_id,
                                 "phase": phase_name,
                                 "episode_step": episode_steps,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
                                 "is_probing": False,
                                 "replan_point": bool(chunk_step == 0),
                                 "chunk_step": int(chunk_step),
                                 "chunk_horizon": int(chunk_horizon),
-                                "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                                "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                                "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                                "infer_e2e_ms": infer_info.get("e2e_ms")
+                                if chunk_step == 0
+                                else None,
+                                "infer_policy_ms": infer_info.get("policy_ms")
+                                if chunk_step == 0
+                                else None,
+                                "infer_server_ms": infer_info.get("server_ms")
+                                if chunk_step == 0
+                                else None,
                                 "a_base": base_chunk[chunk_step].tolist(),
                                 "a_res": delta_action.tolist(),
                                 "a_final": final_action.tolist(),
@@ -1909,18 +2138,37 @@ def main(cfg: DictConfig) -> None:
                         )
 
                         if global_env_step % tb_step_period == 0:
-                            tb_writer.add_scalar("step/reward", float(reward), global_env_step)
-                            tb_writer.add_scalar("step/residual_scale", float(residual_scale_step), global_env_step)
-                            tb_writer.add_scalar("step/xi", float(xi_step), global_env_step)
+                            tb_writer.add_scalar(
+                                "step/reward", float(reward), global_env_step
+                            )
+                            tb_writer.add_scalar(
+                                "step/residual_scale",
+                                float(residual_scale_step),
+                                global_env_step,
+                            )
+                            tb_writer.add_scalar(
+                                "step/xi", float(xi_step), global_env_step
+                            )
                             tb_writer.add_scalar(
                                 "step/residual_action_magnitude",
                                 float(np.linalg.norm(delta_action)),
                                 global_env_step,
                             )
                             if chunk_step == 0 and infer_info.get("e2e_ms") is not None:
-                                tb_writer.add_scalar("step/infer_e2e_ms", float(infer_info["e2e_ms"]), global_env_step)
-                            if chunk_step == 0 and infer_info.get("policy_ms") is not None:
-                                tb_writer.add_scalar("step/infer_policy_ms", float(infer_info["policy_ms"]), global_env_step)
+                                tb_writer.add_scalar(
+                                    "step/infer_e2e_ms",
+                                    float(infer_info["e2e_ms"]),
+                                    global_env_step,
+                                )
+                            if (
+                                chunk_step == 0
+                                and infer_info.get("policy_ms") is not None
+                            ):
+                                tb_writer.add_scalar(
+                                    "step/infer_policy_ms",
+                                    float(infer_info["policy_ms"]),
+                                    global_env_step,
+                                )
 
                         # 6) 构建 next_obs_input（用于 replay 的 next_observations）：
                         #    - done: 用零占位，mask=0
@@ -1939,11 +2187,16 @@ def main(cfg: DictConfig) -> None:
                             )
                             mask = 1.0
                         else:
-                            next_openpi_chunk, next_infer_info = openpi_client.infer_chunk(
+                            (
+                                next_openpi_chunk,
+                                next_infer_info,
+                            ) = openpi_client.infer_chunk(
                                 next_obs_raw,
                                 env.current_instruction,
                             )
-                            next_base_chunk = select_action_chunk_window(next_openpi_chunk, horizon=chunk_horizon)
+                            next_base_chunk = select_action_chunk_window(
+                                next_openpi_chunk, horizon=chunk_horizon
+                            )
                             next_obs_input = build_residual_step_obs(
                                 next_obs_raw,
                                 next_base_chunk[0],
@@ -1977,8 +2230,10 @@ def main(cfg: DictConfig) -> None:
                         if async_learner is None:
                             if (
                                 phase_train
-                                and len(replay_buffer) >= int(cfg.training.training_starts)
-                                and global_policy_step % int(cfg.training.update_every) == 0
+                                and len(replay_buffer)
+                                >= int(cfg.training.training_starts)
+                                and global_policy_step % int(cfg.training.update_every)
+                                == 0
                             ):
                                 for _ in range(int(cfg.training.updates_per_step)):
                                     batch, online_bs, offline_bs = _sample_mixed_batch(
@@ -1989,7 +2244,10 @@ def main(cfg: DictConfig) -> None:
                                         symmetric_replay=symmetric_replay,
                                     )
                                     # DrQ 更新内部会先做图像随机裁剪增强，再执行 SAC 的 critic/actor/temperature 更新。
-                                    learner_agent, update_info = learner_agent.update_high_utd(
+                                    (
+                                        learner_agent,
+                                        update_info,
+                                    ) = learner_agent.update_high_utd(
                                         batch,
                                         utd_ratio=int(cfg.sac.utd_ratio),
                                     )
@@ -2012,7 +2270,11 @@ def main(cfg: DictConfig) -> None:
                                 ("actor/temperature_loss", "temperature_loss"),
                             ):
                                 if info_key in update_info:
-                                    tb_writer.add_scalar(tb_key, float(update_info[info_key]), global_env_step)
+                                    tb_writer.add_scalar(
+                                        tb_key,
+                                        float(update_info[info_key]),
+                                        global_env_step,
+                                    )
 
                         global_policy_step += 1
 
@@ -2020,7 +2282,8 @@ def main(cfg: DictConfig) -> None:
                         if (
                             phase_train
                             and int(cfg.training.checkpoint_period) > 0
-                            and global_policy_step % int(cfg.training.checkpoint_period) == 0
+                            and global_policy_step % int(cfg.training.checkpoint_period)
+                            == 0
                         ):
                             if async_learner is not None:
                                 async_learner.save_checkpoint(
@@ -2048,13 +2311,17 @@ def main(cfg: DictConfig) -> None:
                 total_success += int(episode_success)
                 recent_successes.append(int(episode_success))
                 running_success_rate = float(total_success) / float(episode_id + 1)
-                recent_success_rate = float(sum(recent_successes)) / float(len(recent_successes))
+                recent_success_rate = float(sum(recent_successes)) / float(
+                    len(recent_successes)
+                )
 
                 episode_logger.write(
                     {
                         "episode_id": episode_id,
                         "phase": phase_name,
-                        "seed": int(env.last_seed if env.last_seed is not None else seed),
+                        "seed": int(
+                            env.last_seed if env.last_seed is not None else seed
+                        ),
                         "success": bool(episode_success),
                         "episode_steps": int(episode_steps),
                         "episode_return": float(episode_return),
@@ -2064,17 +2331,47 @@ def main(cfg: DictConfig) -> None:
                     }
                 )
 
-                tb_writer.add_scalar("episode/success", int(episode_success), global_env_step)
-                tb_writer.add_scalar("episode/return", float(episode_return), global_env_step)
-                tb_writer.add_scalar("episode/length", int(episode_steps), global_env_step)
-                tb_writer.add_scalar("episode/running_success_rate", running_success_rate, global_env_step)
-                tb_writer.add_scalar("episode/recent_success_rate_20", recent_success_rate, global_env_step)
-                tb_writer.add_scalar("system/online_buffer_size", int(len(replay_buffer)) if replay_buffer else 0, global_env_step)
+                tb_writer.add_scalar(
+                    "episode/success", int(episode_success), global_env_step
+                )
+                tb_writer.add_scalar(
+                    "episode/return", float(episode_return), global_env_step
+                )
+                tb_writer.add_scalar(
+                    "episode/length", int(episode_steps), global_env_step
+                )
+                tb_writer.add_scalar(
+                    "episode/running_success_rate",
+                    running_success_rate,
+                    global_env_step,
+                )
+                tb_writer.add_scalar(
+                    "episode/recent_success_rate_20",
+                    recent_success_rate,
+                    global_env_step,
+                )
+                tb_writer.add_scalar(
+                    "system/online_buffer_size",
+                    int(len(replay_buffer)) if replay_buffer else 0,
+                    global_env_step,
+                )
                 if offline_buffer is not None:
-                    tb_writer.add_scalar("system/offline_buffer_size", int(len(offline_buffer)), global_env_step)
-                tb_writer.add_scalar("system/global_policy_step", int(global_policy_step), global_env_step)
+                    tb_writer.add_scalar(
+                        "system/offline_buffer_size",
+                        int(len(offline_buffer)),
+                        global_env_step,
+                    )
+                tb_writer.add_scalar(
+                    "system/global_policy_step",
+                    int(global_policy_step),
+                    global_env_step,
+                )
                 if async_learner is not None:
-                    tb_writer.add_scalar("system/learner_update_steps", int(async_learner.get_update_steps()), global_env_step)
+                    tb_writer.add_scalar(
+                        "system/learner_update_steps",
+                        int(async_learner.get_update_steps()),
+                        global_env_step,
+                    )
 
                 logger.info(
                     "episode=%s phase=%s success=%s steps=%s return=%.2f success_rate=%.3f",
@@ -2121,7 +2418,9 @@ def main(cfg: DictConfig) -> None:
             "offline_enabled": bool(offline_enabled),
             "offline_ratio": float(offline_ratio),
             "offline_symmetric_replay": bool(symmetric_replay),
-            "offline_buffer_size": int(len(offline_buffer) if offline_buffer is not None else 0),
+            "offline_buffer_size": int(
+                len(offline_buffer) if offline_buffer is not None else 0
+            ),
             "offline_stats": offline_stats,
             "bootstrap_stats": bootstrap_stats,
             "residual_xi": float(residual_xi),
@@ -2136,7 +2435,9 @@ def main(cfg: DictConfig) -> None:
             "stopped_by_env_budget": bool(stopped_by_env_budget),
             "async_enabled": bool(async_enabled),
             "async_update_frequency": int(async_update_frequency),
-            "learner_update_steps": int(async_learner.get_update_steps() if async_learner is not None else 0),
+            "learner_update_steps": int(
+                async_learner.get_update_steps() if async_learner is not None else 0
+            ),
             "probing_alpha": (
                 float(cfg.training.get("probing_alpha"))
                 if cfg.training.get("probing_alpha", None) is not None

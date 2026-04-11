@@ -54,12 +54,16 @@ from serl_launcher.training.async_runtime.agentlace import _AsyncLearner
 from serl_launcher.training.async_runtime.agentlace import _MixedBatchPrefetcher
 from serl_launcher.training.async_runtime.agentlace import _ProcessAsyncLearner
 from serl_launcher.training.async_runtime.agentlace import _sample_mixed_batch
-from serl_launcher.training.async_runtime.bridge import advance_async_target_update_calls
+from serl_launcher.training.async_runtime.bridge import (
+    advance_async_target_update_calls,
+)
 from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeConfig
 from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeState
 from serl_launcher.training.async_runtime.bridge import create_agentlace_async_learner
 from serl_launcher.training.async_runtime.bridge import maybe_send_agentlace_timer_stats
-from serl_launcher.training.async_runtime.bridge import maybe_wait_for_async_learner_budget
+from serl_launcher.training.async_runtime.bridge import (
+    maybe_wait_for_async_learner_budget,
+)
 from serl_launcher.training.async_runtime.bridge import save_actor_bootstrap
 from serl_launcher.training.async_runtime.bridge import (
     sync_async_bounded_lag_baseline_from_learner,
@@ -167,8 +171,12 @@ def run_actor_loop(
     async_bounded_lag_timeout_sec = ctx.async_bounded_lag_timeout_sec
     async_bounded_lag_sync_on_wait = bool(ctx.async_bounded_lag_sync_on_wait)
     async_bounded_lag_log_period_steps = int(ctx.async_bounded_lag_log_period_steps)
-    async_bounded_lag_env_steps_per_update_call = ctx.async_bounded_lag_env_steps_per_update_call
-    async_bounded_lag_manual_rate_enabled = bool(ctx.async_bounded_lag_manual_rate_enabled)
+    async_bounded_lag_env_steps_per_update_call = (
+        ctx.async_bounded_lag_env_steps_per_update_call
+    )
+    async_bounded_lag_manual_rate_enabled = bool(
+        ctx.async_bounded_lag_manual_rate_enabled
+    )
     async_bounded_lag_mode = str(ctx.async_bounded_lag_mode)
     replay_prefetch_enabled = bool(ctx.replay_prefetch_enabled)
     replay_prefetch_queue_size = int(ctx.replay_prefetch_queue_size)
@@ -377,7 +385,8 @@ def run_actor_loop(
             )
 
             phase_episode_count = 0
-            phase_progress = new_progress(ctx,
+            phase_progress = new_progress(
+                ctx,
                 desc=f"{phase_name}:episode",
                 total=int(phase_episodes),
                 position=1,
@@ -401,9 +410,12 @@ def run_actor_loop(
                     current_init_episode_idx = int(init_episode_idx)
 
                     if bool(cfg.training.get("expert_check", False)):
-                        passed, _ = env.expert_precheck(
-                            seed=seed, init_episode_idx=current_init_episode_idx
-                        )
+                        expert_precheck_kwargs = {
+                            "init_episode_idx": current_init_episode_idx
+                        }
+                        if cfg.get("task", {}).get("seed_base", None) is not None:
+                            expert_precheck_kwargs["seed"] = seed
+                        passed, _ = env.expert_precheck(**expert_precheck_kwargs)
                         if not passed:
                             skipped_seeds += 1
                             logger.warning(
@@ -415,12 +427,14 @@ def run_actor_loop(
 
                     init_episode_idx += 1
                     clear_obs_cache(ctx)
+                    reset_kwargs = {"init_episode_idx": current_init_episode_idx}
+                    if cfg.get("task", {}).get("seed_base", None) is not None:
+                        reset_kwargs["seed"] = seed
                     obs_raw = _profile_call(
                         profiler,
                         "env_reset",
                         env.reset,
-                        seed=seed,
-                        init_episode_idx=current_init_episode_idx,
+                        **reset_kwargs,
                     )
                     max_episode_steps = int(env.step_limit)
                     if cfg.training.max_env_steps_per_episode is not None:
@@ -490,7 +504,9 @@ def run_actor_loop(
                                 "train_episode_id": current_train_episode_id,
                                 "phase_episode_idx": current_phase_episode_idx,
                                 "seed": int(
-                                    env.last_seed if env.last_seed is not None else seed
+                                    getattr(env, "last_seed", None)
+                                    if getattr(env, "last_seed", None) is not None
+                                    else seed
                                 ),
                                 "init_state_idx": (
                                     int(env.current_init_state_idx)
@@ -633,7 +649,9 @@ def run_actor_loop(
                                 "train_episode_id": None,
                                 "phase_episode_idx": current_phase_episode_idx,
                                 "seed": int(
-                                    env.last_seed if env.last_seed is not None else seed
+                                    getattr(env, "last_seed", None)
+                                    if getattr(env, "last_seed", None) is not None
+                                    else seed
                                 ),
                                 "init_state_idx": (
                                     int(env.current_init_state_idx)
@@ -740,7 +758,7 @@ def run_actor_loop(
                 warmup_total_success / max(1, int(warmup_episode_id))
             ),
             "skipped_seeds": int(skipped_seeds),
-            "seed_start": int(cfg.task.seed_base),
+            "seed_start": int(cfg.get("task", {}).get("seed_base", 0)),
             "seed_next": int(seed_cursor),
             "stopped_by_env_budget": bool(stopped_by_env_budget),
             "max_train_env_steps": int(max_train_env_steps),
@@ -806,7 +824,9 @@ def run_actor_loop(
                 "last_required_update_steps": int(
                     agentlace_bridge_state.last_required_update_steps
                 ),
-                "last_lag_before_wait": int(agentlace_bridge_state.last_lag_before_wait),
+                "last_lag_before_wait": int(
+                    agentlace_bridge_state.last_lag_before_wait
+                ),
                 "last_lag_after_wait": int(agentlace_bridge_state.last_lag_after_wait),
                 "wait_count": int(agentlace_bridge_state.wait_count),
                 "wait_timeout_count": int(agentlace_bridge_state.timeout_count),

@@ -88,7 +88,6 @@ class AgiBotTaskEnv:
             int(max_episode_steps) if max_episode_steps is not None else 200
         )
         self._take_action_cnt = 0
-        self.last_seed: Optional[int] = None
         self.current_init_state_idx: Optional[int] = None
         self.episode_count = 0
         self._last_obs: Optional[Dict[str, Any]] = None
@@ -626,14 +625,14 @@ class AgiBotTaskEnv:
 
     def expert_precheck(
         self,
-        seed: int,
-        init_episode_idx: int,
+        init_episode_idx: Optional[int] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         result = call_optional_hook(
             self._expert_precheck_hook,
             env=self,
-            seed=int(seed),
-            init_episode_idx=int(init_episode_idx),
+            init_episode_idx=(
+                None if init_episode_idx is None else int(init_episode_idx)
+            ),
             task_name=self.task_name,
             prompt=self._current_instruction,
         )
@@ -641,19 +640,20 @@ class AgiBotTaskEnv:
 
     def reset(
         self,
-        seed: int,
-        init_episode_idx: int,
+        init_episode_idx: Optional[int] = None,
         episode_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        self.last_seed = int(seed)
-        self.current_init_state_idx = int(init_episode_idx)
+        self.current_init_state_idx = (
+            None if init_episode_idx is None else int(init_episode_idx)
+        )
         self._take_action_cnt = 0
         self.episode_count += 1
         result = call_optional_hook(
             self._reset_hook,
             env=self,
-            seed=int(seed),
-            init_episode_idx=int(init_episode_idx),
+            init_episode_idx=(
+                None if init_episode_idx is None else int(init_episode_idx)
+            ),
             episode_info=episode_info,
             task_name=self.task_name,
             prompt=self._current_instruction,

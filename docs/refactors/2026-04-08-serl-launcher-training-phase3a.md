@@ -13,8 +13,8 @@ clearer homes:
 
 - `serl_launcher/serl_launcher/training/seeding.py`
   - `set_global_seeds(...)`
-- `serl_launcher/serl_launcher/agents/continuous/builders.py`
-  - `build_drq_agent(...)`
+- `serl_launcher/serl_launcher/agents/continuous/drq_config.py`
+  - `create_drq_agent_from_cfg(...)`
   - private optimizer and mixed-precision config helpers
 - `serl_launcher/serl_launcher/residual/train/config.py`
   - residual observation-state mode helpers
@@ -32,7 +32,7 @@ Updated the actor, learner, eval, and online materialization paths to consume
 the new homes:
 
 - `training.seeding`
-- `agents.continuous.builders`
+- `agents.continuous.drq_config`
 - `residual.train.config`
 
 ## Review

@@ -14,8 +14,8 @@ import numpy as np
 import torch
 
 from serl_launcher.residual.action import as_numpy_action
-from serl_launcher.residual.algorithms.base import ResidualAlgorithm
-from serl_launcher.residual.algorithms.base import build_residual_algorithm
+from serl_launcher.residual.runtime_agent import ResidualAgentRuntime
+from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
 from serl_launcher.training.checkpoint import _AsyncCheckpointWriter
 from serl_launcher.training.checkpoint import _CheckpointTask
 from serl_launcher.training.checkpoint import _write_checkpoint_payload
@@ -98,7 +98,9 @@ def _build_status_payload(
         "type": str(message_type),
         "update_steps": int(update_steps),
         "last_update_info": dict(last_update_info),
-        "replay_num_steps": int(getattr(replay_buffer, "num_steps", len(replay_buffer))),
+        "replay_num_steps": int(
+            getattr(replay_buffer, "num_steps", len(replay_buffer))
+        ),
         "replay_sampleable_size": int(_replay_sampleable_size(replay_buffer)),
     }
     if replay_prefetch_queue_size is not None:
@@ -270,8 +272,8 @@ def _async_process_worker(
         from omegaconf import OmegaConf
 
         cfg = OmegaConf.create(cfg_dict)
-        algorithm = build_residual_algorithm(cfg)
-        learner_agent = algorithm.build_learner_agent(
+        algorithm = create_residual_agent_runtime(cfg)
+        learner_agent = algorithm.create_learner_agent(
             cfg,
             sample_obs=sample_obs,
             action_dim=int(action_dim),
@@ -401,7 +403,7 @@ def run_agentlace_learner_service(
     batch_size: int,
     offline_ratio: float,
     symmetric_replay: bool,
-    algorithm: Optional[ResidualAlgorithm] = None,
+    algorithm: Optional[ResidualAgentRuntime] = None,
     host: str,
     port_number: int,
     broadcast_port: int,
@@ -426,7 +428,7 @@ def run_agentlace_learner_service(
 
     cfg = OmegaConf.create(cfg_dict)
     if algorithm is None:
-        algorithm = build_residual_algorithm(cfg)
+        algorithm = create_residual_agent_runtime(cfg)
     replay_prefetch_cfg = cfg.training.get("replay_prefetch", None)
     if replay_prefetch_enabled is None:
         replay_prefetch_enabled = (
@@ -452,7 +454,7 @@ def run_agentlace_learner_service(
             if replay_prefetch_cfg is not None
             else False
         )
-    learner_agent = algorithm.build_learner_agent(
+    learner_agent = algorithm.create_learner_agent(
         cfg,
         sample_obs=sample_obs,
         action_dim=int(action_dim),
@@ -796,14 +798,14 @@ def run_agentlace_learner_service(
             update_steps += 1
             _safe_status_emit(
                 status_queue,
-                    _build_status_payload(
-                        update_steps=int(update_steps),
-                        last_update_info=dict(last_update_info),
-                        replay_buffer=replay_store,
-                        replay_prefetch_queue_size=_current_prefetch_queue_size(),
-                        online_prefill_stats=online_prefill_status_payload,
-                    ),
-                )
+                _build_status_payload(
+                    update_steps=int(update_steps),
+                    last_update_info=dict(last_update_info),
+                    replay_buffer=replay_store,
+                    replay_prefetch_queue_size=_current_prefetch_queue_size(),
+                    online_prefill_stats=online_prefill_status_payload,
+                ),
+            )
             if update_steps % max(1, int(update_frequency)) == 0:
                 server.publish_network(
                     algorithm.snapshot_checkpoint_payload(
@@ -1058,7 +1060,7 @@ class _AsyncLearner:
     def __init__(
         self,
         *,
-        algorithm: ResidualAlgorithm,
+        algorithm: ResidualAgentRuntime,
         learner_agent: Any,
         actor_agent: Any,
         online_buffer: "ReplayBuffer",
@@ -1311,7 +1313,7 @@ class _ProcessAsyncLearner:
     def __init__(
         self,
         *,
-        algorithm: ResidualAlgorithm,
+        algorithm: ResidualAgentRuntime,
         actor_agent: Any,
         online_buffer: "ReplayBuffer",
         offline_buffer: Optional["ReplayBuffer"],
@@ -1593,7 +1595,7 @@ class _AgentlaceAsyncLearner:
     def __init__(
         self,
         *,
-        algorithm: ResidualAlgorithm,
+        algorithm: ResidualAgentRuntime,
         actor_agent: Any,
         replay_buffer: Any,
         offline_buffer: Optional[Any],
@@ -1646,7 +1648,9 @@ class _AgentlaceAsyncLearner:
         self._client = None
         self._data_store = None
         self._replay_proxy = _ReplayProgressProxy(
-            initial_num_steps=int(getattr(replay_buffer, "num_steps", len(replay_buffer))),
+            initial_num_steps=int(
+                getattr(replay_buffer, "num_steps", len(replay_buffer))
+            ),
             initial_sampleable_size=int(_replay_sampleable_size(replay_buffer)),
             capacity=(
                 int(replay_capacity)
@@ -1710,13 +1714,9 @@ class _AgentlaceAsyncLearner:
         replay_num_steps = payload.get("replay_num_steps", None)
         replay_sampleable_size = payload.get("replay_sampleable_size", None)
         self._replay_proxy.sync_from_status(
-            num_steps=(
-                None if replay_num_steps is None else int(replay_num_steps)
-            ),
+            num_steps=(None if replay_num_steps is None else int(replay_num_steps)),
             sampleable_size=(
-                None
-                if replay_sampleable_size is None
-                else int(replay_sampleable_size)
+                None if replay_sampleable_size is None else int(replay_sampleable_size)
             ),
         )
 
@@ -1788,7 +1788,9 @@ class _AgentlaceAsyncLearner:
                 should_update = True
             if not should_update and allow_empty_update:
                 now = time.monotonic()
-                if (now - self._last_client_update_ts) >= self._status_request_period_sec:
+                if (
+                    now - self._last_client_update_ts
+                ) >= self._status_request_period_sec:
                     should_update = True
 
             if should_update:

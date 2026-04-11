@@ -14,11 +14,17 @@ from serl_launcher.training.async_runtime.agentlace import _AsyncLearner
 from serl_launcher.training.async_runtime.agentlace import _MixedBatchPrefetcher
 from serl_launcher.training.async_runtime.agentlace import _ProcessAsyncLearner
 from serl_launcher.training.async_runtime.agentlace import _sample_mixed_batch
-from serl_launcher.training.async_runtime.bridge import advance_async_target_update_calls
+from serl_launcher.training.async_runtime.bridge import (
+    advance_async_target_update_calls,
+)
 from serl_launcher.training.async_runtime.bridge import create_agentlace_async_learner
 from serl_launcher.training.async_runtime.bridge import maybe_send_agentlace_timer_stats
-from serl_launcher.training.async_runtime.bridge import maybe_wait_for_async_learner_budget
-from serl_launcher.training.async_runtime.bridge import sync_async_bounded_lag_baseline_from_learner
+from serl_launcher.training.async_runtime.bridge import (
+    maybe_wait_for_async_learner_budget,
+)
+from serl_launcher.training.async_runtime.bridge import (
+    sync_async_bounded_lag_baseline_from_learner,
+)
 from serl_launcher.training.checkpoint import _CheckpointTask
 from serl_launcher.training.checkpoint import _write_checkpoint_payload
 from serl_launcher.residual.train.schedules import _scheduled_epsilon_gating_probability
@@ -75,9 +81,7 @@ class ActorLoopState:
     profiling_last_flush_step: int = -1
     last_update_info: Dict[str, Any] = field(default_factory=dict)
     saved_checkpoint_steps: set[int] = field(default_factory=set)
-    train_recent_successes: deque[int] = field(
-        default_factory=lambda: deque(maxlen=20)
-    )
+    train_recent_successes: deque[int] = field(default_factory=lambda: deque(maxlen=20))
     warmup_recent_successes: deque[int] = field(
         default_factory=lambda: deque(maxlen=20)
     )
@@ -88,6 +92,8 @@ class ActorLoopState:
 
 
 def initialize_actor_loop_state(ctx: ActorRuntimeContext) -> ActorLoopState:
+    task_cfg = ctx.cfg.get("task", {})
+    task_seed_base = int(task_cfg.get("seed_base", 0)) if task_cfg is not None else 0
     warmup_recent_successes = deque(
         [int(v) for v in ctx.online_prefill_stats.get("recent_episode_successes", [])],
         maxlen=20,
@@ -102,7 +108,7 @@ def initialize_actor_loop_state(ctx: ActorRuntimeContext) -> ActorLoopState:
         train_total_success=0,
         warmup_total_success=int(ctx.online_prefill_stats.get("success_episodes", 0)),
         skipped_seeds=0,
-        seed_cursor=int(ctx.cfg.task.seed_base) + int(ctx.online_prefill_loaded_episodes),
+        seed_cursor=int(task_seed_base) + int(ctx.online_prefill_loaded_episodes),
         stopped_by_env_budget=False,
         profiling_last_flush_step=int(ctx.profiling_last_flush_step),
         warmup_recent_successes=warmup_recent_successes,
@@ -133,7 +139,7 @@ def runtime_image_keys(ctx: ActorRuntimeContext) -> tuple[str, ...]:
 
 
 def runtime_normalizer(ctx: ActorRuntimeContext):
-    return ctx.bindings.normalizer
+    return getattr(ctx.bindings, "normalizer", None)
 
 
 def runtime_obs_cache(ctx: ActorRuntimeContext):
@@ -501,7 +507,9 @@ def ensure_training_runtime_started(ctx: ActorRuntimeContext) -> None:
         assert ctx.replay_buffer is not None
         assert ctx.sync_replay_lock is not None
         with ctx.sync_replay_lock:
-            if replay_progress_size(ctx.replay_buffer) < int(ctx.cfg.training.training_starts):
+            if replay_progress_size(ctx.replay_buffer) < int(
+                ctx.cfg.training.training_starts
+            ):
                 return None
             return _sample_mixed_batch(
                 ctx.replay_buffer,

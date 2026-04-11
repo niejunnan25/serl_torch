@@ -28,29 +28,28 @@ from pathlib import Path
 import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
-from serl_launcher.data.normalizer import StateActionNormalizer
-from serl_launcher.data.normalizer import load_normalizer
-from serl_launcher.policy.factory import build_policy_client
+from serl_launcher.agents.continuous.drq import DrQAgent
+from serl_launcher.policy.joyra.client import JoyRAPolicyClient
+from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
-from serl_launcher.residual.algorithms.sac import ResidualSACAlgorithm
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
 from serl_launcher.residual.train.config import (
     resolve_residual_observation_state_mode,
 )
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
+from serl_launcher.training.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.training.checkpoint import _write_checkpoint_payload
 from serl_launcher.training.loop_utils import _count_env_step_update_triggers
 from serl_launcher.training.loop_utils import _iter_period_hits
-from serl_launcher.training.seeding import set_global_seeds
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.logger import JsonlLogger
 
@@ -59,8 +58,7 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.agibot_real.config import resolve_agibot_cfg_image_keys
-from serl_torch.examples.agibot_real.config import resolve_agibot_cfg_task_key
-from serl_torch.examples.agibot_real.env.factory import _create_env
+from serl_torch.examples.agibot_real.env.task_env import AgiBotTaskEnv
 from serl_torch.examples.agibot_real.runtime.obs_adapter import (
     build_residual_step_core,
 )
@@ -131,21 +129,15 @@ def _validate_cfg(cfg: DictConfig) -> None:
         raise ValueError(
             "reference-style actor currently supports only residual.algorithm.type=sac"
         )
-    for phase in cfg.training.phases:
-        if not bool(phase.get("train", True)):
-            raise ValueError(
-                "reference-style actor currently supports only train=true phases"
-            )
-
-
-def _normalize_action(
-    action: np.ndarray,
-    normalizer: StateActionNormalizer | None,
-) -> np.ndarray:
-    action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-    if normalizer is None:
-        return action_arr
-    return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
+    phases = list(cfg.training.phases)
+    if len(phases) != 1:
+        raise ValueError(
+            "reference-style actor currently supports exactly one training phase"
+        )
+    if not bool(phases[0].get("train", True)):
+        raise ValueError(
+            "reference-style actor currently supports only train=true phases"
+        )
 
 
 @hydra.main(
@@ -163,29 +155,96 @@ def main(cfg: DictConfig) -> None:
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
     _validate_cfg(cfg)
-    set_global_seeds(int(cfg.seed))
 
-    env = _create_env(cfg, logger)
-    image_keys = tuple(resolve_agibot_cfg_image_keys(cfg))
-    task_key = resolve_agibot_cfg_task_key(cfg)
+    task_cfg = cfg.get("task", {})
+    robot_cfg = cfg.get("robot", {})
+    controller_cfg = OmegaConf.to_container(cfg.get("controller", {}), resolve=True)
+    assets_root = robot_cfg.get("assets_root", None)
 
-    normalizer: StateActionNormalizer | None = None
-    norm_cfg = cfg.get("normalization", None)
-    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
-        stats_dir_value = norm_cfg.get("stats_dir", None)
-        if stats_dir_value is None:
-            stats_dir_value = (
-                Path(__file__).resolve().parents[2] / "data" / "stats"
-            ).resolve()
-        normalizer = load_normalizer(
-            task_key,
-            stats_dir=str(Path(str(stats_dir_value)).expanduser().resolve()),
+    retargeter_urdf_path = robot_cfg.get("retargeter_urdf_path", None)
+    if retargeter_urdf_path is None:
+        if assets_root is not None:
+            retargeter_urdf_path = str(
+                (Path(str(assets_root)).expanduser() / "G1" / "model.urdf").resolve()
+            )
+        else:
+            retargeter_urdf_path = str(
+                (
+                    Path(__file__).resolve().parents[2] / "assets" / "G1" / "model.urdf"
+                ).resolve()
+            )
+    else:
+        retargeter_urdf_path = str(
+            Path(str(retargeter_urdf_path)).expanduser().resolve()
         )
-        if normalizer is not None:
-            logger.info("Loaded normalizer for task_key=%s", task_key)
 
-    policy_client = build_policy_client(cfg, logger=logger)
-    algorithm = ResidualSACAlgorithm()
+    retargeter_camera_extrinsic_path = robot_cfg.get(
+        "retargeter_camera_extrinsic_path", None
+    )
+    if retargeter_camera_extrinsic_path is None:
+        if assets_root is not None:
+            retargeter_camera_extrinsic_path = str(
+                (
+                    Path(str(assets_root)).expanduser()
+                    / "G1"
+                    / "head_extrinsic_ours.json"
+                ).resolve()
+            )
+        else:
+            retargeter_camera_extrinsic_path = str(
+                (
+                    Path(__file__).resolve().parents[2]
+                    / "assets"
+                    / "G1"
+                    / "head_extrinsic_ours.json"
+                ).resolve()
+            )
+    else:
+        retargeter_camera_extrinsic_path = str(
+            Path(str(retargeter_camera_extrinsic_path)).expanduser().resolve()
+        )
+
+    env = AgiBotTaskEnv(
+        task_name=str(task_cfg.get("name", "agibot_real_task")),
+        prompt=str(task_cfg.get("prompt", task_cfg.get("name", "agibot_real_task"))),
+        action_dim=int(cfg.get("env", {}).get("action_dim", 14)),
+        control_mode=str(task_cfg.get("control_mode", "camera_position")),
+        hz=float(task_cfg.get("hz", 20.0)),
+        use_smooth_trajectory=bool(task_cfg.get("use_smooth_trajectory", False)),
+        trajectory_time=task_cfg.get("trajectory_time", None),
+        max_episode_steps=task_cfg.get("max_episode_steps", None),
+        retargeter_urdf_path=retargeter_urdf_path,
+        retargeter_camera_extrinsic_path=retargeter_camera_extrinsic_path,
+        controller=controller_cfg,
+        reset_hook=task_cfg.get("reset_hook", None),
+        success_hook=task_cfg.get("success_hook", None),
+        expert_precheck_hook=task_cfg.get("expert_precheck_hook", None),
+        logger=logger,
+    )
+    image_keys = tuple(resolve_agibot_cfg_image_keys(cfg))
+
+    policy_type = (
+        str(cfg.get("policy", {}).get("type", "openpi")).strip().lower() or "openpi"
+    )
+    if policy_type == "openpi":
+        openpi_cfg = cfg.get("openpi", {})
+        policy_client = OpenPIPolicyClient(
+            host=str(openpi_cfg.get("host", "localhost")),
+            port=int(openpi_cfg.get("port", 30001)),
+            logger=logger,
+        )
+    elif policy_type == "joyra":
+        joyra_cfg = cfg.get("joyra", cfg.get("openpi", {}))
+        policy_client = JoyRAPolicyClient(
+            host=str(joyra_cfg.get("host", "localhost")),
+            port=int(joyra_cfg.get("port", 30001)),
+            action_dim=int(cfg.get("env", {}).get("action_dim", 14)),
+            logger=logger,
+        )
+    else:
+        raise ValueError(
+            f"Unsupported policy.type for reference-style actor: {policy_type!r}"
+        )
 
     env_action_dim = int(cfg.get("env", {}).get("action_dim", 14))
     chunk_horizon = int(cfg.residual.chunk_horizon)
@@ -217,7 +276,7 @@ def main(cfg: DictConfig) -> None:
         clip_gripper=bool(cfg.residual.clip_gripper),
     )
 
-    sample_obs_raw = env.reset(seed=int(cfg.task.seed_base), init_episode_idx=-1)
+    sample_obs_raw = env.reset()
     sample_base_chunk = np.zeros(
         (chunk_horizon, env_action_dim),
         dtype=np.float32,
@@ -227,7 +286,6 @@ def main(cfg: DictConfig) -> None:
         sample_base_chunk[0],
         image_keys=image_keys,
         stack_horizon=1,
-        normalizer=normalizer,
         action_dim=env_action_dim,
         base_action_chunk=sample_base_chunk,
         alpha=float(residual_alpha),
@@ -236,16 +294,123 @@ def main(cfg: DictConfig) -> None:
     sample_state_core = build_residual_step_core(
         sample_obs_raw,
         image_keys=image_keys,
-        normalizer=normalizer,
     )["state_core"]
 
-    agent = algorithm.build_learner_agent(
-        cfg,
-        sample_obs=sample_obs,
-        action_dim=int(step_action_dim * chunk_horizon),
+    opt_cfg = cfg.sac.get("optimizer", None)
+    actor_optimizer_kwargs = {"learning_rate": float(cfg.sac.learning_rate)}
+    critic_optimizer_kwargs = {"learning_rate": float(cfg.sac.learning_rate)}
+    temperature_optimizer_kwargs = {"learning_rate": float(cfg.sac.learning_rate)}
+    if opt_cfg is not None:
+        opt_type = str(opt_cfg.get("type", "adam")).lower()
+        if opt_type not in {"adam", "adamw"}:
+            raise ValueError(f"Unsupported sac.optimizer.type: {opt_type}")
+        if opt_type == "adamw":
+            weight_decay = float(opt_cfg.get("weight_decay", 0.0))
+            actor_optimizer_kwargs["weight_decay"] = weight_decay
+            critic_optimizer_kwargs["weight_decay"] = weight_decay
+        warmup_steps = opt_cfg.get("warmup_steps", None)
+        if warmup_steps is not None:
+            actor_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
+            critic_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
+            temperature_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
+        cosine_decay_steps = opt_cfg.get("cosine_decay_steps", None)
+        if cosine_decay_steps is not None:
+            actor_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
+            critic_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
+            temperature_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
+        grad_clip_norm = opt_cfg.get("grad_clip_norm", None)
+        if grad_clip_norm is not None:
+            actor_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
+            critic_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
+            temperature_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
+        if opt_type == "adamw":
+            temp_weight_decay = opt_cfg.get("temperature_weight_decay", None)
+            if temp_weight_decay is not None:
+                temperature_optimizer_kwargs["weight_decay"] = float(temp_weight_decay)
+
+    resnet_kwargs = None
+    resnet_cfg = cfg.sac.get("resnet", None)
+    if resnet_cfg is not None:
+        model_name = str(resnet_cfg.get("model_name", "microsoft/resnet-18"))
+        if not Path(model_name).is_absolute() and not model_name.startswith(
+            ("http://", "https://")
+        ):
+            candidate = Path(get_original_cwd()) / model_name
+            if candidate.is_dir():
+                model_name = str(candidate)
+        resnet_kwargs = {
+            "model_name": model_name,
+            "pretrained": bool(resnet_cfg.get("pretrained", True)),
+            "freeze_backbone": bool(resnet_cfg.get("freeze_backbone", False)),
+            "pooling_method": str(
+                resnet_cfg.get("pooling_method", "spatial_learned_embeddings")
+            ),
+            "num_spatial_blocks": int(resnet_cfg.get("num_spatial_blocks", 8)),
+            "bottleneck_dim": int(resnet_cfg.get("bottleneck_dim", 256)),
+        }
+
+    mixed_precision_cfg = cfg.get("training", {}).get("mixed_precision", None)
+    mixed_precision = {
+        "enabled": bool(
+            mixed_precision_cfg.get("enabled", False)
+            if mixed_precision_cfg is not None
+            else False
+        ),
+        "dtype": str(
+            mixed_precision_cfg.get("dtype", "bfloat16")
+            if mixed_precision_cfg is not None
+            else "bfloat16"
+        ),
+    }
+
+    sample_action = np.zeros((int(step_action_dim * chunk_horizon),), dtype=np.float32)
+    sample_critic_action = np.zeros(
+        (int(env_action_dim * chunk_horizon),), dtype=np.float32
+    )
+    agent = DrQAgent.create_drq(
+        0,
+        sample_obs,
+        sample_action,
+        critic_actions=sample_critic_action,
+        encoder_type=str(cfg.sac.encoder_type),
+        shared_encoder=bool(cfg.sac.shared_encoder),
+        use_proprio=bool(cfg.sac.use_proprio),
+        critic_network_kwargs={
+            "activations": str(cfg.sac.critic_activation),
+            "use_layer_norm": bool(cfg.sac.critic_layer_norm),
+            "hidden_dims": [int(v) for v in cfg.sac.critic_hidden_dims],
+        },
+        policy_network_kwargs={
+            "activations": str(cfg.sac.policy_activation),
+            "use_layer_norm": bool(cfg.sac.policy_layer_norm),
+            "hidden_dims": [int(v) for v in cfg.sac.policy_hidden_dims],
+        },
+        policy_kwargs={
+            "tanh_squash_distribution": True,
+            "std_parameterization": "exp",
+            "std_min": float(cfg.sac.std_min),
+            "std_max": float(cfg.sac.std_max),
+        },
+        actor_optimizer_kwargs=actor_optimizer_kwargs,
+        critic_optimizer_kwargs=critic_optimizer_kwargs,
+        temperature_optimizer_kwargs=temperature_optimizer_kwargs,
+        discount=float(cfg.sac.discount),
+        soft_target_update_rate=float(cfg.sac.soft_target_update_rate),
+        temperature_init=float(cfg.sac.temperature_init),
+        backup_entropy=bool(cfg.sac.backup_entropy),
+        critic_ensemble_size=int(cfg.sac.critic_ensemble_size),
+        critic_subsample_size=(
+            int(cfg.sac.critic_subsample_size)
+            if cfg.sac.critic_subsample_size is not None
+            else None
+        ),
         image_keys=image_keys,
-        critic_action_dim=int(env_action_dim * chunk_horizon),
+        resnet_kwargs=resnet_kwargs,
         action_transform=action_transform,
+        mixed_precision=mixed_precision,
+        otf_num_samples=int(cfg.sac.get("otf_num_samples", 1)),
+        cql_n_actions=int(cfg.sac.get("cql_n_actions", 10)),
+        cql_temperature=float(cfg.sac.get("cql_temperature", 1.0)),
     )
 
     replay_buffer = ChunkReplayBuffer(
@@ -266,6 +431,9 @@ def main(cfg: DictConfig) -> None:
     checkpoint_keep = int(checkpoint_cfg.get("keep", 0))
     checkpoint_dir = run_dir / str(checkpoint_cfg.get("dir", "checkpoints"))
     episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
+    phase_cfg = cfg.training.phases[0]
+    phase_name = str(phase_cfg.get("name", "train"))
+    total_episodes = int(phase_cfg.get("episodes", 0))
 
     max_train_env_steps = int(cfg.training.get("max_train_env_steps", 0))
     progress = tqdm(
@@ -278,269 +446,237 @@ def main(cfg: DictConfig) -> None:
     train_env_step = 0
     train_episode_id = 0
     train_total_success = 0
-    seed_cursor = int(cfg.task.seed_base)
     stopped_by_env_budget = False
     last_update_info: dict[str, object] = {}
 
     try:
-        for phase in cfg.training.phases:
-            phase_name = str(phase.get("name", "train"))
-            phase_episodes = int(phase.get("episodes", 0))
+        while train_episode_id < total_episodes:
+            if max_train_env_steps > 0 and train_env_step >= max_train_env_steps:
+                stopped_by_env_budget = True
+                break
 
-            for phase_episode_idx in range(1, phase_episodes + 1):
+            current_train_episode_id = int(train_episode_id + 1)
+            obs_raw = env.reset()
+
+            max_episode_steps = int(env.step_limit)
+            if cfg.training.max_env_steps_per_episode is not None:
+                max_episode_steps = min(
+                    max_episode_steps,
+                    int(cfg.training.max_env_steps_per_episode),
+                )
+
+            episode_steps = 0
+            episode_return = 0.0
+            episode_success = False
+            episode_done = False
+
+            while episode_steps < max_episode_steps and not episode_done:
                 if max_train_env_steps > 0 and train_env_step >= max_train_env_steps:
                     stopped_by_env_budget = True
                     break
 
-                current_train_episode_id = int(train_episode_id + 1)
-                current_init_episode_idx = int(train_episode_id)
-                seed = int(seed_cursor)
-                seed_cursor += 1
+                alpha_step = float(residual_alpha)
 
-                obs_raw = env.reset(
-                    seed=seed,
-                    init_episode_idx=current_init_episode_idx,
+                policy_input = build_agibot_policy_input(
+                    obs_raw,
+                    env.current_instruction,
+                )
+                base_policy_chunk, _ = policy_client.infer_chunk(policy_input)
+                base_chunk = select_action_chunk_window(
+                    base_policy_chunk,
+                    horizon=chunk_horizon,
+                    action_dim=env_action_dim,
                 )
 
-                max_episode_steps = int(env.step_limit)
-                if cfg.training.max_env_steps_per_episode is not None:
-                    max_episode_steps = min(
-                        max_episode_steps,
-                        int(cfg.training.max_env_steps_per_episode),
+                residual_obs = build_residual_step_obs(
+                    obs_raw,
+                    base_chunk[0],
+                    image_keys=image_keys,
+                    stack_horizon=1,
+                    action_dim=env_action_dim,
+                    base_action_chunk=base_chunk,
+                    alpha=float(alpha_step),
+                    state_mode=obs_state_mode,
+                )
+
+                residual_chunk = as_numpy_action_chunk(
+                    agent.sample_actions(
+                        residual_obs,
+                        deterministic=False,
+                    ),
+                    action_dim=step_action_dim,
+                    chunk_horizon=chunk_horizon,
+                )
+
+                execute_horizon = min(
+                    chunk_horizon,
+                    max_episode_steps - episode_steps,
+                )
+                if max_train_env_steps > 0:
+                    execute_horizon = min(
+                        execute_horizon,
+                        max(0, max_train_env_steps - train_env_step),
                     )
-
-                episode_steps = 0
-                episode_return = 0.0
-                episode_success = False
-                episode_done = False
-
-                while episode_steps < max_episode_steps and not episode_done:
-                    if (
+                if execute_horizon <= 0:
+                    stopped_by_env_budget = bool(
                         max_train_env_steps > 0
                         and train_env_step >= max_train_env_steps
-                    ):
-                        stopped_by_env_budget = True
-                        break
+                    )
+                    break
 
-                    alpha_step = _scheduled_alpha(
-                        cfg,
-                        base_alpha=float(residual_alpha),
-                        schedule_step=int(train_env_step),
-                    )
+                executed_base_chunk = np.asarray(
+                    base_chunk[:execute_horizon],
+                    dtype=np.float32,
+                )
+                executed_residual_chunk = np.asarray(
+                    residual_chunk[:execute_horizon],
+                    dtype=np.float32,
+                )
+                _, final_chunk = compose_residual_action_chunk(
+                    base_chunk=executed_base_chunk,
+                    residual_chunk=executed_residual_chunk,
+                    indices=control_indices,
+                    limits=residual_limits,
+                    alpha=float(alpha_step),
+                    clip_gripper=bool(cfg.residual.clip_gripper),
+                )
 
-                    policy_input = build_agibot_policy_input(
-                        obs_raw,
-                        env.current_instruction,
-                    )
-                    base_policy_chunk, _ = policy_client.infer_chunk(policy_input)
-                    base_chunk = select_action_chunk_window(
-                        base_policy_chunk,
-                        horizon=chunk_horizon,
-                        action_dim=env_action_dim,
-                    )
+                replay_size_before = int(replay_buffer.num_steps)
+                train_env_step_before = int(train_env_step)
+                chunk_result = env.step_chunk(final_chunk)
 
-                    residual_obs = build_residual_step_obs(
-                        obs_raw,
-                        base_chunk[0],
-                        image_keys=image_keys,
-                        stack_horizon=1,
-                        normalizer=normalizer,
-                        action_dim=env_action_dim,
-                        base_action_chunk=base_chunk,
-                        alpha=float(alpha_step),
-                        state_mode=obs_state_mode,
-                    )
+                chunk_rewards = [float(v) for v in chunk_result["rewards"]]
+                chunk_infos = [dict(v) for v in chunk_result["infos"]]
+                chunk_dones = [bool(v) for v in chunk_result["dones"]]
+                chunk_observations = list(chunk_result["observations"])
+                next_obs_raw = chunk_result["obs"]
+                actual_chunk_steps = int(len(chunk_rewards))
 
-                    residual_chunk = as_numpy_action_chunk(
-                        algorithm.sample_actions(
-                            agent,
-                            residual_obs,
-                            deterministic=False,
-                        ),
-                        action_dim=step_action_dim,
-                        chunk_horizon=chunk_horizon,
-                    )
+                executed_base_chunk = executed_base_chunk[:actual_chunk_steps]
+                final_chunk = final_chunk[:actual_chunk_steps]
 
-                    execute_horizon = min(
-                        chunk_horizon,
-                        max_episode_steps - episode_steps,
-                    )
-                    if max_train_env_steps > 0:
-                        execute_horizon = min(
-                            execute_horizon,
-                            max(0, max_train_env_steps - train_env_step),
-                        )
-                    if execute_horizon <= 0:
-                        stopped_by_env_budget = bool(
+                current_step_obs_raw = obs_raw
+                for chunk_step in range(actual_chunk_steps):
+                    reward = float(chunk_rewards[chunk_step])
+                    info = dict(chunk_infos[chunk_step])
+
+                    done_flag = bool(
+                        chunk_dones[chunk_step]
+                        or (episode_steps + 1) >= max_episode_steps
+                        or (
                             max_train_env_steps > 0
-                            and train_env_step >= max_train_env_steps
+                            and (train_env_step + 1) >= max_train_env_steps
                         )
+                    )
+
+                    replay_buffer.insert(
+                        {
+                            "obs_core": build_residual_step_core(
+                                current_step_obs_raw,
+                                image_keys=image_keys,
+                            ),
+                            "base_action": np.asarray(
+                                executed_base_chunk[chunk_step],
+                                dtype=np.float32,
+                            ).reshape(-1),
+                            "base_action_norm": np.asarray(
+                                executed_base_chunk[chunk_step],
+                                dtype=np.float32,
+                            ).reshape(-1),
+                            "actions": np.asarray(
+                                final_chunk[chunk_step],
+                                dtype=np.float32,
+                            ).reshape(-1),
+                            "rewards": float(reward),
+                            "dones": bool(done_flag),
+                            "alpha": float(alpha_step),
+                            "episode_id": int(train_episode_id),
+                            "episode_step": int(episode_steps),
+                        }
+                    )
+
+                    episode_steps += 1
+                    train_env_step += 1
+                    episode_return += float(reward)
+                    episode_success = bool(info.get("success", episode_success))
+                    progress.update(1)
+
+                    if chunk_step < actual_chunk_steps - 1:
+                        current_step_obs_raw = chunk_observations[chunk_step]
+                    if done_flag:
+                        episode_done = True
                         break
 
-                    executed_base_chunk = np.asarray(
-                        base_chunk[:execute_horizon],
-                        dtype=np.float32,
+                replay_size_after = int(replay_buffer.num_steps)
+                if replay_size_after >= int(cfg.training.training_starts):
+                    trigger_count = _count_env_step_update_triggers(
+                        train_step_before=int(train_env_step_before),
+                        train_step_after=int(train_env_step),
+                        replay_size_before=int(replay_size_before),
+                        replay_size_after=int(replay_size_after),
+                        training_starts=int(cfg.training.training_starts),
+                        update_every=int(cfg.training.update_every),
                     )
-                    executed_residual_chunk = np.asarray(
-                        residual_chunk[:execute_horizon],
-                        dtype=np.float32,
+                    num_updates = int(trigger_count) * int(
+                        cfg.training.updates_per_step
                     )
-                    _, final_chunk = compose_residual_action_chunk(
-                        base_chunk=executed_base_chunk,
-                        residual_chunk=executed_residual_chunk,
-                        indices=control_indices,
-                        limits=residual_limits,
-                        alpha=float(alpha_step),
-                        clip_gripper=bool(cfg.residual.clip_gripper),
+                    for _ in range(num_updates):
+                        batch = replay_buffer.sample(int(cfg.replay.batch_size))
+                        agent, last_update_info = agent.update_high_utd(
+                            batch,
+                            utd_ratio=int(cfg.sac.utd_ratio),
+                        )
+
+                for checkpoint_step in _iter_period_hits(
+                    step_before=int(train_env_step_before),
+                    step_after=int(train_env_step),
+                    period=int(checkpoint_every_steps),
+                ):
+                    _write_checkpoint_payload(
+                        None,
+                        str(checkpoint_dir),
+                        _snapshot_agent_checkpoint_payload(
+                            agent, step=int(checkpoint_step)
+                        ),
+                        step=int(checkpoint_step),
+                        keep=int(checkpoint_keep),
                     )
 
-                    replay_size_before = int(replay_buffer.num_steps)
-                    train_env_step_before = int(train_env_step)
-                    chunk_result = env.step_chunk(final_chunk)
+                obs_raw = next_obs_raw
 
-                    chunk_rewards = [float(v) for v in chunk_result["rewards"]]
-                    chunk_infos = [dict(v) for v in chunk_result["infos"]]
-                    chunk_dones = [bool(v) for v in chunk_result["dones"]]
-                    chunk_observations = list(chunk_result["observations"])
-                    next_obs_raw = chunk_result["obs"]
-                    actual_chunk_steps = int(len(chunk_rewards))
+            train_total_success += int(episode_success)
+            train_episode_id = int(current_train_episode_id)
+            running_success_rate = float(train_total_success) / float(train_episode_id)
 
-                    executed_base_chunk = executed_base_chunk[:actual_chunk_steps]
-                    final_chunk = final_chunk[:actual_chunk_steps]
-
-                    current_step_obs_raw = obs_raw
-                    for chunk_step in range(actual_chunk_steps):
-                        reward = float(chunk_rewards[chunk_step])
-                        info = dict(chunk_infos[chunk_step])
-
-                        done_flag = bool(
-                            chunk_dones[chunk_step]
-                            or (episode_steps + 1) >= max_episode_steps
-                            or (
-                                max_train_env_steps > 0
-                                and (train_env_step + 1) >= max_train_env_steps
-                            )
+            episode_logger.write(
+                {
+                    "phase": phase_name,
+                    "train_episode_id": int(current_train_episode_id),
+                    "success": bool(episode_success),
+                    "episode_steps": int(episode_steps),
+                    "episode_return": float(episode_return),
+                    "train_env_step": int(train_env_step),
+                    "running_success_rate": float(running_success_rate),
+                    "last_update_info": {
+                        key: (
+                            float(value)
+                            if isinstance(value, (int, float, np.floating))
+                            else value
                         )
+                        for key, value in dict(last_update_info).items()
+                    },
+                }
+            )
 
-                        replay_buffer.insert(
-                            {
-                                "obs_core": build_residual_step_core(
-                                    current_step_obs_raw,
-                                    image_keys=image_keys,
-                                    normalizer=normalizer,
-                                ),
-                                "base_action": np.asarray(
-                                    executed_base_chunk[chunk_step],
-                                    dtype=np.float32,
-                                ).reshape(-1),
-                                "base_action_norm": _normalize_action(
-                                    executed_base_chunk[chunk_step],
-                                    normalizer,
-                                ),
-                                "actions": np.asarray(
-                                    final_chunk[chunk_step],
-                                    dtype=np.float32,
-                                ).reshape(-1),
-                                "rewards": float(reward),
-                                "dones": bool(done_flag),
-                                "alpha": float(alpha_step),
-                                "episode_id": int(current_init_episode_idx),
-                                "episode_step": int(episode_steps),
-                            }
-                        )
-
-                        episode_steps += 1
-                        train_env_step += 1
-                        episode_return += float(reward)
-                        episode_success = bool(info.get("success", episode_success))
-                        progress.update(1)
-
-                        if chunk_step < actual_chunk_steps - 1:
-                            current_step_obs_raw = chunk_observations[chunk_step]
-                        if done_flag:
-                            episode_done = True
-                            break
-
-                    replay_size_after = int(replay_buffer.num_steps)
-                    if replay_size_after >= int(cfg.training.training_starts):
-                        trigger_count = _count_env_step_update_triggers(
-                            train_step_before=int(train_env_step_before),
-                            train_step_after=int(train_env_step),
-                            replay_size_before=int(replay_size_before),
-                            replay_size_after=int(replay_size_after),
-                            training_starts=int(cfg.training.training_starts),
-                            update_every=int(cfg.training.update_every),
-                        )
-                        num_updates = int(trigger_count) * int(
-                            cfg.training.updates_per_step
-                        )
-                        for _ in range(num_updates):
-                            batch = replay_buffer.sample(int(cfg.replay.batch_size))
-                            agent, last_update_info = algorithm.update_high_utd(
-                                agent,
-                                batch,
-                                utd_ratio=int(cfg.sac.utd_ratio),
-                            )
-
-                    for checkpoint_step in _iter_period_hits(
-                        step_before=int(train_env_step_before),
-                        step_after=int(train_env_step),
-                        period=int(checkpoint_every_steps),
-                    ):
-                        _write_checkpoint_payload(
-                            None,
-                            str(checkpoint_dir),
-                            algorithm.snapshot_checkpoint_payload(
-                                agent,
-                                step=int(checkpoint_step),
-                            ),
-                            step=int(checkpoint_step),
-                            keep=int(checkpoint_keep),
-                        )
-
-                    obs_raw = next_obs_raw
-
-                train_total_success += int(episode_success)
-                train_episode_id = int(current_train_episode_id)
-                running_success_rate = float(train_total_success) / float(
-                    train_episode_id
-                )
-
-                episode_logger.write(
-                    {
-                        "phase": phase_name,
-                        "train_episode_id": int(current_train_episode_id),
-                        "phase_episode_idx": int(phase_episode_idx),
-                        "seed": int(seed),
-                        "init_state_idx": int(current_init_episode_idx),
-                        "success": bool(episode_success),
-                        "episode_steps": int(episode_steps),
-                        "episode_return": float(episode_return),
-                        "train_env_step": int(train_env_step),
-                        "running_success_rate": float(running_success_rate),
-                        "last_update_info": {
-                            key: (
-                                float(value)
-                                if isinstance(value, (int, float, np.floating))
-                                else value
-                            )
-                            for key, value in dict(last_update_info).items()
-                        },
-                    }
-                )
-
-                logger.info(
-                    "phase=%s train_episode=%s success=%s steps=%s return=%.2f train_env_step=%s",
-                    phase_name,
-                    int(current_train_episode_id),
-                    bool(episode_success),
-                    int(episode_steps),
-                    float(episode_return),
-                    int(train_env_step),
-                )
-
-            if stopped_by_env_budget:
-                break
+            logger.info(
+                "phase=%s train_episode=%s success=%s steps=%s return=%.2f train_env_step=%s",
+                phase_name,
+                int(current_train_episode_id),
+                bool(episode_success),
+                int(episode_steps),
+                float(episode_return),
+                int(train_env_step),
+            )
 
         summary = {
             "train_env_step": int(train_env_step),

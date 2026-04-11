@@ -10,7 +10,9 @@ import numpy as np
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.train.actor.episode_shared import apply_training_updates_and_runtime_hooks
+from serl_launcher.residual.train.actor.episode_shared import (
+    apply_training_updates_and_runtime_hooks,
+)
 from serl_launcher.residual.train.actor.episode_shared import EpisodeSpec
 from serl_launcher.residual.train.actor.episode_shared import EpisodeState
 from serl_launcher.residual.train.actor.episode_shared import insert_online_transitions
@@ -156,7 +158,9 @@ def execute_step_decision(
             and state.train_env_step >= max_train_env_steps
         )
         done = bool(env_done or timeout or budget_exhausted)
-        next_chunk_future: Optional[Future[Tuple[np.ndarray, Dict[str, Optional[float]]]]] = None
+        next_chunk_future: Optional[
+            Future[Tuple[np.ndarray, Dict[str, Optional[float]]]]
+        ] = None
         if (
             (not done)
             and chunk_step == (chunk_horizon - 1)
@@ -168,14 +172,20 @@ def execute_step_decision(
 
         step_logger.write(
             {
-                "train_env_step": int(state.train_env_step) if spec.phase_train else None,
+                "train_env_step": int(state.train_env_step)
+                if spec.phase_train
+                else None,
                 "decision_step": current_decision_id,
                 "warmup_episode_id": None,
                 "train_episode_id": spec.train_episode_id,
                 "phase_episode_idx": int(spec.phase_episode_idx),
                 "phase": str(spec.phase_name),
                 "episode_step": state.episode_steps,
-                "seed": int(env.last_seed if env.last_seed is not None else spec.seed),
+                "seed": int(
+                    getattr(env, "last_seed", None)
+                    if getattr(env, "last_seed", None) is not None
+                    else spec.seed
+                ),
                 "init_state_idx": (
                     int(env.current_init_state_idx)
                     if env.current_init_state_idx is not None
@@ -186,8 +196,12 @@ def execute_step_decision(
                 "chunk_step": int(chunk_step),
                 "chunk_horizon": int(chunk_horizon),
                 "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                "infer_policy_ms": infer_info.get("policy_ms")
+                if chunk_step == 0
+                else None,
+                "infer_server_ms": infer_info.get("server_ms")
+                if chunk_step == 0
+                else None,
                 "a_base": base_chunk[chunk_step].tolist(),
                 "a_res_policy": policy_residual_step_action.tolist(),
                 "a_res_policy_applied": residual_step_action.tolist(),
@@ -280,7 +294,8 @@ def execute_step_decision(
         if (
             state.async_learner is None
             and spec.phase_train
-            and replay_progress_size(state.replay_buffer) >= int(cfg.training.training_starts)
+            and replay_progress_size(state.replay_buffer)
+            >= int(cfg.training.training_starts)
             and train_env_step_before_step % int(cfg.training.update_every) == 0
         ):
             num_sync_updates = int(cfg.training.updates_per_step)

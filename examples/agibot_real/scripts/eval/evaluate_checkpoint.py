@@ -17,9 +17,7 @@ from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 
-from serl_launcher.agents.continuous.builders import build_drq_agent
-from serl_launcher.data.normalizer import StateActionNormalizer
-from serl_launcher.data.normalizer import load_normalizer
+from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
 from serl_launcher.policy.factory import build_policy_backend_info
 from serl_launcher.policy.factory import build_policy_client
 from serl_launcher.residual.action import as_numpy_action
@@ -34,7 +32,6 @@ from serl_launcher.residual.train.config import resolve_residual_observation_sta
 from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.train.schedules import _epsilon_gating_eval_force_on
 from serl_launcher.residual.train.schedules import _scheduled_epsilon_gating_probability
-from serl_launcher.training.seeding import set_global_seeds
 from serl_launcher.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.checkpoint_utils import load_agent_checkpoint
 from serl_launcher.utils.logger import JsonlLogger
@@ -44,7 +41,6 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.agibot_real.config import resolve_agibot_cfg_image_keys
-from serl_torch.examples.agibot_real.config import resolve_agibot_cfg_task_key
 from serl_torch.examples.agibot_real.env.factory import _create_env
 from serl_torch.examples.agibot_real.runtime.controller_rollout import (
     ControllerExecutedStep,
@@ -79,30 +75,13 @@ def main(cfg: DictConfig) -> None:
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
-    set_global_seeds(int(cfg.seed))
-
     env = _create_env(cfg, logger)
     logger.info(
         "AgiBot task: name=%s prompt=%s", cfg.task.name, env.current_instruction
     )
 
-    normalizer: StateActionNormalizer | None = None
-    norm_cfg = cfg.get("normalization", None)
-    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
-        task_key = resolve_agibot_cfg_task_key(cfg)
-        stats_dir = norm_cfg.get(
-            "stats_dir",
-            str(Path(__file__).resolve().parents[2] / "data" / "stats"),
-        )
-        normalizer = load_normalizer(task_key, stats_dir=stats_dir)
-        if normalizer is not None:
-            logger.info("Loaded normalizer for task_key=%s", task_key)
     obs_state_mode = resolve_residual_observation_state_mode(cfg)
-    logger.info(
-        "Residual observation state_mode=%s normalization.enabled=%s",
-        obs_state_mode,
-        bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
-    )
+    logger.info("Residual observation state_mode=%s", obs_state_mode)
 
     policy_backend_info = build_policy_backend_info(cfg)
     policy_client = build_policy_client(cfg, logger=logger)
@@ -187,26 +166,21 @@ def main(cfg: DictConfig) -> None:
     precheck_failed_episodes = 0
     obs_cache = AgiBotObservationCache()
 
-    eval_seed = int(cfg.eval.get("seed", 7))
-    logger.info("Evaluation uses fixed seed=%s for all episodes", eval_seed)
-
     try:
         episode_id = 0
         while episode_id < int(cfg.eval.episodes):
-            seed = int(eval_seed)
             if bool(cfg.eval.get("expert_check", False)):
-                passed, _ = env.expert_precheck(seed=seed, init_episode_idx=episode_id)
+                passed, _ = env.expert_precheck(init_episode_idx=episode_id)
                 if not passed:
                     precheck_failed_episodes += 1
                     logger.warning(
-                        "expert precheck failed for eval episode=%s (seed=%s); counting as failed episode",
+                        "expert precheck failed for eval episode=%s; counting as failed episode",
                         episode_id,
-                        seed,
                     )
                     episode_id += 1
                     continue
 
-            obs_raw = env.reset(seed=seed, init_episode_idx=episode_id)
+            obs_raw = env.reset(init_episode_idx=episode_id)
             obs_cache.clear()
             success = False
             episode_steps = 0
@@ -250,14 +224,13 @@ def main(cfg: DictConfig) -> None:
                             base_chunk[0],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
-                            normalizer=normalizer,
                             obs_cache=obs_cache,
                             base_action_chunk=base_chunk,
                             alpha=float(residual_alpha),
                             state_mode=obs_state_mode,
                             action_dim=env_action_dim,
                         )
-                        agent = build_drq_agent(
+                        agent = create_drq_agent_from_cfg(
                             cfg,
                             sample_obs=sample_obs,
                             action_dim=agent_action_dim,
@@ -278,7 +251,6 @@ def main(cfg: DictConfig) -> None:
                             base_chunk[0],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
-                            normalizer=normalizer,
                             obs_cache=obs_cache,
                             base_action_chunk=base_chunk,
                             alpha=float(residual_alpha),
@@ -382,9 +354,6 @@ def main(cfg: DictConfig) -> None:
                             "global_policy_step": int(total_policy_steps),
                             "episode_id": episode_id,
                             "episode_step": int(current_step),
-                            "seed": int(
-                                env.last_seed if env.last_seed is not None else seed
-                            ),
                             "replan_point": bool(executed.planned.chunk_step == 0),
                             "chunk_step": int(executed.planned.chunk_step),
                             "chunk_horizon": int(executed.planned.executed_horizon),
@@ -455,7 +424,6 @@ def main(cfg: DictConfig) -> None:
                             base_chunk[0],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
-                            normalizer=normalizer,
                             obs_cache=obs_cache,
                             base_action_chunk=(
                                 base_chunk if chunk_step_enabled else None
@@ -464,7 +432,7 @@ def main(cfg: DictConfig) -> None:
                             state_mode=obs_state_mode,
                             action_dim=env_action_dim,
                         )
-                        agent = build_drq_agent(
+                        agent = create_drq_agent_from_cfg(
                             cfg,
                             sample_obs=sample_obs,
                             action_dim=agent_action_dim,
@@ -486,7 +454,6 @@ def main(cfg: DictConfig) -> None:
                                 base_chunk[0],
                                 image_keys=image_keys,
                                 stack_horizon=stack_horizon,
-                                normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 base_action_chunk=base_chunk,
                                 alpha=float(residual_alpha),
@@ -542,11 +509,6 @@ def main(cfg: DictConfig) -> None:
                                     "global_policy_step": int(total_policy_steps),
                                     "episode_id": episode_id,
                                     "episode_step": episode_steps,
-                                    "seed": int(
-                                        env.last_seed
-                                        if env.last_seed is not None
-                                        else seed
-                                    ),
                                     "replan_point": bool(executed_step == 0),
                                     "chunk_step": int(executed_step),
                                     "chunk_horizon": int(execute_horizon),
@@ -584,7 +546,6 @@ def main(cfg: DictConfig) -> None:
                                 base_chunk[chunk_step],
                                 image_keys=image_keys,
                                 stack_horizon=stack_horizon,
-                                normalizer=normalizer,
                                 obs_cache=obs_cache,
                                 base_action_chunk=None,
                                 alpha=float(residual_alpha),
@@ -634,11 +595,6 @@ def main(cfg: DictConfig) -> None:
                                     "global_policy_step": int(total_policy_steps),
                                     "episode_id": episode_id,
                                     "episode_step": episode_steps,
-                                    "seed": int(
-                                        env.last_seed
-                                        if env.last_seed is not None
-                                        else seed
-                                    ),
                                     "replan_point": bool(chunk_step == 0),
                                     "chunk_step": int(chunk_step),
                                     "chunk_horizon": int(chunk_horizon),
@@ -668,7 +624,6 @@ def main(cfg: DictConfig) -> None:
             total_success += int(bool(success))
             episode_payload = {
                 "episode_id": episode_id,
-                "seed": int(env.last_seed if env.last_seed is not None else seed),
                 "episode_steps": int(episode_steps),
                 "episode_return": float(episode_return),
                 "success": bool(success),

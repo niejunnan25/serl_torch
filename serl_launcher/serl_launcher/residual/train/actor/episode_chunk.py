@@ -10,7 +10,9 @@ from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
-from serl_launcher.residual.train.actor.episode_shared import apply_training_updates_and_runtime_hooks
+from serl_launcher.residual.train.actor.episode_shared import (
+    apply_training_updates_and_runtime_hooks,
+)
 from serl_launcher.residual.train.actor.episode_shared import EpisodeSpec
 from serl_launcher.residual.train.actor.episode_shared import EpisodeState
 from serl_launcher.residual.train.actor.episode_shared import insert_online_transitions
@@ -135,10 +137,14 @@ def execute_chunk_decision(
         if spec.phase_train
         else None
     )
-    execute_horizon = int(min(chunk_horizon, spec.max_episode_steps - state.episode_steps))
+    execute_horizon = int(
+        min(chunk_horizon, spec.max_episode_steps - state.episode_steps)
+    )
     if remaining_budget_steps is not None:
         execute_horizon = int(min(execute_horizon, remaining_budget_steps))
-    if spec.phase_train and train_env_step_before_chunk < int(cfg.training.random_steps):
+    if spec.phase_train and train_env_step_before_chunk < int(
+        cfg.training.random_steps
+    ):
         execute_horizon = int(
             min(
                 execute_horizon,
@@ -182,7 +188,9 @@ def execute_chunk_decision(
     next_obs_raw = chunk_result["obs"]
     actual_chunk_steps = int(len(chunk_rewards))
     if actual_chunk_steps <= 0:
-        raise RuntimeError("env.step_chunk returned zero executed steps during training")
+        raise RuntimeError(
+            "env.step_chunk returned zero executed steps during training"
+        )
     executed_base_chunk = executed_base_chunk[:actual_chunk_steps]
     executed_residual_chunk = executed_residual_chunk[:actual_chunk_steps]
     delta_chunk = delta_chunk[:actual_chunk_steps]
@@ -218,14 +226,20 @@ def execute_chunk_decision(
 
         step_logger.write(
             {
-                "train_env_step": int(state.train_env_step) if spec.phase_train else None,
+                "train_env_step": int(state.train_env_step)
+                if spec.phase_train
+                else None,
                 "decision_step": current_decision_id,
                 "warmup_episode_id": None,
                 "train_episode_id": spec.train_episode_id,
                 "phase_episode_idx": int(spec.phase_episode_idx),
                 "phase": str(spec.phase_name),
                 "episode_step": state.episode_steps,
-                "seed": int(env.last_seed if env.last_seed is not None else spec.seed),
+                "seed": int(
+                    getattr(env, "last_seed", None)
+                    if getattr(env, "last_seed", None) is not None
+                    else spec.seed
+                ),
                 "init_state_idx": (
                     int(env.current_init_state_idx)
                     if env.current_init_state_idx is not None
@@ -236,8 +250,12 @@ def execute_chunk_decision(
                 "chunk_step": int(chunk_step),
                 "chunk_horizon": int(actual_chunk_steps),
                 "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                "infer_policy_ms": infer_info.get("policy_ms")
+                if chunk_step == 0
+                else None,
+                "infer_server_ms": infer_info.get("server_ms")
+                if chunk_step == 0
+                else None,
                 "a_base": executed_base_chunk[chunk_step].tolist(),
                 "a_res_policy": executed_policy_residual_chunk[chunk_step].tolist(),
                 "a_res_policy_applied": executed_residual_chunk[chunk_step].tolist(),

@@ -47,7 +47,6 @@ from serl_launcher.residual.train.actor.support import (
     advance_async_update_calls as advance_async_update_calls_impl,
 )
 from serl_launcher.residual.train.async_eval import _sync_async_eval_results_to_tb
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.telemetry import _append_tb_step_window
 from serl_launcher.training.profiling import _emit_profiling_snapshot
 from serl_launcher.utils.serialization import _to_jsonable
@@ -219,9 +218,6 @@ def _flush_buffered_step(
             "phase_episode_idx": int(spec.phase_episode_idx),
             "phase": str(spec.phase_name),
             "episode_step": int(state.episode_steps),
-            "seed": int(
-                ctx.env.last_seed if ctx.env.last_seed is not None else spec.seed
-            ),
             "init_state_idx": (
                 int(ctx.env.current_init_state_idx)
                 if ctx.env.current_init_state_idx is not None
@@ -341,16 +337,7 @@ def _plan_chunk(
         action_dim=int(ctx.env_action_dim),
     )
 
-    schedule_step = (
-        int(state.train_env_step)
-        if str(ctx.chunk_step_scheduler_clock) == "env_step"
-        else int(state.decision_step)
-    )
-    alpha_step = _scheduled_alpha(
-        cfg,
-        base_alpha=float(ctx.residual_alpha),
-        schedule_step=int(schedule_step),
-    )
+    alpha_step = float(ctx.residual_alpha)
     gate_prob, gate_on = resolve_train_gate(
         ctx,
         phase_train_flag=bool(spec.phase_train),
@@ -800,30 +787,25 @@ def run_agibot_controller_actor_loop(
                     ) >= int(ctx.max_train_env_steps):
                         break
 
-                    seed = int(state.seed_cursor)
-                    state.seed_cursor += 1
                     current_phase_episode_idx = int(phase_episode_count + 1)
                     current_train_episode_id = int(state.train_episode_id + 1)
                     current_init_episode_idx = int(state.init_episode_idx)
 
                     if bool(cfg.training.get("expert_check", False)):
                         passed, _ = env.expert_precheck(
-                            seed=seed, init_episode_idx=current_init_episode_idx
+                            init_episode_idx=current_init_episode_idx
                         )
                         if not passed:
-                            state.skipped_seeds += 1
                             logger.warning(
-                                "skip seed=%s in controller phase=%s: expert precheck failed",
-                                seed,
+                                "skip controller phase=%s init_state_idx=%s: expert precheck failed",
                                 phase_name,
+                                current_init_episode_idx,
                             )
                             continue
 
                     state.init_episode_idx += 1
                     clear_obs_cache(ctx)
-                    obs_raw = env.reset(
-                        seed=seed, init_episode_idx=current_init_episode_idx
-                    )
+                    obs_raw = env.reset(init_episode_idx=current_init_episode_idx)
                     episode_result = _run_controller_episode(
                         ctx,
                         EpisodeSpec(
@@ -831,7 +813,6 @@ def run_agibot_controller_actor_loop(
                             phase_train=True,
                             phase_episode_idx=int(current_phase_episode_idx),
                             train_episode_id=int(current_train_episode_id),
-                            seed=int(seed),
                             init_episode_idx=int(current_init_episode_idx),
                             max_episode_steps=int(env.step_limit),
                         ),
@@ -884,9 +865,6 @@ def run_agibot_controller_actor_loop(
                             "warmup_episode_id": None,
                             "train_episode_id": int(current_train_episode_id),
                             "phase_episode_idx": int(current_phase_episode_idx),
-                            "seed": int(
-                                env.last_seed if env.last_seed is not None else seed
-                            ),
                             "init_state_idx": (
                                 int(env.current_init_state_idx)
                                 if env.current_init_state_idx is not None
@@ -1000,9 +978,6 @@ def run_agibot_controller_actor_loop(
             "train_success_rate": float(
                 state.train_total_success / max(1, int(state.train_episode_id))
             ),
-            "skipped_seeds": int(state.skipped_seeds),
-            "seed_start": int(cfg.task.seed_base),
-            "seed_next": int(state.seed_cursor),
             "replay_size": int(
                 len(ctx.replay_buffer) if ctx.replay_buffer is not None else 0
             ),

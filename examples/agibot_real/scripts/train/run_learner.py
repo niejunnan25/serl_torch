@@ -11,7 +11,6 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from serl_launcher.residual.train.learner.service import run_residual_learner_service
-from serl_launcher.training.seeding import set_global_seeds
 
 REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
@@ -50,7 +49,6 @@ def main(cfg: DictConfig) -> None:
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
     _validate_removed_data_injection(cfg)
-    set_global_seeds(int(cfg.seed))
     bindings = build_agibot_data_bindings(cfg, logger=logger)
     run_residual_learner_service(
         cfg,

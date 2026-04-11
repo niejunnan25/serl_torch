@@ -41,7 +41,7 @@ from utils.config_utils import (
     set_global_seeds,
     resolve_image_keys,
     resolve_control_indices_from_cfg,
-    build_drq_agent,
+    create_drq_agent,
     sample_probing_steps,
 )
 from data import StateActionNormalizer, load_normalizer
@@ -106,7 +106,9 @@ def main(cfg: DictConfig) -> None:
     # ---------- 任务参数与环境 ----------
     if env_backend == "local":
         assert robo_root is not None
-        task_args = load_task_args(robo_root, str(cfg.task.name), str(cfg.task.task_config))
+        task_args = load_task_args(
+            robo_root, str(cfg.task.name), str(cfg.task.task_config)
+        )
     else:
         task_args = {"task_config": str(cfg.task.task_config)}
 
@@ -175,7 +177,9 @@ def main(cfg: DictConfig) -> None:
     # chunk 长度由配置决定；残差按步输出，每步 action_dim 维。
     chunk_horizon = int(cfg.residual.chunk_horizon)
     if chunk_horizon <= 0:
-        raise ValueError(f"residual.chunk_horizon must be positive, got {chunk_horizon}")
+        raise ValueError(
+            f"residual.chunk_horizon must be positive, got {chunk_horizon}"
+        )
     per_step_action_dim = int(len(control_indices))
     action_dim = int(per_step_action_dim)
     logger.info(
@@ -215,7 +219,9 @@ def main(cfg: DictConfig) -> None:
     collect_path_cfg = cfg.eval.get("collect_dataset_path", None)
     collect_only_success = bool(cfg.eval.get("collect_only_success", True))
     collect_include_probing = bool(cfg.eval.get("collect_include_probing", False))
-    collect_enabled = collect_path_cfg is not None and str(collect_path_cfg).lower() != "null"
+    collect_enabled = (
+        collect_path_cfg is not None and str(collect_path_cfg).lower() != "null"
+    )
     collected_episodes = 0
     collected_steps = 0
     collected_payload: List[Dict[str, Any]] = []
@@ -245,13 +251,17 @@ def main(cfg: DictConfig) -> None:
 
             episode_info = None
             if bool(cfg.eval.expert_check):
-                passed, episode_info = env.expert_precheck(seed=seed, episode_id=episode_id)
+                passed, episode_info = env.expert_precheck(
+                    seed=seed, episode_id=episode_id
+                )
                 if not passed:
                     skipped_seeds += 1
                     logger.warning("skip seed=%s: expert precheck failed", seed)
                     continue
 
-            obs_raw = env.reset(seed=seed, episode_id=episode_id, episode_info=episode_info)
+            obs_raw = env.reset(
+                seed=seed, episode_id=episode_id, episode_info=episode_info
+            )
 
             success = False
             episode_steps = 0
@@ -261,15 +271,25 @@ def main(cfg: DictConfig) -> None:
             # 本 episode 允许的最大环境步数（可被 eval 配置截断）
             max_episode_steps = int(env.step_limit)
             if cfg.eval.max_env_steps_per_episode is not None:
-                max_episode_steps = min(max_episode_steps, int(cfg.eval.max_env_steps_per_episode))
+                max_episode_steps = min(
+                    max_episode_steps, int(cfg.eval.max_env_steps_per_episode)
+                )
 
             # Stage-2 probing: base rollout 做初始状态分布对齐，随后 residual takeover。
-            probing_steps_target = sample_probing_steps(cfg.eval, episode_horizon=max_episode_steps)
+            probing_steps_target = sample_probing_steps(
+                cfg.eval, episode_horizon=max_episode_steps
+            )
             if probing_steps_target > 0:
-                probing_remaining = int(min(probing_steps_target, max_episode_steps - episode_steps))
+                probing_remaining = int(
+                    min(probing_steps_target, max_episode_steps - episode_steps)
+                )
                 while probing_remaining > 0 and episode_steps < max_episode_steps:
-                    probe_chunk, probe_info = openpi_client.infer_chunk(obs_raw, env.current_instruction)
-                    probe_base_chunk = select_action_chunk_window(probe_chunk, horizon=chunk_horizon)
+                    probe_chunk, probe_info = openpi_client.infer_chunk(
+                        obs_raw, env.current_instruction
+                    )
+                    probe_base_chunk = select_action_chunk_window(
+                        probe_chunk, horizon=chunk_horizon
+                    )
                     probe_done = False
                     for probe_step in range(chunk_horizon):
                         if probing_remaining <= 0 or episode_steps >= max_episode_steps:
@@ -292,14 +312,22 @@ def main(cfg: DictConfig) -> None:
                                 "global_policy_step": int(total_policy_steps),
                                 "episode_id": episode_id,
                                 "episode_step": episode_steps,
-                                "seed": int(env.last_seed if env.last_seed is not None else seed),
+                                "seed": int(
+                                    env.last_seed if env.last_seed is not None else seed
+                                ),
                                 "is_probing": True,
                                 "replan_point": bool(probe_step == 0),
                                 "chunk_step": int(probe_step),
                                 "chunk_horizon": int(chunk_horizon),
-                                "infer_e2e_ms": probe_info.get("e2e_ms") if probe_step == 0 else None,
-                                "infer_policy_ms": probe_info.get("policy_ms") if probe_step == 0 else None,
-                                "infer_server_ms": probe_info.get("server_ms") if probe_step == 0 else None,
+                                "infer_e2e_ms": probe_info.get("e2e_ms")
+                                if probe_step == 0
+                                else None,
+                                "infer_policy_ms": probe_info.get("policy_ms")
+                                if probe_step == 0
+                                else None,
+                                "infer_server_ms": probe_info.get("server_ms")
+                                if probe_step == 0
+                                else None,
                                 "a_base": base_action.tolist(),
                                 "a_res": [0.0] * ALOHA_ACTION_DIM,
                                 "a_final": base_action.tolist(),
@@ -316,9 +344,15 @@ def main(cfg: DictConfig) -> None:
                                     "is_probing": True,
                                     "obs": copy.deepcopy(obs_before),
                                     "next_obs": copy.deepcopy(next_obs_raw),
-                                    "a_base": np.asarray(base_action, dtype=np.float32).copy(),
-                                    "a_res": np.zeros((ALOHA_ACTION_DIM,), dtype=np.float32),
-                                    "a_final": np.asarray(base_action, dtype=np.float32).copy(),
+                                    "a_base": np.asarray(
+                                        base_action, dtype=np.float32
+                                    ).copy(),
+                                    "a_res": np.zeros(
+                                        (ALOHA_ACTION_DIM,), dtype=np.float32
+                                    ),
+                                    "a_final": np.asarray(
+                                        base_action, dtype=np.float32
+                                    ).copy(),
                                     "reward": float(reward),
                                     "done": bool(done),
                                     "success": bool(success),
@@ -341,8 +375,12 @@ def main(cfg: DictConfig) -> None:
                 if decision_done:
                     break
                 # 1) OpenPI 推理得到基策略动作块及耗时信息
-                openpi_chunk, infer_info = openpi_client.infer_chunk(obs_raw, env.current_instruction)
-                base_chunk = select_action_chunk_window(openpi_chunk, horizon=chunk_horizon)
+                openpi_chunk, infer_info = openpi_client.infer_chunk(
+                    obs_raw, env.current_instruction
+                )
+                base_chunk = select_action_chunk_window(
+                    openpi_chunk, horizon=chunk_horizon
+                )
                 next_obs_raw = obs_raw
                 decision_done = False
 
@@ -363,7 +401,7 @@ def main(cfg: DictConfig) -> None:
 
                     # 3) 若配置了 checkpoint 且尚未加载，则构建 agent 并加载权重（懒加载）
                     if checkpoint_path and agent is None:
-                        agent = build_drq_agent(
+                        agent = create_drq_agent(
                             cfg,
                             sample_obs=obs_input,
                             action_dim=action_dim,
@@ -371,7 +409,9 @@ def main(cfg: DictConfig) -> None:
                         )
                         agent = load_agent_checkpoint(checkpoint_path, agent)
                         checkpoint_loaded = True
-                        logger.info("Loaded residual checkpoint from: %s", checkpoint_path)
+                        logger.info(
+                            "Loaded residual checkpoint from: %s", checkpoint_path
+                        )
 
                     # 4) 有残差策略则采样残差动作，否则残差全零（仅基策略）
                     if checkpoint_loaded and agent is not None:
@@ -414,14 +454,22 @@ def main(cfg: DictConfig) -> None:
                             "global_policy_step": int(total_policy_steps),
                             "episode_id": episode_id,
                             "episode_step": episode_steps,
-                            "seed": int(env.last_seed if env.last_seed is not None else seed),
+                            "seed": int(
+                                env.last_seed if env.last_seed is not None else seed
+                            ),
                             "is_probing": False,
                             "replan_point": bool(chunk_step == 0),
                             "chunk_step": int(chunk_step),
                             "chunk_horizon": int(chunk_horizon),
-                            "infer_e2e_ms": infer_info.get("e2e_ms") if chunk_step == 0 else None,
-                            "infer_policy_ms": infer_info.get("policy_ms") if chunk_step == 0 else None,
-                            "infer_server_ms": infer_info.get("server_ms") if chunk_step == 0 else None,
+                            "infer_e2e_ms": infer_info.get("e2e_ms")
+                            if chunk_step == 0
+                            else None,
+                            "infer_policy_ms": infer_info.get("policy_ms")
+                            if chunk_step == 0
+                            else None,
+                            "infer_server_ms": infer_info.get("server_ms")
+                            if chunk_step == 0
+                            else None,
                             "a_base": base_chunk[chunk_step].tolist(),
                             "a_res": delta_action.tolist(),
                             "a_final": final_action.tolist(),
@@ -438,9 +486,15 @@ def main(cfg: DictConfig) -> None:
                                 "is_probing": False,
                                 "obs": copy.deepcopy(obs_before),
                                 "next_obs": copy.deepcopy(next_obs_raw),
-                                "a_base": np.asarray(base_chunk[chunk_step], dtype=np.float32).copy(),
-                                "a_res": np.asarray(delta_action, dtype=np.float32).copy(),
-                                "a_final": np.asarray(final_action, dtype=np.float32).copy(),
+                                "a_base": np.asarray(
+                                    base_chunk[chunk_step], dtype=np.float32
+                                ).copy(),
+                                "a_res": np.asarray(
+                                    delta_action, dtype=np.float32
+                                ).copy(),
+                                "a_final": np.asarray(
+                                    final_action, dtype=np.float32
+                                ).copy(),
                                 "reward": float(reward),
                                 "done": bool(done),
                                 "success": bool(success),
@@ -475,7 +529,9 @@ def main(cfg: DictConfig) -> None:
             tb_writer.add_scalar("eval/success", int(success), episode_id)
             tb_writer.add_scalar("eval/return", float(episode_return), episode_id)
             tb_writer.add_scalar("eval/length", int(episode_steps), episode_id)
-            tb_writer.add_scalar("eval/running_success_rate", running_success_rate, episode_id)
+            tb_writer.add_scalar(
+                "eval/running_success_rate", running_success_rate, episode_id
+            )
 
             logger.info(
                 "episode=%s success=%s steps=%s return=%.2f success_rate=%.3f",
@@ -490,7 +546,9 @@ def main(cfg: DictConfig) -> None:
                 collected_payload.append(
                     {
                         "episode_id": int(episode_id),
-                        "seed": int(env.last_seed if env.last_seed is not None else seed),
+                        "seed": int(
+                            env.last_seed if env.last_seed is not None else seed
+                        ),
                         "success": bool(success),
                         "episode_steps": int(episode_steps),
                         "episode_return": float(episode_return),
