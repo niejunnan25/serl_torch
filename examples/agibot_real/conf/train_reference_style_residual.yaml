@@ -1,0 +1,145 @@
+seed: 0
+
+task:
+  name: agibot_real_default
+  task_key: null
+  prompt: Pick up the object with the right hand and place it at the target location.
+  control_mode: camera_position
+  hz: 20.0
+  trajectory_time: null
+  use_smooth_trajectory: false
+  max_episode_steps: 150
+  reset_hook: serl_torch.examples.agibot_real.robot.reset_hooks:reset_to_task_initial_pose
+  success_hook: null
+  expert_precheck_hook: null
+
+reference_style:
+  role: actor
+  trainer_host: 127.0.0.1
+  trainer_port: 5488
+  broadcast_port: 5489
+  data_store_queue_size: 2000
+
+wandb:
+  project: serl_dev
+  exp_name: agibot_reference_style_residual
+  group: null
+  debug: false
+
+openpi:
+  host: localhost
+  port: 9000
+
+joyra:
+  host: localhost
+  port: 9000
+
+policy:
+  type: openpi
+  id: pi05_agibot
+
+robot:
+  assets_root: null
+  retargeter_urdf_path: null
+  retargeter_camera_extrinsic_path: null
+
+env:
+  action_dim: 14
+  backend: local
+
+controller:
+  enabled: true
+  interface: terminal
+  poll_interval_sec: 0.05
+  terminal_grace_sec: 0.15
+  keys:
+    ready: g
+    pause: p
+    reset: r
+    success: s
+    fail: f
+    help: h
+
+residual:
+  image_keys: [head_image, wrist_left_image, wrist_right_image]
+  alpha: 0.2
+  observation:
+    state_mode: fused
+  action_mask: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
+  action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  clip_gripper: true
+
+sac:
+  policy_hidden_dims: [256, 256, 256]
+  critic_hidden_dims: [256, 256, 256]
+  policy_activation: tanh
+  critic_activation: tanh
+  policy_layer_norm: true
+  critic_layer_norm: true
+  encoder_type: resnet
+  resnet:
+    model_name: ${oc.env:SERL_RESNET_MODEL,microsoft/resnet-18}
+    pretrained: true
+    freeze_backbone: true
+    pooling_method: spatial_learned_embeddings
+    num_spatial_blocks: 8
+    bottleneck_dim: 256
+  shared_encoder: true
+  use_proprio: true
+  image_keys: [head_image, wrist_left_image, wrist_right_image]
+  obs_stack_horizon: 1
+  learning_rate: 3.0e-4
+  std_min: 1.0e-5
+  std_max: 5.0
+  discount: 0.99
+  soft_target_update_rate: 0.005
+  temperature_init: 1.0
+  backup_entropy: true
+  critic_ensemble_size: 2
+  critic_subsample_size: 2
+  otf_num_samples: 1
+  cql_n_actions: 10
+  cql_temperature: 1.0
+  optimizer:
+    type: adamw
+    weight_decay: 1.0e-4
+    temperature_weight_decay: 0.0
+    warmup_steps: 0
+    cosine_decay_steps: null
+    grad_clip_norm: 1.0
+
+replay:
+  capacity: 250000
+  batch_size: 128
+
+training:
+  training_starts: 1000
+  steps_per_update: 30
+  critic_actor_ratio: 4
+  max_env_steps: 300000
+  max_update_steps: 300000
+  max_episodes: 2000
+  log_period: 100
+  mixed_precision:
+    enabled: false
+    dtype: bfloat16
+  checkpoint:
+    every_steps: 2500
+    keep: 0
+    dir: checkpoints
+
+logging:
+  summary_file: summary.json
+
+launch:
+  output_root: outputs/agibot_real
+  gpu_id: 0
+  actor_gpu: 0
+  learner_gpu: 0
+  openpi_gpu: 0
+  env_start_timeout_sec: 60.0
+  openpi_start_timeout_sec: 300.0
+
+hydra:
+  run:
+    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}

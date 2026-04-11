@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Reference-style AgiBot direct DRQ training script."""
+"""Reference-style AgiBot residual DRQ training script."""
 
 import json
 import logging
@@ -24,7 +24,19 @@ from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.common.wandb import WandBLogger
+from serl_launcher.policy.joyra.client import JoyRAPolicyClient
+from serl_launcher.policy.openpi.client import OpenPIPolicyClient
+from serl_launcher.residual.action import compose_residual_action
+from serl_launcher.residual.action import select_action_chunk_window
+from serl_launcher.residual.action_spec import build_residual_limits
+from serl_launcher.residual.observation import build_residual_step_obs_from_core
+from serl_launcher.residual.train.config import build_residual_action_transform
+from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
+from serl_launcher.residual.train.config import (
+    resolve_residual_observation_state_mode,
+)
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
+from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.timer_utils import Timer
 
@@ -38,8 +50,12 @@ from serl_torch.examples.agibot_real.runtime.obs_adapter import (
     RESIDUAL_IMAGE_HEIGHT,
 )
 from serl_torch.examples.agibot_real.runtime.obs_adapter import RESIDUAL_IMAGE_WIDTH
-from serl_torch.examples.agibot_real.runtime.obs_adapter import build_agibot_state
-from serl_torch.examples.agibot_real.runtime.obs_adapter import extract_residual_images
+from serl_torch.examples.agibot_real.runtime.obs_adapter import (
+    build_residual_step_obs,
+)
+from serl_torch.examples.agibot_real.runtime.policy_adapter import (
+    build_agibot_policy_input,
+)
 
 AGIBOT_STATE_DIM = 14
 FILL_WAIT_SLEEP_SEC = 1.0
@@ -124,9 +140,10 @@ def _validate_cfg(cfg: DictConfig) -> str:
         )
     if int(cfg.sac.obs_stack_horizon) != 1:
         raise ValueError(
-            "reference-style AgiBot direct DRQ currently supports only "
+            "reference-style AgiBot residual DRQ currently supports only "
             "sac.obs_stack_horizon=1"
         )
+    require_residual_alpha(cfg.get("residual", None))
     return role
 
 
@@ -156,31 +173,92 @@ def _create_env(cfg: DictConfig, logger: logging.Logger) -> AgiBotTaskEnv:
     )
 
 
-def _build_step_obs(
-    obs_raw: dict[str, Any],
+def _create_policy_client(cfg: DictConfig, logger: logging.Logger):
+    policy_type = str(cfg.get("policy", {}).get("type", "openpi")).strip().lower()
+    if policy_type == "openpi":
+        return OpenPIPolicyClient(
+            host=str(cfg.get("openpi", {}).get("host", "localhost")),
+            port=int(cfg.get("openpi", {}).get("port", 9000)),
+            logger=logger,
+        )
+    if policy_type == "joyra":
+        joyra_cfg = cfg.get("joyra", cfg.get("openpi", {}))
+        return JoyRAPolicyClient(
+            host=str(joyra_cfg.get("host", "localhost")),
+            port=int(joyra_cfg.get("port", 9000)),
+            action_dim=int(cfg.get("env", {}).get("action_dim", 14)),
+            logger=logger,
+        )
+    raise ValueError(f"Unsupported policy.type for residual mode: {policy_type!r}")
+
+
+def _build_sample_obs(
     *,
     image_keys: tuple[str, ...],
+    env_action_dim: int,
+    residual_alpha: float,
+    obs_state_mode: str,
 ) -> dict[str, np.ndarray]:
-    state = build_agibot_state(obs_raw)
-    images_all = extract_residual_images(obs_raw)
-    obs_out: dict[str, np.ndarray] = {
-        "state": np.expand_dims(np.asarray(state, dtype=np.float32), axis=0),
+    core: dict[str, np.ndarray] = {
+        "state_core": np.zeros((AGIBOT_STATE_DIM,), dtype=np.float32),
     }
     for key in image_keys:
-        obs_out[key] = np.expand_dims(np.asarray(images_all[key]).copy(), axis=0)
-    return obs_out
-
-
-def _build_sample_obs(image_keys: tuple[str, ...]) -> dict[str, np.ndarray]:
-    obs_out: dict[str, np.ndarray] = {
-        "state": np.zeros((1, AGIBOT_STATE_DIM), dtype=np.float32),
-    }
-    for key in image_keys:
-        obs_out[key] = np.zeros(
-            (1, RESIDUAL_IMAGE_HEIGHT, RESIDUAL_IMAGE_WIDTH, 3),
+        core[key] = np.zeros(
+            (RESIDUAL_IMAGE_HEIGHT, RESIDUAL_IMAGE_WIDTH, 3),
             dtype=np.uint8,
         )
-    return obs_out
+    return build_residual_step_obs_from_core(
+        core,
+        base_action=np.zeros((env_action_dim,), dtype=np.float32),
+        alpha=float(residual_alpha),
+        state_mode=str(obs_state_mode),
+        stack_horizon=1,
+    )
+
+
+def _build_agent_context(
+    cfg: DictConfig,
+    *,
+    image_keys: tuple[str, ...],
+    sample_obs: dict[str, np.ndarray],
+):
+    env_action_dim = int(cfg.env.action_dim)
+    control_indices = resolve_control_indices_from_cfg(
+        cfg,
+        full_action_dim=env_action_dim,
+    )
+    residual_limits = build_residual_limits(
+        control_indices,
+        full_action_dim=env_action_dim,
+        action_limits=cfg.residual.get("action_limits", None),
+    )
+    residual_alpha = require_residual_alpha(cfg.get("residual", None))
+    obs_state_mode = resolve_residual_observation_state_mode(cfg)
+    action_transform = build_residual_action_transform(
+        control_indices=control_indices,
+        residual_limits=residual_limits,
+        full_action_dim=env_action_dim,
+        chunk_horizon=1,
+        chunk_step_enabled=False,
+        clip_gripper=bool(cfg.residual.get("clip_gripper", True)),
+    )
+    agent = create_drq_agent_from_cfg(
+        cfg,
+        sample_obs=sample_obs,
+        action_dim=int(len(control_indices)),
+        image_keys=tuple(image_keys),
+        critic_action_dim=env_action_dim,
+        action_transform=action_transform,
+    )
+    return agent, {
+        "env_action_dim": env_action_dim,
+        "image_keys": tuple(image_keys),
+        "control_indices": np.asarray(control_indices, dtype=np.int64),
+        "residual_limits": np.asarray(residual_limits, dtype=np.float32),
+        "residual_alpha": float(residual_alpha),
+        "obs_state_mode": str(obs_state_mode),
+        "clip_gripper": bool(cfg.residual.get("clip_gripper", True)),
+    }
 
 
 def _create_replay_store(
@@ -191,11 +269,10 @@ def _create_replay_store(
 ):
     from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
 
-    action_dim = int(cfg.env.action_dim)
     action_space = gym.spaces.Box(
         low=-np.inf,
         high=np.inf,
-        shape=(action_dim,),
+        shape=(int(cfg.env.action_dim),),
         dtype=np.float32,
     )
     return MemoryEfficientReplayBufferDataStore(
@@ -206,21 +283,32 @@ def _create_replay_store(
     )
 
 
-def _create_agent(
+def _build_residual_obs(
     cfg: DictConfig,
     *,
-    sample_obs: dict[str, np.ndarray],
-    image_keys: tuple[str, ...],
-):
-    action_dim = int(cfg.env.action_dim)
-    return create_drq_agent_from_cfg(
-        cfg,
-        sample_obs=sample_obs,
-        action_dim=action_dim,
-        image_keys=tuple(image_keys),
-        critic_action_dim=action_dim,
-        action_transform=None,
+    obs_raw: dict[str, Any],
+    policy_client: Any,
+    agent_ctx: dict[str, Any],
+    prompt: str,
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    policy_input = build_agibot_policy_input(obs_raw, prompt)
+    base_policy_chunk, _metadata = policy_client.infer_chunk(policy_input)
+    base_chunk = select_action_chunk_window(
+        base_policy_chunk,
+        horizon=1,
+        action_dim=int(agent_ctx["env_action_dim"]),
     )
+    base_action = np.asarray(base_chunk[0], dtype=np.float32).reshape(-1)
+    obs = build_residual_step_obs(
+        obs_raw,
+        base_action,
+        image_keys=agent_ctx["image_keys"],
+        stack_horizon=1,
+        action_dim=int(agent_ctx["env_action_dim"]),
+        alpha=float(agent_ctx["residual_alpha"]),
+        state_mode=str(agent_ctx["obs_state_mode"]),
+    )
+    return obs, base_action
 
 
 def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -228,9 +316,22 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     from agentlace.trainer import TrainerClient
 
     env = _create_env(cfg, logger)
+    policy_client = _create_policy_client(cfg, logger)
     image_keys = tuple(resolve_agibot_cfg_image_keys(cfg))
-    sample_obs = _build_sample_obs(image_keys)
-    agent = _create_agent(cfg, sample_obs=sample_obs, image_keys=image_keys)
+    env_action_dim = int(cfg.env.action_dim)
+    residual_alpha = require_residual_alpha(cfg.get("residual", None))
+    obs_state_mode = resolve_residual_observation_state_mode(cfg)
+    sample_obs = _build_sample_obs(
+        image_keys=image_keys,
+        env_action_dim=env_action_dim,
+        residual_alpha=float(residual_alpha),
+        obs_state_mode=str(obs_state_mode),
+    )
+    agent, agent_ctx = _build_agent_context(
+        cfg,
+        image_keys=image_keys,
+        sample_obs=sample_obs,
+    )
 
     data_store = QueuedDataStore(int(cfg.reference_style.data_store_queue_size))
     client = TrainerClient(
@@ -264,7 +365,7 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     success_count = 0
     summary: dict[str, Any] = {
         "role": "actor",
-        "mode": "direct",
+        "mode": "residual",
         "env_steps": 0,
         "episodes": 0,
         "successes": 0,
@@ -282,19 +383,39 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
             while env_steps < max_env_steps:
                 timer.tick("total")
                 with timer.context("sample_actions"):
-                    obs = _build_step_obs(obs_raw, image_keys=image_keys)
-                    action = np.asarray(
+                    obs, base_action = _build_residual_obs(
+                        cfg,
+                        obs_raw=obs_raw,
+                        policy_client=policy_client,
+                        agent_ctx=agent_ctx,
+                        prompt=str(env.current_instruction),
+                    )
+                    residual_action = np.asarray(
                         agent.sample_actions(obs, deterministic=False),
                         dtype=np.float32,
                     ).reshape(-1)
+                    _delta, env_action = compose_residual_action(
+                        base_action=base_action,
+                        residual_action=residual_action,
+                        indices=agent_ctx["control_indices"],
+                        limits=agent_ctx["residual_limits"],
+                        alpha=float(agent_ctx["residual_alpha"]),
+                        clip_gripper=bool(agent_ctx["clip_gripper"]),
+                    )
 
                 with timer.context("step_env"):
-                    next_obs_raw, reward, done, truncated, info = env.step(action)
-                    next_obs = _build_step_obs(next_obs_raw, image_keys=image_keys)
+                    next_obs_raw, reward, done, truncated, info = env.step(env_action)
+                    next_obs, _next_base_action = _build_residual_obs(
+                        cfg,
+                        obs_raw=next_obs_raw,
+                        policy_client=policy_client,
+                        agent_ctx=agent_ctx,
+                        prompt=str(env.current_instruction),
+                    )
                     done_flag = bool(done or truncated)
                     transition = {
                         "observations": obs,
-                        "actions": np.asarray(action, dtype=np.float32).reshape(-1),
+                        "actions": np.asarray(env_action, dtype=np.float32).reshape(-1),
                         "next_observations": next_obs,
                         "rewards": float(reward),
                         "masks": float(0.0 if done_flag else 1.0),
@@ -364,14 +485,32 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
             env.close(clear_cache=False)
         except Exception:  # noqa: BLE001
             pass
+        policy_client_close = getattr(policy_client, "close", None)
+        if callable(policy_client_close):
+            try:
+                policy_client_close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     from agentlace.trainer import TrainerServer
 
     image_keys = tuple(resolve_agibot_cfg_image_keys(cfg))
-    sample_obs = _build_sample_obs(image_keys)
-    agent = _create_agent(cfg, sample_obs=sample_obs, image_keys=image_keys)
+    env_action_dim = int(cfg.env.action_dim)
+    residual_alpha = require_residual_alpha(cfg.get("residual", None))
+    obs_state_mode = resolve_residual_observation_state_mode(cfg)
+    sample_obs = _build_sample_obs(
+        image_keys=image_keys,
+        env_action_dim=env_action_dim,
+        residual_alpha=float(residual_alpha),
+        obs_state_mode=str(obs_state_mode),
+    )
+    agent, _agent_ctx = _build_agent_context(
+        cfg,
+        image_keys=image_keys,
+        sample_obs=sample_obs,
+    )
     replay_buffer = _create_replay_store(
         cfg,
         sample_obs=sample_obs,
@@ -383,7 +522,7 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     env_steps = 0
     summary: dict[str, Any] = {
         "role": "learner",
-        "mode": "direct",
+        "mode": "residual",
         "update_steps": 0,
         "env_steps": 0,
         "replay_size": 0,
@@ -503,7 +642,7 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
 @hydra.main(
     version_base=None,
     config_path="../../conf",
-    config_name="train_reference_style",
+    config_name="train_reference_style_residual",
 )
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
@@ -513,7 +652,7 @@ def main(cfg: DictConfig) -> None:
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s %(message)s",
     )
-    logger = logging.getLogger("agibot_reference_style_direct")
+    logger = logging.getLogger("agibot_reference_style_residual")
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
