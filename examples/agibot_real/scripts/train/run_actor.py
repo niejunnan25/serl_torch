@@ -17,7 +17,9 @@ REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.agibot_real.runtime.runtime_bindings import build_agibot_runtime_bindings
+from serl_torch.examples.agibot_real.runtime.runtime_bindings import (
+    build_agibot_runtime_bindings,
+)
 from serl_torch.examples.agibot_real.runtime.controller_actor import (
     run_agibot_controller_actor_loop,
 )
@@ -36,12 +38,16 @@ def _validate_removed_data_injection(cfg: DictConfig) -> None:
         )
 
 
-@hydra.main(version_base=None, config_path="../../conf", config_name="train_residual_sac")
+@hydra.main(
+    version_base=None, config_path="../../conf", config_name="train_residual_sac"
+)
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
+    )
     logger = logging.getLogger("agibot_real_actor")
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
@@ -49,7 +55,9 @@ def main(cfg: DictConfig) -> None:
     _validate_removed_data_injection(cfg)
     set_global_seeds(int(cfg.seed))
     bindings = build_agibot_runtime_bindings(cfg, logger=logger)
-    async_eval_watcher_path = Path(__file__).resolve().parents[1] / "eval" / "process_eval_queue.py"
+    async_eval_watcher_path = (
+        Path(__file__).resolve().parents[1] / "eval" / "process_eval_queue.py"
+    )
     if bool(cfg.get("controller", {}).get("enabled", False)):
         run_agibot_controller_actor_loop(
             cfg,

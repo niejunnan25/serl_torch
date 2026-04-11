@@ -17,7 +17,9 @@ REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.agibot_real.runtime.data_bindings import build_agibot_data_bindings
+from serl_torch.examples.agibot_real.runtime.data_bindings import (
+    build_agibot_data_bindings,
+)
 
 
 def _validate_removed_data_injection(cfg: DictConfig) -> None:
@@ -33,12 +35,16 @@ def _validate_removed_data_injection(cfg: DictConfig) -> None:
         )
 
 
-@hydra.main(version_base=None, config_path="../../conf", config_name="train_residual_sac")
+@hydra.main(
+    version_base=None, config_path="../../conf", config_name="train_residual_sac"
+)
 def main(cfg: DictConfig) -> None:
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
+    )
     logger = logging.getLogger("agibot_real_agentlace_learner")
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))

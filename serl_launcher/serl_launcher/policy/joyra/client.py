@@ -102,12 +102,16 @@ class JoyRAPolicyClient:
         connect_sig = inspect.signature(connect_fn)
         supported_params = set(connect_sig.parameters.keys())
         headers_key = (
-            "additional_headers" if "additional_headers" in supported_params else "extra_headers"
+            "additional_headers"
+            if "additional_headers" in supported_params
+            else "extra_headers"
         )
         kwargs = {
             "compression": None,
             "max_size": None,
-            headers_key: {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None,
+            headers_key: {"Authorization": f"Api-Key {self._api_key}"}
+            if self._api_key
+            else None,
             "open_timeout": self._connect_timeout_sec,
             "ping_interval": self._ping_interval_sec,
             "ping_timeout": self._ping_timeout_sec,
@@ -163,7 +167,9 @@ class JoyRAPolicyClient:
                 self._ws.close()
                 self._ws = None
 
-    def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
+    def infer_chunk(
+        self, policy_input: PolicyInput
+    ) -> Tuple[np.ndarray, PolicyInferInfo]:
         send_data = build_joyra_request(policy_input)
         for attempt_idx in range(self._reconnect_retry_count + 1):
             try:

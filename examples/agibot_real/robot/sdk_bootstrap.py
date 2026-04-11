@@ -40,7 +40,9 @@ def _canonical_machine() -> str:
         return "x86_64"
     if machine in {"aarch64", "arm64"}:
         return "aarch64"
-    raise RuntimeError(f"Unsupported machine for vendored AgiBot SDK bootstrap: {machine!r}")
+    raise RuntimeError(
+        f"Unsupported machine for vendored AgiBot SDK bootstrap: {machine!r}"
+    )
 
 
 def _ensure_supported_python() -> None:

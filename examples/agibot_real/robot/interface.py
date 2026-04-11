@@ -46,7 +46,9 @@ class AgiBotRobotNode:
             if img is not None and pos is not None and grip is not None:
                 return
             time.sleep(0.01)
-        raise RuntimeError("Timed out waiting for AgiBot camera / joint state readiness")
+        raise RuntimeError(
+            "Timed out waiting for AgiBot camera / joint state readiness"
+        )
 
     def _poll_state(
         self,
@@ -71,7 +73,9 @@ class AgiBotRobotNode:
                 except Exception:  # noqa: BLE001
                     pass
             time.sleep(interval_sec)
-        raise RuntimeError(f"Robot state getter did not become ready: last={last_vals!r}")
+        raise RuntimeError(
+            f"Robot state getter did not become ready: last={last_vals!r}"
+        )
 
     def get_img_head(self) -> np.ndarray | None:
         img, _ = self.camera.get_latest_image("head")
@@ -133,7 +137,9 @@ class AgiBotRobotNode:
         cur = list(map(float, current_positions))
         tgt = list(map(float, np.asarray(target_positions).reshape(-1)))
         if len(cur) != dof or len(tgt) != dof:
-            raise RuntimeError(f"Expected {dof} arm joints, got cur={len(cur)} tgt={len(tgt)}")
+            raise RuntimeError(
+                f"Expected {dof} arm joints, got cur={len(cur)} tgt={len(tgt)}"
+            )
 
         try:
             rk = ruckig.Ruckig(dof, interval)

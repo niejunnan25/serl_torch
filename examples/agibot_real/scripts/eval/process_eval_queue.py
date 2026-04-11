@@ -159,9 +159,7 @@ def _resolve_eval_residual_alpha(
     residual_cfg = train_cfg.get("residual", {}) if isinstance(train_cfg, dict) else {}
     base_alpha = require_residual_alpha(residual_cfg, path="residual.alpha")
     alpha_mode_raw = (
-        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule"))
-        .strip()
-        .lower()
+        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule")).strip().lower()
     )
     valid_modes = {"checkpoint_schedule", "base", "fixed"}
     if alpha_mode_raw not in valid_modes:
@@ -380,7 +378,9 @@ def main() -> None:
             "AgiBot async eval is local-only; remote env support has been removed, "
             f"got env.backend={train_env_backend!r}"
         )
-    train_policy_cfg = train_cfg.get("policy", {}) if isinstance(train_cfg, dict) else {}
+    train_policy_cfg = (
+        train_cfg.get("policy", {}) if isinstance(train_cfg, dict) else {}
+    )
     policy_type = (
         str(train_policy_cfg.get("type", "openpi")).strip().lower()
         if isinstance(train_policy_cfg, dict)
@@ -433,9 +433,7 @@ def main() -> None:
     probing_min_steps = int(async_eval_cfg.get("probing_min_steps", 0))
     probing_max_steps = int(async_eval_cfg.get("probing_max_steps", 0))
     alpha_mode = (
-        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule"))
-        .strip()
-        .lower()
+        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule")).strip().lower()
     )
     valid_modes = {"checkpoint_schedule", "base", "fixed"}
     if alpha_mode not in valid_modes:
@@ -482,7 +480,9 @@ def main() -> None:
     else:
         eval_script_path = Path(str(eval_script)).expanduser()
         if not eval_script_path.is_absolute():
-            eval_script_path = (Path(__file__).resolve().parent / eval_script_path).resolve()
+            eval_script_path = (
+                Path(__file__).resolve().parent / eval_script_path
+            ).resolve()
     if not eval_script_path.exists():
         raise FileNotFoundError(f"eval script not found: {eval_script_path}")
 
@@ -750,7 +750,11 @@ def main() -> None:
             ).resolve()
             eval_run_dir.mkdir(parents=True, exist_ok=True)
             eval_log_path = eval_run_dir / "eval_runner.log"
-            eval_alpha, eval_alpha_mode, eval_alpha_schedule_step = _resolve_eval_residual_alpha(
+            (
+                eval_alpha,
+                eval_alpha_mode,
+                eval_alpha_schedule_step,
+            ) = _resolve_eval_residual_alpha(
                 train_cfg=train_cfg,
                 async_eval_cfg=async_eval_cfg,
                 checkpoint_step=int(checkpoint_step),

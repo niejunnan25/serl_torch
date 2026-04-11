@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 def init_node_pos(task_name: str):
     # Align with init_node_pos_data: default SERL task name uses office_setting pose.
     if str(task_name).strip() == "agibot_real_default":
