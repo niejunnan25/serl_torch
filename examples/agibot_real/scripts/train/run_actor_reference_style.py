@@ -27,11 +27,12 @@ from pathlib import Path
 import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
-from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
+from serl_launcher.agents.continuous.drq import DrQAgent
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.policy.joyra.client import JoyRAPolicyClient
@@ -262,13 +263,133 @@ def main(cfg: DictConfig) -> None:
         image_keys=image_keys,
     )["state_core"]
 
-    agent = create_drq_agent_from_cfg(
-        cfg,
-        sample_obs=sample_obs,
-        action_dim=int(step_action_dim * chunk_horizon),
+    sac_cfg = cfg.get("sac", {})
+    optimizer_cfg = sac_cfg.get("optimizer", None)
+    actor_optimizer_kwargs = {
+        "learning_rate": float(sac_cfg.get("learning_rate", 3.0e-4))
+    }
+    critic_optimizer_kwargs = {
+        "learning_rate": float(sac_cfg.get("learning_rate", 3.0e-4))
+    }
+    temperature_optimizer_kwargs = {
+        "learning_rate": float(sac_cfg.get("learning_rate", 3.0e-4))
+    }
+    if optimizer_cfg is not None:
+        optimizer_type = str(optimizer_cfg.get("type", "adam")).strip().lower()
+        if optimizer_type not in {"adam", "adamw"}:
+            raise ValueError(f"Unsupported sac.optimizer.type: {optimizer_type}")
+        if optimizer_type == "adamw":
+            weight_decay = float(optimizer_cfg.get("weight_decay", 0.0))
+            actor_optimizer_kwargs["weight_decay"] = weight_decay
+            critic_optimizer_kwargs["weight_decay"] = weight_decay
+            temperature_weight_decay = optimizer_cfg.get(
+                "temperature_weight_decay", None
+            )
+            if temperature_weight_decay is not None:
+                temperature_optimizer_kwargs["weight_decay"] = float(
+                    temperature_weight_decay
+                )
+        warmup_steps = optimizer_cfg.get("warmup_steps", None)
+        if warmup_steps is not None:
+            actor_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
+            critic_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
+            temperature_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
+        cosine_decay_steps = optimizer_cfg.get("cosine_decay_steps", None)
+        if cosine_decay_steps is not None:
+            actor_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
+            critic_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
+            temperature_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
+        grad_clip_norm = optimizer_cfg.get("grad_clip_norm", None)
+        if grad_clip_norm is not None:
+            actor_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
+            critic_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
+            temperature_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
+
+    resnet_kwargs = None
+    resnet_cfg = sac_cfg.get("resnet", None)
+    if resnet_cfg is not None:
+        model_name = str(resnet_cfg.get("model_name", "microsoft/resnet-18"))
+        if not Path(model_name).is_absolute() and not model_name.startswith(
+            ("http://", "https://")
+        ):
+            candidate = Path(get_original_cwd()) / model_name
+            if candidate.is_dir():
+                model_name = str(candidate)
+        resnet_kwargs = {
+            "model_name": model_name,
+            "pretrained": bool(resnet_cfg.get("pretrained", True)),
+            "freeze_backbone": bool(resnet_cfg.get("freeze_backbone", False)),
+            "pooling_method": str(
+                resnet_cfg.get("pooling_method", "spatial_learned_embeddings")
+            ),
+            "num_spatial_blocks": int(resnet_cfg.get("num_spatial_blocks", 8)),
+            "bottleneck_dim": int(resnet_cfg.get("bottleneck_dim", 256)),
+        }
+
+    mixed_precision_cfg = cfg.get("training", {}).get("mixed_precision", None)
+    mixed_precision = {
+        "enabled": bool(
+            mixed_precision_cfg.get("enabled", False)
+            if mixed_precision_cfg is not None
+            else False
+        ),
+        "dtype": str(
+            mixed_precision_cfg.get("dtype", "bfloat16")
+            if mixed_precision_cfg is not None
+            else "bfloat16"
+        ),
+    }
+
+    sample_action = np.zeros((int(step_action_dim * chunk_horizon),), dtype=np.float32)
+    sample_critic_action = np.zeros(
+        (int(env_action_dim * chunk_horizon),), dtype=np.float32
+    )
+    target_entropy = sac_cfg.get("target_entropy", None)
+    agent = DrQAgent.create_drq(
+        0,
+        sample_obs,
+        sample_action,
+        critic_actions=sample_critic_action,
+        encoder_type=str(sac_cfg.get("encoder_type", "resnet")),
+        shared_encoder=bool(sac_cfg.get("shared_encoder", True)),
+        use_proprio=bool(sac_cfg.get("use_proprio", True)),
+        critic_network_kwargs={
+            "activations": str(sac_cfg.get("critic_activation", "tanh")),
+            "use_layer_norm": bool(sac_cfg.get("critic_layer_norm", True)),
+            "hidden_dims": [int(v) for v in sac_cfg.get("critic_hidden_dims", [])],
+        },
+        policy_network_kwargs={
+            "activations": str(sac_cfg.get("policy_activation", "tanh")),
+            "use_layer_norm": bool(sac_cfg.get("policy_layer_norm", True)),
+            "hidden_dims": [int(v) for v in sac_cfg.get("policy_hidden_dims", [])],
+        },
+        policy_kwargs={
+            "tanh_squash_distribution": True,
+            "std_parameterization": "exp",
+            "std_min": float(sac_cfg.get("std_min", 1.0e-5)),
+            "std_max": float(sac_cfg.get("std_max", 5.0)),
+        },
+        actor_optimizer_kwargs=actor_optimizer_kwargs,
+        critic_optimizer_kwargs=critic_optimizer_kwargs,
+        temperature_optimizer_kwargs=temperature_optimizer_kwargs,
+        discount=float(sac_cfg.get("discount", 0.99)),
+        soft_target_update_rate=float(sac_cfg.get("soft_target_update_rate", 0.005)),
+        temperature_init=float(sac_cfg.get("temperature_init", 1.0)),
+        backup_entropy=bool(sac_cfg.get("backup_entropy", True)),
+        critic_ensemble_size=int(sac_cfg.get("critic_ensemble_size", 2)),
+        critic_subsample_size=(
+            int(sac_cfg.get("critic_subsample_size"))
+            if sac_cfg.get("critic_subsample_size", None) is not None
+            else None
+        ),
         image_keys=image_keys,
-        critic_action_dim=int(env_action_dim * chunk_horizon),
+        resnet_kwargs=resnet_kwargs,
         action_transform=action_transform,
+        mixed_precision=mixed_precision,
+        otf_num_samples=int(sac_cfg.get("otf_num_samples", 1)),
+        cql_n_actions=int(sac_cfg.get("cql_n_actions", 10)),
+        cql_temperature=float(sac_cfg.get("cql_temperature", 1.0)),
+        target_entropy=(float(target_entropy) if target_entropy is not None else None),
     )
     agent_lock = threading.RLock()
 
