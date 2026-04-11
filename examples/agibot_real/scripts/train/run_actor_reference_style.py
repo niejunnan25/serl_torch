@@ -37,8 +37,8 @@ from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_ag
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.policy.joyra.client import JoyRAPolicyClient
 from serl_launcher.policy.openpi.client import OpenPIPolicyClient
-from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action_chunk
+from serl_launcher.residual.action import reshape_flat_action_to_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.train.config import build_residual_action_transform
@@ -528,7 +528,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 with agent_lock:
-                    residual_chunk = as_numpy_action_chunk(
+                    residual_chunk = reshape_flat_action_to_chunk(
                         agent.sample_actions(
                             residual_obs,
                             deterministic=False,

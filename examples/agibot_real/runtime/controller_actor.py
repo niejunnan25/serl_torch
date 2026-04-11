@@ -16,8 +16,8 @@ import numpy as np
 from omegaconf import DictConfig
 
 from serl_launcher.residual.action import as_numpy_action
-from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action_chunk
+from serl_launcher.residual.action import reshape_flat_action_to_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.train.actor.episode import EpisodeSpec
 from serl_launcher.residual.train.actor.episode_shared import (
@@ -379,7 +379,7 @@ def _plan_chunk(
                 deterministic=False,
             )
             sampled_chunk = as_numpy_action(sampled, int(ctx.agent_action_dim))
-        residual_chunk = as_numpy_action_chunk(
+        residual_chunk = reshape_flat_action_to_chunk(
             sampled_chunk,
             action_dim=int(ctx.step_action_dim),
             chunk_horizon=int(ctx.chunk_horizon),

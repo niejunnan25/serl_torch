@@ -37,11 +37,14 @@ def select_action_chunk_window(
         raise ValueError(f"horizon must be positive, got {horizon}")
     if chunk.shape[0] == 0:
         raise ValueError("OpenPI returned empty action chunk")
-    if chunk.shape[0] >= horizon:
-        return chunk[:horizon]
-    pad_count = horizon - chunk.shape[0]
-    tail = np.repeat(chunk[-1:, :], pad_count, axis=0)
-    return np.concatenate([chunk, tail], axis=0)
+    # Base-policy chunk length is part of the runtime contract. A short chunk is a
+    # backend/data bug and should fail loudly instead of being silently padded.
+    if chunk.shape[0] < horizon:
+        raise ValueError(
+            "Action chunk shorter than required horizon: "
+            f"got {int(chunk.shape[0])}, expected at least {int(horizon)}"
+        )
+    return chunk[:horizon]
 
 
 def as_numpy_action(action: np.ndarray, action_dim: int) -> np.ndarray:
@@ -53,9 +56,10 @@ def as_numpy_action(action: np.ndarray, action_dim: int) -> np.ndarray:
     return action_arr
 
 
-def as_numpy_action_chunk(
+def reshape_flat_action_to_chunk(
     action: np.ndarray, *, action_dim: int, chunk_horizon: int
 ) -> np.ndarray:
+    """Validate a flat policy output and reshape it into a 2-D action chunk."""
     flat = as_numpy_action(action, int(action_dim) * int(chunk_horizon))
     return flat.reshape(int(chunk_horizon), int(action_dim))
 

@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from serl_launcher.residual.action import as_numpy_action
-from serl_launcher.residual.action import as_numpy_action_chunk
+from serl_launcher.residual.action import reshape_flat_action_to_chunk
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.train.actor.episode_shared import (
@@ -120,7 +120,7 @@ def execute_chunk_decision(
                 (time.perf_counter() - sample_actions_start) * 1000.0,
             )
             sampled_chunk = as_numpy_action(sampled, agent_action_dim)
-        residual_chunk = as_numpy_action_chunk(
+        residual_chunk = reshape_flat_action_to_chunk(
             sampled_chunk,
             action_dim=step_action_dim,
             chunk_horizon=chunk_horizon,

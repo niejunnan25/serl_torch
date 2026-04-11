@@ -17,7 +17,7 @@ from serl_launcher.policy.factory import build_policy_backend_info
 from serl_launcher.policy.factory import build_policy_client
 from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
 from serl_launcher.residual.action import as_numpy_action
-from serl_launcher.residual.action import as_numpy_action_chunk
+from serl_launcher.residual.action import reshape_flat_action_to_chunk
 from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
@@ -379,7 +379,7 @@ def main(cfg: DictConfig) -> None:
                                 obs_input,
                                 deterministic=bool(cfg.eval.deterministic),
                             )
-                            residual_chunk = as_numpy_action_chunk(
+                            residual_chunk = reshape_flat_action_to_chunk(
                                 sampled,
                                 action_dim=step_action_dim,
                                 chunk_horizon=chunk_horizon,

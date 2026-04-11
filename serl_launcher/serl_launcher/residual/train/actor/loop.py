@@ -39,7 +39,6 @@ import torch
 from tqdm.auto import tqdm
 from omegaconf import DictConfig, OmegaConf
 from serl_launcher.residual.action import as_numpy_action
-from serl_launcher.residual.action import as_numpy_action_chunk
 from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window

@@ -470,9 +470,9 @@ TODO / questions to confirm before declaring full JoyRA parity:
   `13` with `/0.9` then clip to `[0, 1]`. This behavior is intentionally not
   ported yet; confirm the reason before adding it to residual RL.
 - If JoyRA sometimes returns fewer actions than `residual.chunk_horizon`, the
-  shared chunk helper currently pads by repeating the final action. Confirm
-  whether that is acceptable for the real robot, or whether AgiBot should execute
-  the shorter raw chunk directly.
+  shared chunk helper now treats that as a contract error and raises
+  immediately. Fix the policy backend to return a full chunk before using it on
+  the real robot.
 
 ## Removed Paths
 
