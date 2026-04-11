@@ -32,7 +32,7 @@ from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.train.schedules import _epsilon_gating_eval_force_on
 from serl_launcher.residual.train.schedules import _scheduled_epsilon_gating_probability
 from serl_launcher.training.seeding import set_global_seeds
-from serl_launcher.utils.alpha_utils import require_residual_alpha
+from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.logger import JsonlLogger
 
 REPO_PARENT = Path(__file__).resolve().parents[5]

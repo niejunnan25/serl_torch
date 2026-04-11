@@ -108,8 +108,8 @@ from serl_launcher.residual.train.transitions import _insert_online_transition
 from serl_launcher.training.loop_utils import _count_env_step_update_triggers
 from serl_launcher.training.loop_utils import _iter_period_hits
 from serl_launcher.training.loop_utils import _remaining_train_budget_steps
-from serl_launcher.utils.alpha_utils import require_residual_alpha
-from serl_launcher.utils.alpha_utils import validate_alpha
+from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
+from serl_launcher.residual.utils.alpha_utils import validate_alpha
 from serl_launcher.utils.serialization import _to_jsonable
 
 if TYPE_CHECKING:

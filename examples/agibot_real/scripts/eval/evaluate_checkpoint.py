@@ -32,7 +32,7 @@ from serl_launcher.residual.train.config import resolve_residual_observation_sta
 from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
 from serl_launcher.residual.train.schedules import _epsilon_gating_eval_force_on
 from serl_launcher.residual.train.schedules import _scheduled_epsilon_gating_probability
-from serl_launcher.utils.alpha_utils import require_residual_alpha
+from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.checkpoint_utils import load_agent_checkpoint
 from serl_launcher.utils.logger import JsonlLogger
 

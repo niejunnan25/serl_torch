@@ -47,7 +47,7 @@ from serl_launcher.training.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.training.loop_utils import _iter_period_hits
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
 from serl_launcher.utils.agentlace_io import save_agentlace_bootstrap
-from serl_launcher.utils.alpha_utils import require_residual_alpha
+from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
 
 REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
