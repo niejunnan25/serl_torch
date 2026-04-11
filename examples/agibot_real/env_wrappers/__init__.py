@@ -1,5 +1,5 @@
-"""AgiBot local task env wrappers."""
+"""Compatibility shim for the moved AgiBot env package."""
 
-from .task_env import AgiBotTaskEnv
+from ..env import AgiBotTaskEnv
 
 __all__ = ["AgiBotTaskEnv"]

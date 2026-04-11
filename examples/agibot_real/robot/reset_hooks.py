@@ -9,19 +9,10 @@ from typing import Any
 
 import numpy as np
 
-from .task_init_pos import init_node_pos
+from .init_positions import get_task_initial_pose
+from .init_positions import normalize_task_name_for_init_pose
 
 logger = logging.getLogger(__name__)
-
-# SERL 默认 task.name；与 bundled init_node_pos_data 中 office_setting 初始位姿一致。
-_DEFAULT_TASK_ALIAS = "office_setting"
-
-
-def _normalize_task_name_for_init(task_name: str) -> str:
-    """Map SERL-only names to bundled init-pose aliases."""
-    if str(task_name).strip() == "agibot_real_default":
-        return _DEFAULT_TASK_ALIAS
-    return str(task_name)
 
 
 def reset_to_task_initial_pose(
@@ -35,7 +26,7 @@ def reset_to_task_initial_pose(
 ) -> None:
     """Move robot to task-specific initial pose (head/waist/joint).
 
-    Uses init_node_pos(task_name) and AgiBotRobotNode.publish_*; see task_init_pos.py for data source.
+    Uses the bundled init-position table and AgiBotRobotNode.publish_*.
     """
     robot_node = getattr(env, "robot_node", None)
     if robot_node is None:
@@ -48,9 +39,9 @@ def reset_to_task_initial_pose(
     sleep_hw = float(os.environ.get("AGIBOT_RESET_SLEEP_HEAD_WAIST_SEC", "2.0"))
     sleep_arm = float(os.environ.get("AGIBOT_RESET_SLEEP_ARM_SEC", "1.0"))
 
-    init_key = _normalize_task_name_for_init(str(task_name))
+    init_key = normalize_task_name_for_init_pose(str(task_name))
     try:
-        head_action, waist_action, joint_action = init_node_pos(init_key)
+        head_action, waist_action, joint_action = get_task_initial_pose(init_key)
     except ValueError as exc:
         logger.warning(
             "reset_to_task_initial_pose skipped (unknown task_name=%s): %s",
