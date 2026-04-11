@@ -17,6 +17,8 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
+from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
+from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
@@ -26,17 +28,40 @@ from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
 from serl_launcher.residual.train.config import resolve_residual_observation_state_mode
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
+from serl_launcher.residual.utils.alpha_utils import validate_alpha
 from serl_launcher.training.async_runtime.agentlace import run_agentlace_learner_service
+from serl_launcher.training.jsonl import JsonlWriter
 from serl_launcher.training.profiling import _RuntimeProfiler
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
 from serl_launcher.utils.agentlace_io import wait_for_agentlace_bootstrap
-from serl_launcher.utils.logger import JsonlLogger
 from serl_launcher.utils.serialization import _to_jsonable
 from torch.utils.tensorboard import SummaryWriter
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
+
+
+def _resolve_alpha_step(
+    cfg: DictConfig, *, base_alpha: float, schedule_step: int
+) -> float:
+    base_alpha = validate_alpha(base_alpha, name="base_alpha", allow_zero=True)
+    sched_cfg = cfg.training.get("alpha_scheduler", None)
+    if sched_cfg is None or (not bool(sched_cfg.get("enabled", False))):
+        return float(base_alpha)
+
+    min_alpha = validate_alpha(
+        sched_cfg.get("min_alpha", base_alpha),
+        name="training.alpha_scheduler.min_alpha",
+        allow_zero=True,
+    )
+    warmup_steps = int(sched_cfg.get("warmup_steps", 0))
+    anneal_steps = int(sched_cfg.get("anneal_steps", 1))
+    if schedule_step < warmup_steps:
+        return float(min_alpha)
+    if anneal_steps <= 0:
+        return float(base_alpha)
+    progress = min(1.0, max(0.0, (schedule_step - warmup_steps) / float(anneal_steps)))
+    return float(min_alpha + (float(base_alpha) - min_alpha) * progress)
 
 
 class _LearnerStatsLogger:
@@ -46,8 +71,8 @@ class _LearnerStatsLogger:
         self,
         *,
         logger: logging.Logger,
-        step_logger: JsonlLogger,
-        episode_logger: JsonlLogger,
+        step_logger: JsonlWriter,
+        episode_logger: JsonlWriter,
         tb_writer: SummaryWriter,
         replay_buffer: Any,
         offline_buffer: Optional[Any],
@@ -454,7 +479,7 @@ def run_residual_learner_service(
     )
     bootstrap_initial_payload = bootstrap.get("initial_agent_payload", None)
     if isinstance(bootstrap_initial_payload, dict):
-        agent_runtime.apply_snapshot_payload(
+        apply_checkpoint_payload_to_agent(
             learner_agent,
             bootstrap_initial_payload,
             load_optimizers=True,
@@ -499,7 +524,7 @@ def run_residual_learner_service(
             chunk_step_enabled=chunk_step_enabled,
             state_mode=state_mode,
         )
-        offline_residual_alpha = _scheduled_alpha(
+        offline_residual_alpha = _resolve_alpha_step(
             cfg,
             base_alpha=float(cfg.residual.alpha),
             schedule_step=0,
@@ -604,11 +629,11 @@ def run_residual_learner_service(
             configured_warmup_episodes,
         )
 
-    step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
-    episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
-    profiling_logger: Optional[JsonlLogger] = None
+    step_logger = JsonlWriter(run_dir / str(cfg.logging.step_log_file))
+    episode_logger = JsonlWriter(run_dir / str(cfg.logging.episode_log_file))
+    profiling_logger: Optional[JsonlWriter] = None
     if profiling_enabled:
-        profiling_logger = JsonlLogger(run_dir / profiling_log_file)
+        profiling_logger = JsonlWriter(run_dir / profiling_log_file)
     tb_writer = SummaryWriter(log_dir=str(run_dir / "tb"))
     profiler = _RuntimeProfiler(
         enabled=profiling_enabled,
@@ -623,7 +648,7 @@ def run_residual_learner_service(
         offline_buffer=offline_buffer,
     )
 
-    initial_payload = agent_runtime.snapshot_checkpoint_payload(
+    initial_payload = snapshot_agent_checkpoint_payload(
         learner_agent,
         step=int(learner_agent.state.step),
     )
@@ -635,7 +660,7 @@ def run_residual_learner_service(
         tb_writer=tb_writer,
     )
     if int(critic_pretrain.get("enabled", 0)) > 0:
-        initial_payload = agent_runtime.snapshot_checkpoint_payload(
+        initial_payload = snapshot_agent_checkpoint_payload(
             learner_agent,
             step=int(learner_agent.state.step),
         )

@@ -32,6 +32,8 @@ from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
 from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
+from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
+from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.policy.joyra.client import JoyRAPolicyClient
 from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.residual.action import as_numpy_action_chunk
@@ -43,7 +45,6 @@ from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
 from serl_launcher.residual.train.config import (
     resolve_residual_observation_state_mode,
 )
-from serl_launcher.training.checkpoint import _snapshot_agent_checkpoint_payload
 from serl_launcher.training.loop_utils import _iter_period_hits
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
 from serl_launcher.utils.agentlace_io import save_agentlace_bootstrap
@@ -67,16 +68,6 @@ from serl_torch.examples.agibot_real.runtime.policy_adapter import (
 from serl_torch.examples.agibot_real.training_config import (
     coerce_agibot_agentlace_async_cfg,
 )
-
-
-def _apply_agent_payload(agent, payload: dict) -> None:
-    for name, state_dict in payload.get("params", {}).items():
-        if name in agent.state.modules:
-            agent.state.modules[name].load_state_dict(state_dict, strict=True)
-    for name, state_dict in payload.get("target_params", {}).items():
-        if name in agent.state.target_modules:
-            agent.state.target_modules[name].load_state_dict(state_dict, strict=True)
-    agent.state.step = int(payload.get("step", agent.state.step))
 
 
 def _validate_cfg(cfg: DictConfig) -> None:
@@ -299,7 +290,7 @@ def main(cfg: DictConfig) -> None:
             "chunk_step_enabled": True,
             "chunk_horizon": int(chunk_horizon),
             "state_mode": str(obs_state_mode),
-            "initial_agent_payload": _snapshot_agent_checkpoint_payload(
+            "initial_agent_payload": snapshot_agent_checkpoint_payload(
                 agent,
                 step=int(agent.state.step),
             ),
@@ -328,7 +319,11 @@ def main(cfg: DictConfig) -> None:
 
     def _update_actor_agent(payload: dict) -> None:
         with agent_lock:
-            _apply_agent_payload(agent, dict(payload))
+            apply_checkpoint_payload_to_agent(
+                agent,
+                dict(payload),
+                load_optimizers=False,
+            )
         learner_update_steps["value"] = int(
             payload.get("step", learner_update_steps["value"])
         )

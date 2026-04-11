@@ -13,12 +13,14 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
+from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
+from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.runtime_agent import ResidualAgentRuntime
 from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
-from serl_launcher.training.checkpoint import _AsyncCheckpointWriter
-from serl_launcher.training.checkpoint import _CheckpointTask
-from serl_launcher.training.checkpoint import _write_checkpoint_payload
+from serl_launcher.training.checkpoint import AsyncCheckpointWriter
+from serl_launcher.training.checkpoint import CheckpointTask
+from serl_launcher.training.checkpoint import write_checkpoint_payload_profiled
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.profiling import _emit_profiling_snapshot
 from serl_launcher.training.replay_batch import _PreparedBatch
@@ -282,7 +284,7 @@ def _async_process_worker(
             action_transform=action_transform,
             device=learner_device,
         )
-        algorithm.apply_snapshot_payload(
+        apply_checkpoint_payload_to_agent(
             learner_agent, initial_payload, load_optimizers=True
         )
 
@@ -297,7 +299,7 @@ def _async_process_worker(
 
                 command_type = str(command.get("type", ""))
                 if command_type == "stop":
-                    sync_payload = algorithm.snapshot_checkpoint_payload(
+                    sync_payload = snapshot_agent_checkpoint_payload(
                         learner_agent,
                         step=int(update_steps),
                     )
@@ -313,7 +315,7 @@ def _async_process_worker(
                     stop_requested = True
                     break
                 if command_type == "sync_now":
-                    sync_payload = algorithm.snapshot_checkpoint_payload(
+                    sync_payload = snapshot_agent_checkpoint_payload(
                         learner_agent,
                         step=int(update_steps),
                     )
@@ -328,11 +330,11 @@ def _async_process_worker(
                     )
                     continue
                 if command_type == "save_checkpoint":
-                    checkpoint_payload = algorithm.snapshot_checkpoint_payload(
+                    checkpoint_payload = snapshot_agent_checkpoint_payload(
                         learner_agent,
                         step=int(command["step"]),
                     )
-                    _write_checkpoint_payload(
+                    write_checkpoint_payload_profiled(
                         profiler=None,
                         checkpoint_dir=str(command["checkpoint_dir"]),
                         payload=checkpoint_payload,
@@ -369,7 +371,7 @@ def _async_process_worker(
                 "last_update_info": dict(info),
             }
             if update_steps % max(1, int(update_frequency)) == 0:
-                status["sync_payload"] = algorithm.snapshot_checkpoint_payload(
+                status["sync_payload"] = snapshot_agent_checkpoint_payload(
                     learner_agent,
                     step=int(update_steps),
                 )
@@ -464,7 +466,7 @@ def run_agentlace_learner_service(
         device=learner_device,
     )
     if initial_payload is not None:
-        algorithm.apply_snapshot_payload(
+        apply_checkpoint_payload_to_agent(
             learner_agent,
             initial_payload,
             load_optimizers=True,
@@ -598,11 +600,11 @@ def run_agentlace_learner_service(
                 _handle_stats_request(dict(payload))
                 return {}
             if request_type == "save-checkpoint":
-                checkpoint_payload = algorithm.snapshot_checkpoint_payload(
+                checkpoint_payload = snapshot_agent_checkpoint_payload(
                     learner_agent,
                     step=int(payload["step"]),
                 )
-                _write_checkpoint_payload(
+                write_checkpoint_payload_profiled(
                     profiler=profiler,
                     checkpoint_dir=str(payload["checkpoint_dir"]),
                     payload=checkpoint_payload,
@@ -622,7 +624,7 @@ def run_agentlace_learner_service(
                 if server is None:
                     raise RuntimeError("Agentlace trainer server is not ready")
                 server.publish_network(
-                    algorithm.snapshot_checkpoint_payload(
+                    snapshot_agent_checkpoint_payload(
                         learner_agent,
                         step=int(update_steps),
                     )
@@ -660,7 +662,7 @@ def run_agentlace_learner_service(
             ),
         )
         server.publish_network(
-            algorithm.snapshot_checkpoint_payload(learner_agent, step=update_steps)
+            snapshot_agent_checkpoint_payload(learner_agent, step=update_steps)
         )
         if replay_prefetch_enabled:
             prefetcher = _MixedBatchPrefetcher(
@@ -701,7 +703,7 @@ def run_agentlace_learner_service(
                         break
                     if command_type == "sync_now":
                         server.publish_network(
-                            algorithm.snapshot_checkpoint_payload(
+                            snapshot_agent_checkpoint_payload(
                                 learner_agent,
                                 step=int(update_steps),
                             )
@@ -718,11 +720,11 @@ def run_agentlace_learner_service(
                         )
                         continue
                     if command_type == "save_checkpoint":
-                        checkpoint_payload = algorithm.snapshot_checkpoint_payload(
+                        checkpoint_payload = snapshot_agent_checkpoint_payload(
                             learner_agent,
                             step=int(command["step"]),
                         )
-                        _write_checkpoint_payload(
+                        write_checkpoint_payload_profiled(
                             profiler=profiler,
                             checkpoint_dir=str(command["checkpoint_dir"]),
                             payload=checkpoint_payload,
@@ -808,7 +810,7 @@ def run_agentlace_learner_service(
             )
             if update_steps % max(1, int(update_frequency)) == 0:
                 server.publish_network(
-                    algorithm.snapshot_checkpoint_payload(
+                    snapshot_agent_checkpoint_payload(
                         learner_agent,
                         step=int(update_steps),
                     )
@@ -1076,7 +1078,7 @@ class _AsyncLearner:
         replay_prefetch_queue_size: int,
         replay_prefetch_pin_memory: bool,
         replay_prefetch_to_device: bool,
-        checkpoint_writer: Optional[_AsyncCheckpointWriter] = None,
+        checkpoint_writer: Optional[AsyncCheckpointWriter] = None,
         profiler: Optional[_RuntimeProfiler] = None,
     ) -> None:
         self.algorithm = algorithm
@@ -1165,13 +1167,13 @@ class _AsyncLearner:
 
     def save_checkpoint(self, checkpoint_dir: str, *, step: int, keep: int) -> None:
         with self.learner_lock:
-            payload = self.algorithm.snapshot_checkpoint_payload(
+            payload = snapshot_agent_checkpoint_payload(
                 self.learner_agent,
                 step=step,
             )
         if self.checkpoint_writer is not None:
             self.checkpoint_writer.submit(
-                _CheckpointTask(
+                CheckpointTask(
                     checkpoint_dir=checkpoint_dir,
                     payload=payload,
                     step=int(step),
@@ -1179,7 +1181,7 @@ class _AsyncLearner:
                 )
             )
         else:
-            _write_checkpoint_payload(
+            write_checkpoint_payload_profiled(
                 self.profiler,
                 checkpoint_dir,
                 payload,
@@ -1368,7 +1370,7 @@ class _ProcessAsyncLearner:
         self._status_queue = self._ctx.Queue(maxsize=1)
         self._command_queue = self._ctx.Queue(maxsize=8)
         self._process: Optional[mp.Process] = None
-        self._initial_payload = self.algorithm.snapshot_checkpoint_payload(
+        self._initial_payload = snapshot_agent_checkpoint_payload(
             self.actor_agent,
             step=int(self.actor_agent.state.step),
         )
@@ -1400,7 +1402,7 @@ class _ProcessAsyncLearner:
             sync_payload = message.get("sync_payload", None)
             if sync_payload is not None:
                 with self.actor_lock:
-                    self.algorithm.apply_snapshot_payload(
+                    apply_checkpoint_payload_to_agent(
                         self.actor_agent,
                         sync_payload,
                         load_optimizers=False,
@@ -1675,7 +1677,7 @@ class _AgentlaceAsyncLearner:
         self._batch_size = int(batch_size)
         self._offline_ratio = float(offline_ratio)
         self._symmetric_replay = bool(symmetric_replay)
-        self._initial_payload = self.algorithm.snapshot_checkpoint_payload(
+        self._initial_payload = snapshot_agent_checkpoint_payload(
             self.actor_agent,
             step=int(self.actor_agent.state.step),
         )
@@ -1722,7 +1724,7 @@ class _AgentlaceAsyncLearner:
 
     def _update_params(self, payload: Dict[str, Any]) -> None:
         with self.actor_lock:
-            self.algorithm.apply_snapshot_payload(
+            apply_checkpoint_payload_to_agent(
                 self.actor_agent,
                 payload,
                 load_optimizers=False,

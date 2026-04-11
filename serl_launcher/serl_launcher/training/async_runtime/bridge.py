@@ -9,6 +9,7 @@ from typing import Any
 from typing import Dict
 from typing import Optional
 
+from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.training.loop_utils import _count_env_step_update_triggers
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.async_runtime.agentlace import _AgentlaceAsyncLearner
@@ -130,7 +131,6 @@ def save_actor_bootstrap(
     chunk_horizon: int,
     state_mode: str,
     learner_agent: Any,
-    algorithm: ResidualAgentRuntime,
     logger: logging.Logger,
 ) -> Path:
     bootstrap_path = resolve_agentlace_bootstrap_path(
@@ -151,7 +151,7 @@ def save_actor_bootstrap(
             "chunk_step_enabled": bool(chunk_step_enabled),
             "chunk_horizon": int(chunk_horizon),
             "state_mode": str(state_mode),
-            "initial_agent_payload": algorithm.snapshot_checkpoint_payload(
+            "initial_agent_payload": snapshot_agent_checkpoint_payload(
                 learner_agent,
                 step=int(learner_agent.state.step),
             ),

@@ -27,8 +27,18 @@ from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
 from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
 from serl_launcher.residual.train.actor.support import ActorRuntimeContext
+from serl_launcher.residual.train.actor.support import (
+    epsilon_gating_clock as resolve_epsilon_gating_clock,
+)
+from serl_launcher.residual.train.actor.support import (
+    epsilon_gating_enabled as resolve_epsilon_gating_enabled,
+)
 from serl_launcher.residual.train.actor.support import ensure_training_runtime_started
 from serl_launcher.residual.train.actor.support import initialize_actor_loop_state
+from serl_launcher.residual.train.actor.support import resolve_alpha_step
+from serl_launcher.residual.train.actor.support import (
+    scheduled_epsilon_gating_probability,
+)
 from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeConfig
 from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeState
 from serl_launcher.training.async_runtime.bridge import create_agentlace_async_learner
@@ -46,19 +56,16 @@ from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
 from serl_launcher.residual.train.config import (
     resolve_residual_observation_state_mode,
 )
-from serl_launcher.training.checkpoint import _AsyncCheckpointWriter
+from serl_launcher.training.checkpoint import AsyncCheckpointWriter
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.train.schedules import _epsilon_gating_clock
-from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
 from serl_launcher.residual.train.telemetry import _new_tb_step_window
+from serl_launcher.training.jsonl import JsonlWriter
 from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
 from serl_launcher.residual.utils.alpha_utils import validate_alpha
-from serl_launcher.utils.logger import JsonlLogger
 
 if TYPE_CHECKING:
     from torch.utils.tensorboard import SummaryWriter
@@ -166,8 +173,8 @@ def build_actor_runtime_session(
         full_action_dim=env_action_dim,
     )
     action_mask = resolve_action_mask_from_cfg(cfg, full_action_dim=env_action_dim)
-    epsilon_gating_enabled = _epsilon_gating_enabled(cfg)
-    epsilon_gating_clock = _epsilon_gating_clock(cfg)
+    epsilon_gating_enabled = resolve_epsilon_gating_enabled(cfg)
+    epsilon_gating_clock = resolve_epsilon_gating_clock(cfg)
     resolved_cfg_dict = OmegaConf.to_container(cfg, resolve=True)
     logger.info(
         "Residual config: image_keys=%s step_action_dim=%s agent_action_dim=%s "
@@ -221,7 +228,7 @@ def build_actor_runtime_session(
             if epsilon_gating_clock == "env_step"
             else int(decision_step_value)
         )
-        gate_prob = _scheduled_epsilon_gating_probability(
+        gate_prob = scheduled_epsilon_gating_probability(
             cfg, schedule_step=schedule_step
         )
         if alpha_value <= 0.0:
@@ -587,7 +594,7 @@ def build_actor_runtime_session(
     async_learner: Optional[Any] = None
     sync_replay_lock: Optional[threading.Lock] = None
     sync_replay_prefetcher: Optional[_MixedBatchPrefetcher] = None
-    checkpoint_writer: Optional[_AsyncCheckpointWriter] = None
+    checkpoint_writer: Optional[AsyncCheckpointWriter] = None
     policy_prefetcher: Optional[PolicyPrefetcher] = None
     replay_buffer = None
     offline_buffer = None
@@ -699,8 +706,8 @@ def build_actor_runtime_session(
         enabled=(profiling_enabled or external_agentlace_actor_mode),
         window_size=profiling_window_size,
     )
-    checkpoint_writer = _AsyncCheckpointWriter(profiler=profiler)
-    profiling_logger: Optional[JsonlLogger] = None
+    checkpoint_writer = AsyncCheckpointWriter(profiler=profiler)
+    profiling_logger: Optional[JsonlWriter] = None
     profiling_last_flush_step = -1
     async_eval_queue_path: Optional[Path] = None
     (
@@ -717,11 +724,11 @@ def build_actor_runtime_session(
         logger=logger,
     )
 
-    step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
-    episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
+    step_logger = JsonlWriter(run_dir / str(cfg.logging.step_log_file))
+    episode_logger = JsonlWriter(run_dir / str(cfg.logging.episode_log_file))
     policy_prefetcher = build_policy_prefetcher(cfg, logger=logger)
     if profiling_enabled:
-        profiling_logger = JsonlLogger(run_dir / profiling_log_file)
+        profiling_logger = JsonlWriter(run_dir / profiling_log_file)
     # Import TensorBoard lazily so real-robot env setup can initialize the
     # AgiBot DDS stack before TensorFlow/tensorboard side effects occur.
     from torch.utils.tensorboard import SummaryWriter
@@ -954,7 +961,7 @@ def build_actor_runtime_session(
                 action_space=action_space,
                 capacity=int(cfg.offline.capacity),
             )
-        offline_residual_alpha = _scheduled_alpha(
+        offline_residual_alpha = resolve_alpha_step(
             cfg, base_alpha=residual_alpha, schedule_step=0
         )
         offline_stats = load_residual_training_buffer(
@@ -1022,7 +1029,6 @@ def build_actor_runtime_session(
             chunk_horizon=int(chunk_horizon),
             state_mode=str(obs_state_mode),
             learner_agent=learner_agent,
-            algorithm=agent_runtime,
             logger=logger,
         )
 

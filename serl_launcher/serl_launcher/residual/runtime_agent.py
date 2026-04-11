@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional, Protocol
 import torch
 
 from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
-from serl_launcher.training.checkpoint import _snapshot_agent_checkpoint_payload
 
 
 class ResidualAgentRuntime(Protocol):
@@ -59,23 +58,6 @@ class ResidualAgentRuntime(Protocol):
         ...
 
     def sync_modules(self, target_agent: Any, source_agent: Any) -> None:
-        ...
-
-    def apply_snapshot_payload(
-        self,
-        target_agent: Any,
-        payload: Dict[str, Any],
-        *,
-        load_optimizers: bool = False,
-    ) -> None:
-        ...
-
-    def snapshot_checkpoint_payload(
-        self,
-        agent: Any,
-        *,
-        step: int,
-    ) -> Dict[str, Any]:
         ...
 
 
@@ -178,40 +160,6 @@ class ResidualSACRuntime:
                     strict=True,
                 )
         target_agent.state.step = int(source_agent.state.step)
-
-    @torch.no_grad()
-    def apply_snapshot_payload(
-        self,
-        target_agent: Any,
-        payload: Dict[str, Any],
-        *,
-        load_optimizers: bool = False,
-    ) -> None:
-        for name, state_dict in payload.get("params", {}).items():
-            if name in target_agent.state.modules:
-                target_agent.state.modules[name].load_state_dict(
-                    state_dict,
-                    strict=True,
-                )
-        for name, state_dict in payload.get("target_params", {}).items():
-            if name in target_agent.state.target_modules:
-                target_agent.state.target_modules[name].load_state_dict(
-                    state_dict,
-                    strict=True,
-                )
-        if load_optimizers:
-            for name, opt_state in payload.get("optimizer", {}).items():
-                if name in target_agent.state.optimizers:
-                    target_agent.state.optimizers[name].load_state_dict(opt_state)
-        target_agent.state.step = int(payload.get("step", target_agent.state.step))
-
-    def snapshot_checkpoint_payload(
-        self,
-        agent: Any,
-        *,
-        step: int,
-    ) -> Dict[str, Any]:
-        return _snapshot_agent_checkpoint_payload(agent, step=int(step))
 
 
 def create_residual_agent_runtime(cfg: Any | None = None) -> ResidualAgentRuntime:
