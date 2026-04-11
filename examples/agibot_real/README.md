@@ -123,7 +123,6 @@ examples/agibot_real/
   assets/
   conf/
   env/
-  env_wrappers/  # compatibility shims
   robot/
   robot_service/
   runtime/
