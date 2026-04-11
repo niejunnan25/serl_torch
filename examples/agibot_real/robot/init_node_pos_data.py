@@ -1,8 +1,4 @@
-"""Builtin task -> initial head/waist/joint poses (aligned with tangyili/code/agibot/init_node_pos.py).
-
-Override via env AGIBOT_CODE_ROOT pointing at .../tangyili/code/agibot to use that tree's
-init_node_pos.py instead (see task_init_pos.py).
-"""
+"""Bundled task -> initial head/waist/joint poses for AgiBot reset."""
 
 
 def init_node_pos(task_name: str):

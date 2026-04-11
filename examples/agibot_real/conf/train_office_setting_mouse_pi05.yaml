@@ -1,16 +1,17 @@
-# office_setting + pi05 残差 RL（与 tangyili/run_agibot.sh 语义对齐）
+# office_setting + pi05 残差 RL（与参考推理流程语义对齐）
 #
-# - task.name / task.prompt 对应 run_agibot.sh 的 <task_name> 与 <instruction>（语言指令发给 OpenPI）。
+# - task.name / task.prompt 对应真机任务名与语言指令（语言指令发给基座策略服务）。
 # - 每回合 reset 会调用 robot/reset_hooks.py：init_node_pos(task.name) + 头/腰/关节目标，
-#   与 tangyili/code/agibot/agi_robot.py 中 AgiRobot.reset 一致。可选环境变量：
-#   AGIBOT_CODE_ROOT=/path/to/tangyili/code/agibot 以使用那边的 init_node_pos.py
+#   与参考 AgiRobot.reset 一致。可选环境变量：
 #   AGIBOT_RESET_SLEEP_HEAD_WAIST_SEC / AGIBOT_RESET_SLEEP_ARM_SEC
 #
 # 启动示例（在 examples/agibot_real 下）：
 #   bash tools/run_actor.sh conf/train_office_setting_mouse_pi05.yaml ...
 #   bash tools/run_learner.sh conf/train_office_setting_mouse_pi05.yaml ...
 #
-# OpenPI：tools/serve_openpi.sh 的端口需与 openpi.port 一致；POLICY_CONFIG / POLICY_DIR 指向你的 pi05。
+# 基座策略服务：
+# - OpenPI：tools/serve_openpi.sh 的端口需与 openpi.port 一致；POLICY_CONFIG / POLICY_DIR 指向你的 pi05。
+# - JoyRA：可通过 `policy.type=joyra joyra.port=9000` 切换到 tools/serve_joyra.sh。
 
 defaults:
   - train_residual_sac
@@ -35,6 +36,10 @@ policy:
   id: pi05_agibot
 
 openpi:
+  host: localhost
+  port: 9000
+
+joyra:
   host: localhost
   port: 9000
 

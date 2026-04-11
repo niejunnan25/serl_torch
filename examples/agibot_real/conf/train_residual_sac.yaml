@@ -25,6 +25,10 @@ openpi:
   host: localhost
   port: 9000
 
+joyra:
+  host: localhost
+  port: 9000
+
 policy:
   type: openpi
   id: pi05_agibot
@@ -130,6 +134,9 @@ replay:
 # ---------------------------
 # Offline Data
 # ---------------------------
+# Example-local offline injection is intentionally removed from agibot_real.
+# Keep this block only because the shared residual trainer still expects
+# cfg.offline to exist; actor/learner entrypoints will reject enabled=true.
 offline:
   enabled: false
   dataset_paths: []
@@ -139,13 +146,6 @@ offline:
   expert_reference_scale: 1.0
   clip_residual_to_unit: true
   max_transitions: null
-  bootstrap_base:
-    enabled: false
-    success_episodes: 20
-    max_seed_attempts: 2000
-    seed_base: null
-    max_env_steps_per_episode: null
-    only_success: true
 
 # ---------------------------
 # Training Loop
@@ -156,6 +156,9 @@ training:
   expert_check: false
   warmup:
     episodes: 0
+  # Example-local online prefill injection is intentionally removed from
+  # agibot_real. Keep this stub for shared trainer config compatibility;
+  # actor/learner entrypoints will reject enabled=true.
   online_prefill:
     enabled: false
     dataset_paths: []

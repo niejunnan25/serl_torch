@@ -18,6 +18,10 @@ openpi:
   host: localhost
   port: 30001
 
+joyra:
+  host: localhost
+  port: 30001
+
 policy:
   type: openpi
   id: pi05_agibot

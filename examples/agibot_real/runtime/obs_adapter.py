@@ -79,6 +79,13 @@ def _find_first_key(obs: Dict[str, Any], candidates: Tuple[str, ...]) -> Any:
     )
 
 
+def _maybe_find_first_key(obs: Dict[str, Any], candidates: Tuple[str, ...]) -> Any:
+    for key in candidates:
+        if key in obs:
+            return obs[key]
+    return None
+
+
 def _compute_agibot_state(obs: Dict[str, Any]) -> np.ndarray:
     pose = np.asarray(
         _find_first_key(obs, ("state/pose", "observation/state", "pose")),
@@ -87,6 +94,28 @@ def _compute_agibot_state(obs: Dict[str, Any]) -> np.ndarray:
     if pose.shape[0] != 14:
         raise ValueError(f"AgiBot camera-position state must be 14D, got {pose.shape}")
     return pose.astype(np.float32)
+
+
+def _compute_agibot_joyra_state(obs: Dict[str, Any]) -> Optional[np.ndarray]:
+    pose = _compute_agibot_state(obs)
+    head = _maybe_find_first_key(obs, ("state/head", "head_state", "head"))
+    waist = _maybe_find_first_key(obs, ("state/waist", "waist_state", "waist"))
+    if head is None or waist is None:
+        return None
+
+    head_arr = np.asarray(head, dtype=np.float32).reshape(-1)
+    waist_arr = np.asarray(waist, dtype=np.float32).reshape(-1)
+    if head_arr.shape[0] != 2:
+        raise ValueError(
+            "AgiBot JoyRA head state must be 2D, got "
+            f"{head_arr.shape}"
+        )
+    if waist_arr.shape[0] != 2:
+        raise ValueError(
+            "AgiBot JoyRA waist state must be 2D, got "
+            f"{waist_arr.shape}"
+        )
+    return np.concatenate([pose, head_arr, waist_arr], axis=0).astype(np.float32)
 
 
 def _compute_policy_images(obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
@@ -328,6 +357,15 @@ def build_agibot_state(
     return np.asarray(state, dtype=np.float32)
 
 
+def build_agibot_joyra_state(
+    obs: Dict[str, Any],
+) -> Optional[np.ndarray]:
+    joyra_state = _compute_agibot_joyra_state(obs)
+    if joyra_state is None:
+        return None
+    return np.asarray(joyra_state, dtype=np.float32)
+
+
 def extract_policy_images(
     obs: Dict[str, Any],
     *,
@@ -432,4 +470,3 @@ def build_residual_step_obs(
         state_mode=state_mode,
         stack_horizon=int(stack_horizon),
     )
-

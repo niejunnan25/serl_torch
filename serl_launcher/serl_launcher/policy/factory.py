@@ -8,6 +8,8 @@ from omegaconf import DictConfig
 
 from serl_launcher.policy.base import PolicyClient
 from serl_launcher.policy.base import PolicyPrefetcher
+from serl_launcher.policy.joyra.client import JoyRAPolicyClient
+from serl_launcher.policy.joyra.prefetch import AsyncJoyRAPolicyPrefetcher
 from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.policy.openpi.prefetch import AsyncOpenPIPolicyPrefetcher
 
@@ -35,6 +37,21 @@ def resolve_policy_backend_id(cfg: DictConfig) -> str:
     return policy_id if policy_id else policy_type
 
 
+def _resolve_policy_endpoint(cfg: DictConfig, backend_name: str) -> tuple[str, int]:
+    backend_cfg = cfg.get(backend_name, None)
+    if backend_cfg is None:
+        # Keep backward compatibility with existing scripts that still only populate
+        # the `openpi` section while switching `policy.type` at runtime.
+        backend_cfg = cfg.get("openpi", None)
+    if backend_cfg is None:
+        raise ValueError(
+            f"Missing `{backend_name}` endpoint config and no `openpi` fallback was found"
+        )
+    host = str(backend_cfg.get("host", "localhost"))
+    port = int(backend_cfg.get("port", 30001))
+    return host, port
+
+
 def build_policy_client(
     cfg: DictConfig,
     *,
@@ -42,9 +59,18 @@ def build_policy_client(
 ) -> PolicyClient:
     policy_type = resolve_policy_backend_type(cfg)
     if policy_type == "openpi":
+        host, port = _resolve_policy_endpoint(cfg, "openpi")
         return OpenPIPolicyClient(
-            host=str(cfg.openpi.host),
-            port=int(cfg.openpi.port),
+            host=host,
+            port=port,
+            logger=logger,
+        )
+    if policy_type == "joyra":
+        host, port = _resolve_policy_endpoint(cfg, "joyra")
+        return JoyRAPolicyClient(
+            host=host,
+            port=port,
+            action_dim=int(cfg.get("env", {}).get("action_dim", 14)),
             logger=logger,
         )
     raise ValueError(f"Unsupported policy backend type: {policy_type!r}")
@@ -57,9 +83,18 @@ def build_policy_prefetcher(
 ) -> PolicyPrefetcher:
     policy_type = resolve_policy_backend_type(cfg)
     if policy_type == "openpi":
+        host, port = _resolve_policy_endpoint(cfg, "openpi")
         return AsyncOpenPIPolicyPrefetcher(
-            host=str(cfg.openpi.host),
-            port=int(cfg.openpi.port),
+            host=host,
+            port=port,
+            logger=logger,
+        )
+    if policy_type == "joyra":
+        host, port = _resolve_policy_endpoint(cfg, "joyra")
+        return AsyncJoyRAPolicyPrefetcher(
+            host=host,
+            port=port,
+            action_dim=int(cfg.get("env", {}).get("action_dim", 14)),
             logger=logger,
         )
     raise ValueError(f"Unsupported policy backend type: {policy_type!r}")

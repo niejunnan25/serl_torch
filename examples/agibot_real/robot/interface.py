@@ -17,13 +17,17 @@ class AgiBotRobotNode:
 
     def __init__(self, *, hz: float = 20.0) -> None:
         try:
+            from .sdk_bootstrap import ensure_repo_local_a2d_sdk
+
+            ensure_repo_local_a2d_sdk()
             from a2d_sdk.robot import CosineCamera
             from a2d_sdk.robot import RobotController
             from a2d_sdk.robot import RobotDds
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
-                "AgiBot SDK is not available. Install the external `a2d_sdk` package "
-                "in the runtime environment before using examples/agibot_real."
+                "Repo-local AgiBot SDK bootstrap failed. "
+                "Make sure you are using Python 3.10 on the robot machine and "
+                "that examples/agibot_real/vendor/a2d_sdk is present."
             ) from exc
 
         self.robot = RobotDds()
@@ -199,4 +203,3 @@ class AgiBotRobotNode:
 
     def shutdown(self) -> None:
         self.robot.shutdown()
-
