@@ -151,6 +151,7 @@ For JoyRA, start your external JoyRA server in its own environment. Example:
 cd /workspace/codebase/JoyRA
 conda activate joyra
 export CUDA_VISIBLE_DEVICES=0
+export PYTHONPATH=/workspace/codebase/JoyRA:$PYTHONPATH
 python /workspace/codebase/JoyRA/deployment/real_infer/server.py \
   --host 0.0.0.0 \
   --port 9001 \
@@ -159,6 +160,27 @@ python /workspace/codebase/JoyRA/deployment/real_infer/server.py \
 
 This command is intentionally outside `serl_torch`: the model server is a base
 policy dependency, not part of the residual RL runtime.
+
+If you want to launch the same JoyRA server shape from this repo, the wrapper
+now follows that exact pattern:
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+JOYRA_ROOT=/workspace/codebase/JoyRA \
+JOYRA_CKPT_PATH=/workspace/codebase/JoyRA/outputs/.../checkpoints/steps_30000_pytorch_model.pt \
+JOYRA_CONDA_ENV=joyra \
+bash tools/serve_joyra.sh --port 9001
+```
+
+`tools/serve_joyra.sh` now:
+
+1. activates the JoyRA conda env
+2. `cd`s into `JOYRA_ROOT`
+3. exports `PYTHONPATH=$JOYRA_ROOT:$PYTHONPATH`
+4. runs `$JOYRA_ROOT/deployment/real_infer/server.py`
+
+This matches the validated container-side JoyRA startup command more closely than
+the older wrapper behavior.
 
 ### Terminal B: Prepare Robot Runtime
 
