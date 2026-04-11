@@ -18,14 +18,15 @@ assume it is already serving websocket policy requests at `127.0.0.1:9001`.
 
 ## What Is Included
 
-- Local AgiBot env wrapper:
-  - [`env_wrappers/task_env.py`](env_wrappers/task_env.py)
-  - [`env_wrappers/controller.py`](env_wrappers/controller.py)
-  - [`env_wrappers/factory.py`](env_wrappers/factory.py)
+- Local AgiBot env implementation:
+  - [`env/task_env.py`](env/task_env.py)
+  - [`env/controller.py`](env/controller.py)
+  - [`env/factory.py`](env/factory.py)
 - Robot-facing runtime helpers:
   - [`robot/interface.py`](robot/interface.py)
   - [`robot/retargeter.py`](robot/retargeter.py)
   - [`robot/hooks.py`](robot/hooks.py)
+  - [`robot/init_positions.py`](robot/init_positions.py)
   - [`robot/reset_hooks.py`](robot/reset_hooks.py)
 - Repo-local vendored SDK/bootstrap:
   - [`robot/sdk_bootstrap.py`](robot/sdk_bootstrap.py)
@@ -121,7 +122,7 @@ Important:
 examples/agibot_real/
   assets/
   conf/
-  env_wrappers/
+  env/
   robot/
   robot_service/
   runtime/

@@ -246,7 +246,9 @@ class ManualEpisodeController:
                 self._state = STATE_EPISODE_DONE
         return self.get_meta()
 
-    def mark_timeout(self, *, info: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    def mark_timeout(
+        self, *, info: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, Any]:
         with self._lock:
             self._queue.clear()
             self._terminal_signal = TERMINAL_TIMEOUT
@@ -323,7 +325,9 @@ class ManualEpisodeController:
         try:
             tty.setcbreak(fd)
             while not self._stop_event.is_set():
-                readable, _, _ = select.select([sys.stdin], [], [], self.poll_interval_sec)
+                readable, _, _ = select.select(
+                    [sys.stdin], [], [], self.poll_interval_sec
+                )
                 if not readable:
                     continue
                 ch = sys.stdin.read(1)

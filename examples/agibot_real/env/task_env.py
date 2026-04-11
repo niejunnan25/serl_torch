@@ -1,4 +1,4 @@
-"""Local AgiBot real-robot task environment wrapper."""
+"""Local AgiBot real-robot task environment."""
 from __future__ import annotations
 
 import logging
@@ -63,7 +63,9 @@ class AgiBotTaskEnv:
         self.hz = float(hz)
         self.use_smooth_trajectory = bool(use_smooth_trajectory)
         self.trajectory_time = (
-            float(trajectory_time) if trajectory_time is not None else (1.0 / self.hz) * 2.0
+            float(trajectory_time)
+            if trajectory_time is not None
+            else (1.0 / self.hz) * 2.0
         )
         self._action_dim = int(action_dim)
         if self.control_mode != "camera_position":
@@ -82,7 +84,9 @@ class AgiBotTaskEnv:
             urdf_path=retargeter_urdf_path,
             camera_extrinsic_path=retargeter_camera_extrinsic_path,
         )
-        self._step_limit = int(max_episode_steps) if max_episode_steps is not None else 200
+        self._step_limit = (
+            int(max_episode_steps) if max_episode_steps is not None else 200
+        )
         self._take_action_cnt = 0
         self.last_seed: Optional[int] = None
         self.current_init_state_idx: Optional[int] = None
@@ -165,9 +169,15 @@ class AgiBotTaskEnv:
         return obs
 
     def _compute_pose_state(self, joint_state: np.ndarray) -> Dict[str, np.ndarray]:
-        head_states = np.asarray(self.robot_node.get_head_joint_states(), dtype=np.float32)
-        waist_states = np.asarray(self.robot_node.get_waist_joint_states(), dtype=np.float32)
-        arm_states = np.asarray(self.robot_node.get_arm_joint_states(), dtype=np.float32)
+        head_states = np.asarray(
+            self.robot_node.get_head_joint_states(), dtype=np.float32
+        )
+        waist_states = np.asarray(
+            self.robot_node.get_waist_joint_states(), dtype=np.float32
+        )
+        arm_states = np.asarray(
+            self.robot_node.get_arm_joint_states(), dtype=np.float32
+        )
 
         state_vec = np.zeros((1, 53), dtype=np.float32)
         state_vec[0, 28:35] = arm_states[:7]
@@ -177,9 +187,10 @@ class AgiBotTaskEnv:
         state_vec[0, 51:53] = waist_states
         state_vec[0, 26:28] = head_states
 
-        (left_pos, left_axisangle), (right_pos, right_axisangle) = self.retargeter.process_kinematics(
-            state_vec
-        )
+        (left_pos, left_axisangle), (
+            right_pos,
+            right_axisangle,
+        ) = self.retargeter.process_kinematics(state_vec)
         pose = np.concatenate(
             [
                 np.asarray(left_pos, dtype=np.float32).reshape(3),
@@ -199,11 +210,19 @@ class AgiBotTaskEnv:
     def _step_cartesian(self, action: np.ndarray) -> None:
         action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
         if action_arr.shape[0] != 14:
-            raise ValueError(f"camera_position action must be 14D, got {action_arr.shape}")
+            raise ValueError(
+                f"camera_position action must be 14D, got {action_arr.shape}"
+            )
         hand_left, hand_right = float(action_arr[6]), float(action_arr[13])
-        head_states = np.asarray(self.robot_node.get_head_joint_states(), dtype=np.float32)
-        waist_states = np.asarray(self.robot_node.get_waist_joint_states(), dtype=np.float32)
-        arm_states = np.asarray(self.robot_node.get_arm_joint_states(), dtype=np.float32)
+        head_states = np.asarray(
+            self.robot_node.get_head_joint_states(), dtype=np.float32
+        )
+        waist_states = np.asarray(
+            self.robot_node.get_waist_joint_states(), dtype=np.float32
+        )
+        arm_states = np.asarray(
+            self.robot_node.get_arm_joint_states(), dtype=np.float32
+        )
 
         action_vec = np.zeros((1, 53), dtype=np.float32)
         action_vec[0, 51:53] = waist_states
@@ -214,14 +233,15 @@ class AgiBotTaskEnv:
         right_pos = action_arr[7:10].reshape(1, 3)
         right_aa = action_arr[10:13].reshape(1, 3)
 
-        (left_pos_base, left_euler), (right_pos_base, right_euler) = (
-            self.retargeter.inverse_kinematics_from_camera_axisangle(
-                left_pos,
-                left_aa,
-                right_pos,
-                right_aa,
-                action_vec,
-            )
+        (left_pos_base, left_euler), (
+            right_pos_base,
+            right_euler,
+        ) = self.retargeter.inverse_kinematics_from_camera_axisangle(
+            left_pos,
+            left_aa,
+            right_pos,
+            right_aa,
+            action_vec,
         )
         abs_action = np.concatenate(
             [
@@ -451,7 +471,9 @@ class AgiBotTaskEnv:
             raise RuntimeError("controller mode is disabled")
         return self._controller.enqueue_action_chunk(actions)
 
-    def poll_controller_transitions(self, *, max_items: int = 64) -> list[Dict[str, Any]]:
+    def poll_controller_transitions(
+        self, *, max_items: int = 64
+    ) -> list[Dict[str, Any]]:
         if not self._controller_enabled or self._controller is None:
             raise RuntimeError("controller mode is disabled")
         transitions = self._controller.poll_transitions(max_items=max_items)
@@ -509,7 +531,9 @@ class AgiBotTaskEnv:
         payload["info"] = info
         return payload
 
-    def _controller_execute_chunk_blocking(self, actions: np.ndarray) -> list[Dict[str, Any]]:
+    def _controller_execute_chunk_blocking(
+        self, actions: np.ndarray
+    ) -> list[Dict[str, Any]]:
         assert self._controller is not None
         action_chunk = np.asarray(actions, dtype=np.float32)
         if action_chunk.ndim != 2:
@@ -554,7 +578,8 @@ class AgiBotTaskEnv:
                 except (TypeError, ValueError):
                     inflight_sequence_id = None
             if (
-                meta.get("terminal_signal", None) in {
+                meta.get("terminal_signal", None)
+                in {
                     TERMINAL_SUCCESS,
                     TERMINAL_FAIL,
                     TERMINAL_RESET,
@@ -693,7 +718,9 @@ class AgiBotTaskEnv:
         if self._controller_enabled and self._controller is not None:
             transitions = self._controller_execute_chunk_blocking(action_chunk)
             if not transitions:
-                raise RuntimeError("controller step_chunk produced no executed transitions")
+                raise RuntimeError(
+                    "controller step_chunk produced no executed transitions"
+                )
             observations = [_clone_obs_tree(v["obs"]) for v in transitions]
             rewards = [float(v["reward"]) for v in transitions]
             dones = [bool(v["done"]) for v in transitions]

@@ -21,7 +21,9 @@ def _resolve_robot_asset_path(
         return str(Path(str(explicit)).expanduser().resolve())
     assets_root = robot_cfg.get("assets_root", None)
     if assets_root is not None:
-        return str((Path(str(assets_root)).expanduser() / "G1" / default_name).resolve())
+        return str(
+            (Path(str(assets_root)).expanduser() / "G1" / default_name).resolve()
+        )
     return str(
         (Path(__file__).resolve().parents[1] / "assets" / "G1" / default_name).resolve()
     )
@@ -39,7 +41,9 @@ def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, o
         "use_smooth_trajectory": bool(task_cfg.get("use_smooth_trajectory", False)),
         "trajectory_time": task_cfg.get("trajectory_time", None),
         "max_episode_steps": task_cfg.get("max_episode_steps", None),
-        "retargeter_urdf_path": _resolve_robot_asset_path(cfg, "retargeter_urdf_path", "model.urdf"),
+        "retargeter_urdf_path": _resolve_robot_asset_path(
+            cfg, "retargeter_urdf_path", "model.urdf"
+        ),
         "retargeter_camera_extrinsic_path": _resolve_robot_asset_path(
             cfg,
             "retargeter_camera_extrinsic_path",

@@ -17,13 +17,13 @@ from typing import Sequence
 
 import numpy as np
 
-from ..env_wrappers.controller import STATE_PAUSED
-from ..env_wrappers.controller import STATE_RUNNING
-from ..env_wrappers.controller import STATE_WAIT_READY
-from ..env_wrappers.controller import TERMINAL_FAIL
-from ..env_wrappers.controller import TERMINAL_RESET
-from ..env_wrappers.controller import TERMINAL_SUCCESS
-from ..env_wrappers.controller import TERMINAL_TIMEOUT
+from ..env.controller import STATE_PAUSED
+from ..env.controller import STATE_RUNNING
+from ..env.controller import STATE_WAIT_READY
+from ..env.controller import TERMINAL_FAIL
+from ..env.controller import TERMINAL_RESET
+from ..env.controller import TERMINAL_SUCCESS
+from ..env.controller import TERMINAL_TIMEOUT
 
 
 @dataclass
@@ -292,7 +292,9 @@ def run_controller_episode(
 
     if buffered_step is not None and summary.episode_steps < int(max_episode_steps):
         _commit_step(buffered_step)
-        if summary.terminal_signal is None and bool(buffered_step.done or buffered_step.truncated):
+        if summary.terminal_signal is None and bool(
+            buffered_step.done or buffered_step.truncated
+        ):
             summary.terminal_signal = str(
                 buffered_step.info.get("terminal_signal", summary.terminal_signal)
             )

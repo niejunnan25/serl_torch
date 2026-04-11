@@ -12,7 +12,7 @@ from serl_launcher.residual.train.bindings import ResidualRuntimeBindings
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.profiling import _profile_call
 
-from ..env_wrappers.factory import _create_env
+from ..env.factory import _create_env
 from .data_bindings import AgiBotDataBindings
 from .data_bindings import build_agibot_data_bindings
 from .obs_adapter import AgiBotObservationCache
@@ -120,4 +120,3 @@ def build_agibot_runtime_bindings(
         task_key=data_bindings.task_key,
         data_config=data_bindings.data_config,
     )
-

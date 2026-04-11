@@ -1,4 +1,4 @@
-"""AgiBot local task env wrappers."""
+"""AgiBot real-robot environment package."""
 
 from .task_env import AgiBotTaskEnv
 

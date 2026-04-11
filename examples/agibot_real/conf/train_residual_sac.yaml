@@ -6,7 +6,7 @@ seed: 0
 # ---------------------------
 # Task / Environment
 # ---------------------------
-# reset_hook: 每回合按 task.name 调用 init_node_pos（见 robot/task_init_pos.py）；设 null 可关闭。
+# reset_hook: 每回合按 task.name 调用 bundled init positions（见 robot/init_positions.py）；设 null 可关闭。
 task:
   name: agibot_real_default
   task_key: null
