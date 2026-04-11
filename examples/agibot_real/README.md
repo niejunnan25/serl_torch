@@ -300,9 +300,7 @@ python scripts/train/run_learner.py \
   joyra.host=127.0.0.1 \
   joyra.port=9001 \
   hydra.run.dir=outputs/agibot_real/train_default/learner \
-  ++training.async.enabled=true \
-  ++training.async.backend=agentlace \
-  ++training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
+  training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
 ```
 
 ### Terminal E: Actor
@@ -334,16 +332,14 @@ python scripts/train/run_actor.py \
   joyra.host=127.0.0.1 \
   joyra.port=9001 \
   hydra.run.dir=outputs/agibot_real/train_default/actor \
-  ++training.async.enabled=true \
-  ++training.async.backend=agentlace \
-  ++training.async.agentlace.spawn_local_worker=false \
-  ++training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
+  training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
 ```
 
 Notes:
 
 - learner and actor must use the same `--bootstrap` path
 - learner and actor must agree on `policy.type` and backend host/port
+- Agentlace is implicit for `agibot_real`; you only need to provide the bootstrap path
 - the actor terminal owns the live robot env, action queue, and manual
   controller
 - `controller.enabled=true` and `chunk_step.enabled=true` are the expected

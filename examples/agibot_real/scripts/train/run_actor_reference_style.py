@@ -1,39 +1,37 @@
 from __future__ import annotations
 
-"""Reference-style AgiBot residual actor prototype.
+"""Reference-style AgiBot residual actor with external learner ownership.
 
-This file is intentionally closer to the SERL reference examples:
+This prototype keeps the main flow explicit:
 
-1. build env / policy / agent directly
+1. build env / base policy / residual agent directly
 2. reset env
 3. infer base chunk
 4. sample residual chunk
 5. compose final chunk
 6. env.step_chunk(...)
-7. insert replay
-8. run learner updates
+7. send executed step records to learner via TrainerClient.update()
 
-It is intentionally narrower than the production AgiBot actor entrypoint:
-- sync learner only
-- chunk-step path only
-- no offline injection / online prefill / async eval
-- no warmup phases
+Unlike the earlier prototype, this script no longer owns replay sampling or
+parameter updates. The standalone learner is responsible for replay + updates,
+matching the reference SERL actor/learner split more closely.
 """
 
 import json
 import logging
 import sys
+import threading
+import time
 from pathlib import Path
 
 import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
-from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
-from serl_launcher.agents.continuous.drq import DrQAgent
+from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
 from serl_launcher.policy.joyra.client import JoyRAPolicyClient
 from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 from serl_launcher.residual.action import as_numpy_action_chunk
@@ -45,13 +43,11 @@ from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
 from serl_launcher.residual.train.config import (
     resolve_residual_observation_state_mode,
 )
-from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
 from serl_launcher.training.checkpoint import _snapshot_agent_checkpoint_payload
-from serl_launcher.training.checkpoint import _write_checkpoint_payload
-from serl_launcher.training.loop_utils import _count_env_step_update_triggers
 from serl_launcher.training.loop_utils import _iter_period_hits
+from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
+from serl_launcher.utils.agentlace_io import save_agentlace_bootstrap
 from serl_launcher.utils.alpha_utils import require_residual_alpha
-from serl_launcher.utils.logger import JsonlLogger
 
 REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
@@ -68,6 +64,19 @@ from serl_torch.examples.agibot_real.runtime.obs_adapter import (
 from serl_torch.examples.agibot_real.runtime.policy_adapter import (
     build_agibot_policy_input,
 )
+from serl_torch.examples.agibot_real.training_config import (
+    coerce_agibot_agentlace_async_cfg,
+)
+
+
+def _apply_agent_payload(agent, payload: dict) -> None:
+    for name, state_dict in payload.get("params", {}).items():
+        if name in agent.state.modules:
+            agent.state.modules[name].load_state_dict(state_dict, strict=True)
+    for name, state_dict in payload.get("target_params", {}).items():
+        if name in agent.state.target_modules:
+            agent.state.target_modules[name].load_state_dict(state_dict, strict=True)
+    agent.state.step = int(payload.get("step", agent.state.step))
 
 
 def _validate_cfg(cfg: DictConfig) -> None:
@@ -81,11 +90,7 @@ def _validate_cfg(cfg: DictConfig) -> None:
             "reference-style actor does not support online prefill injection; "
             "set training.online_prefill.enabled=false"
         )
-    if bool(cfg.get("training", {}).get("async", {}).get("enabled", False)):
-        raise ValueError(
-            "reference-style actor targets the sync learner path; "
-            "set training.async.enabled=false"
-        )
+
     if bool(cfg.get("training", {}).get("async_eval", {}).get("enabled", False)):
         raise ValueError(
             "reference-style actor does not start async eval; "
@@ -151,58 +156,25 @@ def main(cfg: DictConfig) -> None:
         level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
     )
     logger = logging.getLogger("agibot_real_actor_reference_style")
+
+    coerce_agibot_agentlace_async_cfg(cfg)
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
     _validate_cfg(cfg)
 
+    async_cfg = cfg.training.get("async", {})
+    agentlace_cfg = async_cfg.get("agentlace", {})
+    bootstrap_file = str(agentlace_cfg.get("bootstrap_file", "agentlace_bootstrap.pkl"))
+    if not Path(bootstrap_file).expanduser().is_absolute():
+        raise ValueError(
+            "reference-style actor with a standalone learner requires "
+            "training.async.agentlace.bootstrap_file to be an absolute path"
+        )
+
     task_cfg = cfg.get("task", {})
     robot_cfg = cfg.get("robot", {})
     controller_cfg = OmegaConf.to_container(cfg.get("controller", {}), resolve=True)
-    assets_root = robot_cfg.get("assets_root", None)
-
-    retargeter_urdf_path = robot_cfg.get("retargeter_urdf_path", None)
-    if retargeter_urdf_path is None:
-        if assets_root is not None:
-            retargeter_urdf_path = str(
-                (Path(str(assets_root)).expanduser() / "G1" / "model.urdf").resolve()
-            )
-        else:
-            retargeter_urdf_path = str(
-                (
-                    Path(__file__).resolve().parents[2] / "assets" / "G1" / "model.urdf"
-                ).resolve()
-            )
-    else:
-        retargeter_urdf_path = str(
-            Path(str(retargeter_urdf_path)).expanduser().resolve()
-        )
-
-    retargeter_camera_extrinsic_path = robot_cfg.get(
-        "retargeter_camera_extrinsic_path", None
-    )
-    if retargeter_camera_extrinsic_path is None:
-        if assets_root is not None:
-            retargeter_camera_extrinsic_path = str(
-                (
-                    Path(str(assets_root)).expanduser()
-                    / "G1"
-                    / "head_extrinsic_ours.json"
-                ).resolve()
-            )
-        else:
-            retargeter_camera_extrinsic_path = str(
-                (
-                    Path(__file__).resolve().parents[2]
-                    / "assets"
-                    / "G1"
-                    / "head_extrinsic_ours.json"
-                ).resolve()
-            )
-    else:
-        retargeter_camera_extrinsic_path = str(
-            Path(str(retargeter_camera_extrinsic_path)).expanduser().resolve()
-        )
 
     env = AgiBotTaskEnv(
         task_name=str(task_cfg.get("name", "agibot_real_task")),
@@ -213,8 +185,11 @@ def main(cfg: DictConfig) -> None:
         use_smooth_trajectory=bool(task_cfg.get("use_smooth_trajectory", False)),
         trajectory_time=task_cfg.get("trajectory_time", None),
         max_episode_steps=task_cfg.get("max_episode_steps", None),
-        retargeter_urdf_path=retargeter_urdf_path,
-        retargeter_camera_extrinsic_path=retargeter_camera_extrinsic_path,
+        assets_root=robot_cfg.get("assets_root", None),
+        retargeter_urdf_path=robot_cfg.get("retargeter_urdf_path", None),
+        retargeter_camera_extrinsic_path=robot_cfg.get(
+            "retargeter_camera_extrinsic_path", None
+        ),
         controller=controller_cfg,
         reset_hook=task_cfg.get("reset_hook", None),
         success_hook=task_cfg.get("success_hook", None),
@@ -296,144 +271,81 @@ def main(cfg: DictConfig) -> None:
         image_keys=image_keys,
     )["state_core"]
 
-    opt_cfg = cfg.sac.get("optimizer", None)
-    actor_optimizer_kwargs = {"learning_rate": float(cfg.sac.learning_rate)}
-    critic_optimizer_kwargs = {"learning_rate": float(cfg.sac.learning_rate)}
-    temperature_optimizer_kwargs = {"learning_rate": float(cfg.sac.learning_rate)}
-    if opt_cfg is not None:
-        opt_type = str(opt_cfg.get("type", "adam")).lower()
-        if opt_type not in {"adam", "adamw"}:
-            raise ValueError(f"Unsupported sac.optimizer.type: {opt_type}")
-        if opt_type == "adamw":
-            weight_decay = float(opt_cfg.get("weight_decay", 0.0))
-            actor_optimizer_kwargs["weight_decay"] = weight_decay
-            critic_optimizer_kwargs["weight_decay"] = weight_decay
-        warmup_steps = opt_cfg.get("warmup_steps", None)
-        if warmup_steps is not None:
-            actor_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
-            critic_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
-            temperature_optimizer_kwargs["warmup_steps"] = int(warmup_steps)
-        cosine_decay_steps = opt_cfg.get("cosine_decay_steps", None)
-        if cosine_decay_steps is not None:
-            actor_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
-            critic_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
-            temperature_optimizer_kwargs["cosine_decay_steps"] = int(cosine_decay_steps)
-        grad_clip_norm = opt_cfg.get("grad_clip_norm", None)
-        if grad_clip_norm is not None:
-            actor_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
-            critic_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
-            temperature_optimizer_kwargs["clip_grad_norm"] = float(grad_clip_norm)
-        if opt_type == "adamw":
-            temp_weight_decay = opt_cfg.get("temperature_weight_decay", None)
-            if temp_weight_decay is not None:
-                temperature_optimizer_kwargs["weight_decay"] = float(temp_weight_decay)
-
-    resnet_kwargs = None
-    resnet_cfg = cfg.sac.get("resnet", None)
-    if resnet_cfg is not None:
-        model_name = str(resnet_cfg.get("model_name", "microsoft/resnet-18"))
-        if not Path(model_name).is_absolute() and not model_name.startswith(
-            ("http://", "https://")
-        ):
-            candidate = Path(get_original_cwd()) / model_name
-            if candidate.is_dir():
-                model_name = str(candidate)
-        resnet_kwargs = {
-            "model_name": model_name,
-            "pretrained": bool(resnet_cfg.get("pretrained", True)),
-            "freeze_backbone": bool(resnet_cfg.get("freeze_backbone", False)),
-            "pooling_method": str(
-                resnet_cfg.get("pooling_method", "spatial_learned_embeddings")
-            ),
-            "num_spatial_blocks": int(resnet_cfg.get("num_spatial_blocks", 8)),
-            "bottleneck_dim": int(resnet_cfg.get("bottleneck_dim", 256)),
-        }
-
-    mixed_precision_cfg = cfg.get("training", {}).get("mixed_precision", None)
-    mixed_precision = {
-        "enabled": bool(
-            mixed_precision_cfg.get("enabled", False)
-            if mixed_precision_cfg is not None
-            else False
-        ),
-        "dtype": str(
-            mixed_precision_cfg.get("dtype", "bfloat16")
-            if mixed_precision_cfg is not None
-            else "bfloat16"
-        ),
-    }
-
-    sample_action = np.zeros((int(step_action_dim * chunk_horizon),), dtype=np.float32)
-    sample_critic_action = np.zeros(
-        (int(env_action_dim * chunk_horizon),), dtype=np.float32
-    )
-    agent = DrQAgent.create_drq(
-        0,
-        sample_obs,
-        sample_action,
-        critic_actions=sample_critic_action,
-        encoder_type=str(cfg.sac.encoder_type),
-        shared_encoder=bool(cfg.sac.shared_encoder),
-        use_proprio=bool(cfg.sac.use_proprio),
-        critic_network_kwargs={
-            "activations": str(cfg.sac.critic_activation),
-            "use_layer_norm": bool(cfg.sac.critic_layer_norm),
-            "hidden_dims": [int(v) for v in cfg.sac.critic_hidden_dims],
-        },
-        policy_network_kwargs={
-            "activations": str(cfg.sac.policy_activation),
-            "use_layer_norm": bool(cfg.sac.policy_layer_norm),
-            "hidden_dims": [int(v) for v in cfg.sac.policy_hidden_dims],
-        },
-        policy_kwargs={
-            "tanh_squash_distribution": True,
-            "std_parameterization": "exp",
-            "std_min": float(cfg.sac.std_min),
-            "std_max": float(cfg.sac.std_max),
-        },
-        actor_optimizer_kwargs=actor_optimizer_kwargs,
-        critic_optimizer_kwargs=critic_optimizer_kwargs,
-        temperature_optimizer_kwargs=temperature_optimizer_kwargs,
-        discount=float(cfg.sac.discount),
-        soft_target_update_rate=float(cfg.sac.soft_target_update_rate),
-        temperature_init=float(cfg.sac.temperature_init),
-        backup_entropy=bool(cfg.sac.backup_entropy),
-        critic_ensemble_size=int(cfg.sac.critic_ensemble_size),
-        critic_subsample_size=(
-            int(cfg.sac.critic_subsample_size)
-            if cfg.sac.critic_subsample_size is not None
-            else None
-        ),
+    agent = create_drq_agent_from_cfg(
+        cfg,
+        sample_obs=sample_obs,
+        action_dim=int(step_action_dim * chunk_horizon),
         image_keys=image_keys,
-        resnet_kwargs=resnet_kwargs,
+        critic_action_dim=int(env_action_dim * chunk_horizon),
         action_transform=action_transform,
-        mixed_precision=mixed_precision,
-        otf_num_samples=int(cfg.sac.get("otf_num_samples", 1)),
-        cql_n_actions=int(cfg.sac.get("cql_n_actions", 10)),
-        cql_temperature=float(cfg.sac.get("cql_temperature", 1.0)),
     )
+    agent_lock = threading.RLock()
 
-    replay_buffer = ChunkReplayBuffer(
-        sample_observation_template=sample_obs,
-        state_core_dim=int(sample_state_core.shape[0]),
-        step_action_dim=env_action_dim,
-        chunk_horizon=chunk_horizon,
-        discount=float(cfg.sac.discount),
-        capacity=int(cfg.replay.capacity),
-        sample_stride=int(cfg.chunk_step.sample_stride),
-        require_full_horizon=bool(cfg.chunk_step.require_full_horizon),
-        pad_action_to_horizon=bool(cfg.chunk_step.pad_action_to_horizon),
-        state_mode=obs_state_mode,
+    bootstrap_path = resolve_agentlace_bootstrap_path(
+        run_dir=run_dir,
+        bootstrap_file=bootstrap_file,
     )
+    save_agentlace_bootstrap(
+        bootstrap_path,
+        {
+            "sample_obs": sample_obs,
+            "state_core_dim": int(sample_state_core.shape[0]),
+            "env_action_dim": int(env_action_dim),
+            "step_action_dim": int(step_action_dim),
+            "agent_action_dim": int(step_action_dim * chunk_horizon),
+            "critic_action_dim": int(env_action_dim * chunk_horizon),
+            "image_keys": tuple(image_keys),
+            "action_transform": action_transform,
+            "chunk_step_enabled": True,
+            "chunk_horizon": int(chunk_horizon),
+            "state_mode": str(obs_state_mode),
+            "initial_agent_payload": _snapshot_agent_checkpoint_payload(
+                agent,
+                step=int(agent.state.step),
+            ),
+            "saved_at_unix": float(time.time()),
+        },
+    )
+    logger.info("Agentlace bootstrap saved to %s", bootstrap_path)
 
-    checkpoint_cfg = cfg.training.get("checkpoint", {})
-    checkpoint_every_steps = int(checkpoint_cfg.get("every_steps", 0))
-    checkpoint_keep = int(checkpoint_cfg.get("keep", 0))
-    checkpoint_dir = run_dir / str(checkpoint_cfg.get("dir", "checkpoints"))
-    episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
+    from agentlace.data.data_store import QueuedDataStore
+    from agentlace.trainer import TrainerClient
+    from agentlace.trainer import TrainerConfig
+
+    data_store = QueuedDataStore(int(async_cfg.get("data_store_queue_size", 2000)))
+    client = TrainerClient(
+        "actor_env",
+        str(async_cfg.get("trainer_host", "127.0.0.1")),
+        TrainerConfig(
+            port_number=int(async_cfg.get("trainer_port", 5488)),
+            broadcast_port=int(async_cfg.get("broadcast_port", 5489)),
+            request_types=["send-stats", "save-checkpoint", "get-status", "sync-now"],
+        ),
+        data_store,
+        wait_for_server=True,
+    )
+    learner_update_steps = {"value": int(agent.state.step)}
+
+    def _update_actor_agent(payload: dict) -> None:
+        with agent_lock:
+            _apply_agent_payload(agent, dict(payload))
+        learner_update_steps["value"] = int(
+            payload.get("step", learner_update_steps["value"])
+        )
+
+    client.recv_network_callback(_update_actor_agent)
+    try:
+        client.request("sync-now", {})
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Initial sync-now request failed; relying on broadcast callback instead",
+            exc_info=True,
+        )
+
     phase_cfg = cfg.training.phases[0]
     phase_name = str(phase_cfg.get("name", "train"))
     total_episodes = int(phase_cfg.get("episodes", 0))
+    send_every_steps = max(1, int(cfg.training.get("update_every", 1)))
 
     max_train_env_steps = int(cfg.training.get("max_train_env_steps", 0))
     progress = tqdm(
@@ -444,10 +356,10 @@ def main(cfg: DictConfig) -> None:
     )
 
     train_env_step = 0
+    decision_step = 0
     train_episode_id = 0
     train_total_success = 0
     stopped_by_env_budget = False
-    last_update_info: dict[str, object] = {}
 
     try:
         while train_episode_id < total_episodes:
@@ -475,12 +387,12 @@ def main(cfg: DictConfig) -> None:
                     stopped_by_env_budget = True
                     break
 
-                alpha_step = float(residual_alpha)
-
+                decision_step += 1
                 policy_input = build_agibot_policy_input(
                     obs_raw,
                     env.current_instruction,
                 )
+
                 base_policy_chunk, _ = policy_client.infer_chunk(policy_input)
                 base_chunk = select_action_chunk_window(
                     base_policy_chunk,
@@ -495,18 +407,19 @@ def main(cfg: DictConfig) -> None:
                     stack_horizon=1,
                     action_dim=env_action_dim,
                     base_action_chunk=base_chunk,
-                    alpha=float(alpha_step),
+                    alpha=float(residual_alpha),
                     state_mode=obs_state_mode,
                 )
 
-                residual_chunk = as_numpy_action_chunk(
-                    agent.sample_actions(
-                        residual_obs,
-                        deterministic=False,
-                    ),
-                    action_dim=step_action_dim,
-                    chunk_horizon=chunk_horizon,
-                )
+                with agent_lock:
+                    residual_chunk = as_numpy_action_chunk(
+                        agent.sample_actions(
+                            residual_obs,
+                            deterministic=False,
+                        ),
+                        action_dim=step_action_dim,
+                        chunk_horizon=chunk_horizon,
+                    )
 
                 execute_horizon = min(
                     chunk_horizon,
@@ -537,11 +450,10 @@ def main(cfg: DictConfig) -> None:
                     residual_chunk=executed_residual_chunk,
                     indices=control_indices,
                     limits=residual_limits,
-                    alpha=float(alpha_step),
+                    alpha=float(residual_alpha),
                     clip_gripper=bool(cfg.residual.clip_gripper),
                 )
 
-                replay_size_before = int(replay_buffer.num_steps)
                 train_env_step_before = int(train_env_step)
                 chunk_result = env.step_chunk(final_chunk)
 
@@ -569,7 +481,7 @@ def main(cfg: DictConfig) -> None:
                         )
                     )
 
-                    replay_buffer.insert(
+                    data_store.insert(
                         {
                             "obs_core": build_residual_step_core(
                                 current_step_obs_raw,
@@ -589,7 +501,7 @@ def main(cfg: DictConfig) -> None:
                             ).reshape(-1),
                             "rewards": float(reward),
                             "dones": bool(done_flag),
-                            "alpha": float(alpha_step),
+                            "alpha": float(residual_alpha),
                             "episode_id": int(train_episode_id),
                             "episode_step": int(episode_steps),
                         }
@@ -607,84 +519,58 @@ def main(cfg: DictConfig) -> None:
                         episode_done = True
                         break
 
-                replay_size_after = int(replay_buffer.num_steps)
-                if replay_size_after >= int(cfg.training.training_starts):
-                    trigger_count = _count_env_step_update_triggers(
-                        train_step_before=int(train_env_step_before),
-                        train_step_after=int(train_env_step),
-                        replay_size_before=int(replay_size_before),
-                        replay_size_after=int(replay_size_after),
-                        training_starts=int(cfg.training.training_starts),
-                        update_every=int(cfg.training.update_every),
-                    )
-                    num_updates = int(trigger_count) * int(
-                        cfg.training.updates_per_step
-                    )
-                    for _ in range(num_updates):
-                        batch = replay_buffer.sample(int(cfg.replay.batch_size))
-                        agent, last_update_info = agent.update_high_utd(
-                            batch,
-                            utd_ratio=int(cfg.sac.utd_ratio),
-                        )
-
-                for checkpoint_step in _iter_period_hits(
+                for _step in _iter_period_hits(
                     step_before=int(train_env_step_before),
                     step_after=int(train_env_step),
-                    period=int(checkpoint_every_steps),
+                    period=int(send_every_steps),
                 ):
-                    _write_checkpoint_payload(
-                        None,
-                        str(checkpoint_dir),
-                        _snapshot_agent_checkpoint_payload(
-                            agent, step=int(checkpoint_step)
-                        ),
-                        step=int(checkpoint_step),
-                        keep=int(checkpoint_keep),
-                    )
+                    client.update()
 
                 obs_raw = next_obs_raw
 
+            client.update()
             train_total_success += int(episode_success)
             train_episode_id = int(current_train_episode_id)
             running_success_rate = float(train_total_success) / float(train_episode_id)
-
-            episode_logger.write(
+            client.request(
+                "send-stats",
                 {
-                    "phase": phase_name,
-                    "train_episode_id": int(current_train_episode_id),
-                    "success": bool(episode_success),
-                    "episode_steps": int(episode_steps),
-                    "episode_return": float(episode_return),
-                    "train_env_step": int(train_env_step),
-                    "running_success_rate": float(running_success_rate),
-                    "last_update_info": {
-                        key: (
-                            float(value)
-                            if isinstance(value, (int, float, np.floating))
-                            else value
-                        )
-                        for key, value in dict(last_update_info).items()
-                    },
-                }
+                    "train_episode": {
+                        "phase": str(phase_name),
+                        "train_episode_id": int(current_train_episode_id),
+                        "success": bool(episode_success),
+                        "episode_steps": int(episode_steps),
+                        "episode_return": float(episode_return),
+                        "train_env_step": int(train_env_step),
+                        "decision_step": int(decision_step),
+                        "running_success_rate": float(running_success_rate),
+                        "recent_success_rate": None,
+                    }
+                },
             )
 
             logger.info(
-                "phase=%s train_episode=%s success=%s steps=%s return=%.2f train_env_step=%s",
+                "phase=%s train_episode=%s success=%s steps=%s return=%.2f "
+                "train_env_step=%s learner_update_steps=%s",
                 phase_name,
                 int(current_train_episode_id),
                 bool(episode_success),
                 int(episode_steps),
                 float(episode_return),
                 int(train_env_step),
+                int(learner_update_steps["value"]),
             )
 
         summary = {
             "train_env_step": int(train_env_step),
+            "decision_step": int(decision_step),
             "train_episode_id": int(train_episode_id),
             "train_total_success": int(train_total_success),
             "stopped_by_env_budget": bool(stopped_by_env_budget),
             "chunk_step_enabled": True,
             "controller_enabled": bool(getattr(env, "controller_enabled", False)),
+            "agentlace_bootstrap_path": str(bootstrap_path),
+            "learner_update_steps": int(learner_update_steps["value"]),
         }
         with open(
             run_dir / str(cfg.logging.summary_file),
@@ -696,7 +582,10 @@ def main(cfg: DictConfig) -> None:
 
     finally:
         progress.close()
-        episode_logger.close()
+        try:
+            client.update()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             env.close(clear_cache=False)
         except Exception:  # noqa: BLE001

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Thin standalone agentlace learner entrypoint for AgiBot residual SAC."""
+"""Thin standalone Agentlace learner entrypoint for AgiBot residual SAC."""
 
 import logging
 import sys
@@ -19,6 +19,9 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.agibot_real.runtime.data_bindings import (
     build_agibot_data_bindings,
 )
+from serl_torch.examples.agibot_real.training_config import (
+    coerce_agibot_agentlace_async_cfg,
+)
 
 
 def _validate_removed_data_injection(cfg: DictConfig) -> None:
@@ -34,6 +37,20 @@ def _validate_removed_data_injection(cfg: DictConfig) -> None:
         )
 
 
+def _validate_agentlace_bootstrap(cfg: DictConfig) -> None:
+    bootstrap_file = str(
+        cfg.get("training", {})
+        .get("async", {})
+        .get("agentlace", {})
+        .get("bootstrap_file", "")
+    ).strip()
+    if (not bootstrap_file) or (not Path(bootstrap_file).expanduser().is_absolute()):
+        raise ValueError(
+            "AgiBot learner requires an absolute "
+            "training.async.agentlace.bootstrap_file path"
+        )
+
+
 @hydra.main(
     version_base=None, config_path="../../conf", config_name="train_residual_sac"
 )
@@ -45,10 +62,13 @@ def main(cfg: DictConfig) -> None:
         level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
     )
     logger = logging.getLogger("agibot_real_agentlace_learner")
+
+    coerce_agibot_agentlace_async_cfg(cfg)
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
     _validate_removed_data_injection(cfg)
+    _validate_agentlace_bootstrap(cfg)
     bindings = build_agibot_data_bindings(cfg, logger=logger)
     run_residual_learner_service(
         cfg,
