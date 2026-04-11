@@ -17,13 +17,17 @@ class AgiBotRobotNode:
 
     def __init__(self, *, hz: float = 20.0) -> None:
         try:
+            from .sdk_bootstrap import ensure_repo_local_a2d_sdk
+
+            ensure_repo_local_a2d_sdk()
             from a2d_sdk.robot import CosineCamera
             from a2d_sdk.robot import RobotController
             from a2d_sdk.robot import RobotDds
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
-                "AgiBot SDK is not available. Install the external `a2d_sdk` package "
-                "in the runtime environment before using examples/agibot_real."
+                "Repo-local AgiBot SDK bootstrap failed. "
+                "Make sure you are using Python 3.10 on the robot machine and "
+                "that examples/agibot_real/vendor/a2d_sdk is present."
             ) from exc
 
         self.robot = RobotDds()
@@ -42,7 +46,9 @@ class AgiBotRobotNode:
             if img is not None and pos is not None and grip is not None:
                 return
             time.sleep(0.01)
-        raise RuntimeError("Timed out waiting for AgiBot camera / joint state readiness")
+        raise RuntimeError(
+            "Timed out waiting for AgiBot camera / joint state readiness"
+        )
 
     def _poll_state(
         self,
@@ -67,7 +73,9 @@ class AgiBotRobotNode:
                 except Exception:  # noqa: BLE001
                     pass
             time.sleep(interval_sec)
-        raise RuntimeError(f"Robot state getter did not become ready: last={last_vals!r}")
+        raise RuntimeError(
+            f"Robot state getter did not become ready: last={last_vals!r}"
+        )
 
     def get_img_head(self) -> np.ndarray | None:
         img, _ = self.camera.get_latest_image("head")
@@ -129,7 +137,9 @@ class AgiBotRobotNode:
         cur = list(map(float, current_positions))
         tgt = list(map(float, np.asarray(target_positions).reshape(-1)))
         if len(cur) != dof or len(tgt) != dof:
-            raise RuntimeError(f"Expected {dof} arm joints, got cur={len(cur)} tgt={len(tgt)}")
+            raise RuntimeError(
+                f"Expected {dof} arm joints, got cur={len(cur)} tgt={len(tgt)}"
+            )
 
         try:
             rk = ruckig.Ruckig(dof, interval)
@@ -199,4 +209,3 @@ class AgiBotRobotNode:
 
     def shutdown(self) -> None:
         self.robot.shutdown()
-

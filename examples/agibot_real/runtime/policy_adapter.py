@@ -11,6 +11,7 @@ import numpy as np
 from serl_launcher.policy.base import PolicyInput
 
 from .obs_adapter import AgiBotObservationCache
+from .obs_adapter import build_agibot_joyra_state
 from .obs_adapter import build_agibot_state
 from .obs_adapter import extract_policy_images
 
@@ -24,11 +25,15 @@ def build_agibot_policy_input(
 ) -> PolicyInput:
     images = extract_policy_images(obs, obs_cache=obs_cache, cache_key=cache_key)
     state = build_agibot_state(obs, obs_cache=obs_cache, cache_key=cache_key)
+    joyra_state = build_agibot_joyra_state(obs)
     image_mask = {
         "image_rgb_0": True,
         "image_rgb_1": True,
         "image_rgb_2": True,
     }
+    metadata: Dict[str, Any] = {"openpi_layout": "dual_wrist"}
+    if joyra_state is not None:
+        metadata["joyra_state"] = np.asarray(joyra_state, dtype=np.float32)
     return PolicyInput(
         prompt=str(prompt),
         state=np.asarray(state, dtype=np.float32),
@@ -38,6 +43,5 @@ def build_agibot_policy_input(
             "image_rgb_2": np.asarray(images["image_rgb_2"], dtype=np.uint8),
         },
         image_mask=image_mask,
-        metadata={"openpi_layout": "dual_wrist"},
+        metadata=metadata,
     )
-

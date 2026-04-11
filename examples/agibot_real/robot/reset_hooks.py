@@ -1,4 +1,4 @@
-"""Episode reset hooks aligned with tangyili/code/agibot/agi_robot.py AgiRobot.reset."""
+"""Episode reset hooks aligned with the reference AgiRobot.reset flow."""
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ from .task_init_pos import init_node_pos
 
 logger = logging.getLogger(__name__)
 
-# SERL 默认 task.name；与 tangyili 中 office_setting 初始位姿一致（见 init_node_pos_data）。
+# SERL 默认 task.name；与 bundled init_node_pos_data 中 office_setting 初始位姿一致。
 _DEFAULT_TASK_ALIAS = "office_setting"
 
 
 def _normalize_task_name_for_init(task_name: str) -> str:
-    """Map SERL-only names so external init_node_pos.py (AGIBOT_CODE_ROOT) also resolves."""
+    """Map SERL-only names to bundled init-pose aliases."""
     if str(task_name).strip() == "agibot_real_default":
         return _DEFAULT_TASK_ALIAS
     return str(task_name)
@@ -33,11 +33,9 @@ def reset_to_task_initial_pose(
     task_name: str,
     prompt: str,
 ) -> None:
-    """Move robot to task-specific initial pose (head/waist/joint), matching inference_camera_position.
+    """Move robot to task-specific initial pose (head/waist/joint).
 
     Uses init_node_pos(task_name) and AgiBotRobotNode.publish_*; see task_init_pos.py for data source.
-
-    Only valid for local :class:`AgiBotTaskEnv` (has ``robot_node``). Remote env runs this hook on the server.
     """
     robot_node = getattr(env, "robot_node", None)
     if robot_node is None:

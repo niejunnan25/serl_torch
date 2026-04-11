@@ -79,6 +79,13 @@ def _find_first_key(obs: Dict[str, Any], candidates: Tuple[str, ...]) -> Any:
     )
 
 
+def _maybe_find_first_key(obs: Dict[str, Any], candidates: Tuple[str, ...]) -> Any:
+    for key in candidates:
+        if key in obs:
+            return obs[key]
+    return None
+
+
 def _compute_agibot_state(obs: Dict[str, Any]) -> np.ndarray:
     pose = np.asarray(
         _find_first_key(obs, ("state/pose", "observation/state", "pose")),
@@ -89,6 +96,24 @@ def _compute_agibot_state(obs: Dict[str, Any]) -> np.ndarray:
     return pose.astype(np.float32)
 
 
+def _compute_agibot_joyra_state(obs: Dict[str, Any]) -> Optional[np.ndarray]:
+    pose = _compute_agibot_state(obs)
+    head = _maybe_find_first_key(obs, ("state/head", "head_state", "head"))
+    waist = _maybe_find_first_key(obs, ("state/waist", "waist_state", "waist"))
+    if head is None or waist is None:
+        return None
+
+    head_arr = np.asarray(head, dtype=np.float32).reshape(-1)
+    waist_arr = np.asarray(waist, dtype=np.float32).reshape(-1)
+    if head_arr.shape[0] != 2:
+        raise ValueError("AgiBot JoyRA head state must be 2D, got " f"{head_arr.shape}")
+    if waist_arr.shape[0] != 2:
+        raise ValueError(
+            "AgiBot JoyRA waist state must be 2D, got " f"{waist_arr.shape}"
+        )
+    return np.concatenate([pose, head_arr, waist_arr], axis=0).astype(np.float32)
+
+
 def _compute_policy_images(obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
     return {
         "image_rgb_0": _trim_alpha(
@@ -97,13 +122,21 @@ def _compute_policy_images(obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
         "image_rgb_1": _trim_alpha(
             _find_first_key(
                 obs,
-                ("image/left_wrist", "left_wrist_image", "observation/wrist_left_image"),
+                (
+                    "image/left_wrist",
+                    "left_wrist_image",
+                    "observation/wrist_left_image",
+                ),
             )
         ),
         "image_rgb_2": _trim_alpha(
             _find_first_key(
                 obs,
-                ("image/right_wrist", "right_wrist_image", "observation/wrist_right_image"),
+                (
+                    "image/right_wrist",
+                    "right_wrist_image",
+                    "observation/wrist_right_image",
+                ),
             )
         ),
     }
@@ -143,11 +176,19 @@ class AgiBotObservationCache:
         self.max_obs_entries = max(1, int(max_obs_entries))
         self.max_step_obs_entries = max(1, int(max_step_obs_entries))
         self._lock = threading.RLock()
-        self._policy_image_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = OrderedDict()
-        self._residual_image_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = OrderedDict()
+        self._policy_image_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = (
+            OrderedDict()
+        )
+        self._residual_image_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = (
+            OrderedDict()
+        )
         self._state_cache: "OrderedDict[Hashable, np.ndarray]" = OrderedDict()
-        self._normalized_state_cache: "OrderedDict[Hashable, np.ndarray]" = OrderedDict()
-        self._step_obs_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = OrderedDict()
+        self._normalized_state_cache: "OrderedDict[Hashable, np.ndarray]" = (
+            OrderedDict()
+        )
+        self._step_obs_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = (
+            OrderedDict()
+        )
 
     def clear(self) -> None:
         with self._lock:
@@ -256,7 +297,9 @@ class AgiBotObservationCache:
     ) -> Dict[str, np.ndarray]:
         with self._lock:
             image_keys = resolve_agibot_image_keys(image_keys)
-            normalized_state_mode = normalize_residual_observation_state_mode(state_mode)
+            normalized_state_mode = normalize_residual_observation_state_mode(
+                state_mode
+            )
             if int(stack_horizon) != 1:
                 raise ValueError(
                     f"Only stack_horizon=1 is currently supported, got {stack_horizon}"
@@ -272,7 +315,9 @@ class AgiBotObservationCache:
             fused_key = (
                 obs_key,
                 base_action_arr.tobytes(),
-                None if base_action_chunk_arr is None else base_action_chunk_arr.tobytes(),
+                None
+                if base_action_chunk_arr is None
+                else base_action_chunk_arr.tobytes(),
                 None if alpha is None else float(alpha),
                 image_keys,
                 int(stack_horizon),
@@ -326,6 +371,15 @@ def build_agibot_state(
     if normalizer is not None:
         state = normalizer.normalize_state(state)
     return np.asarray(state, dtype=np.float32)
+
+
+def build_agibot_joyra_state(
+    obs: Dict[str, Any],
+) -> Optional[np.ndarray]:
+    joyra_state = _compute_agibot_joyra_state(obs)
+    if joyra_state is None:
+        return None
+    return np.asarray(joyra_state, dtype=np.float32)
 
 
 def extract_policy_images(
@@ -432,4 +486,3 @@ def build_residual_step_obs(
         state_mode=state_mode,
         stack_horizon=int(stack_horizon),
     )
-
