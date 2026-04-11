@@ -162,7 +162,6 @@ training:
   online_prefill:
     enabled: false
     dataset_paths: []
-  random_steps: 0
   enable_base_probing: false
   probing_alpha: null
   probing_min_steps: 0

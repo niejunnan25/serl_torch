@@ -98,9 +98,7 @@ def _validate_controller_runtime(ctx: Any) -> None:
             "controller actor runtime requires controller.enabled=true on the env"
         )
     if not bool(ctx.chunk_step_enabled):
-        raise ValueError(
-            "controller actor runtime requires chunk_step.enabled=true"
-        )
+        raise ValueError("controller actor runtime requires chunk_step.enabled=true")
     if bool(ctx.need_warmup_first):
         raise ValueError(
             "controller actor runtime does not support runtime warmup episodes yet; "
@@ -221,7 +219,9 @@ def _flush_buffered_step(
             "phase_episode_idx": int(spec.phase_episode_idx),
             "phase": str(spec.phase_name),
             "episode_step": int(state.episode_steps),
-            "seed": int(ctx.env.last_seed if ctx.env.last_seed is not None else spec.seed),
+            "seed": int(
+                ctx.env.last_seed if ctx.env.last_seed is not None else spec.seed
+            ),
             "init_state_idx": (
                 int(ctx.env.current_init_state_idx)
                 if ctx.env.current_init_state_idx is not None
@@ -360,10 +360,10 @@ def _plan_chunk(
     )
 
     if alpha_step <= 0.0:
-        residual_chunk = np.zeros((int(ctx.chunk_horizon), int(ctx.step_action_dim)), dtype=np.float32)
-    elif (not spec.phase_train) or (
-        int(state.train_env_step) < int(cfg.training.random_steps)
-    ):
+        residual_chunk = np.zeros(
+            (int(ctx.chunk_horizon), int(ctx.step_action_dim)), dtype=np.float32
+        )
+    elif not spec.phase_train:
         residual_chunk = np.random.uniform(
             -1.0,
             1.0,
@@ -402,18 +402,14 @@ def _plan_chunk(
         residual_chunk = np.zeros_like(residual_chunk)
 
     execute_horizon = int(
-        min(int(ctx.chunk_horizon), int(spec.max_episode_steps) - int(state.episode_steps))
+        min(
+            int(ctx.chunk_horizon),
+            int(spec.max_episode_steps) - int(state.episode_steps),
+        )
     )
     if spec.phase_train and int(ctx.max_train_env_steps) > 0:
         remaining_budget = int(ctx.max_train_env_steps) - int(state.train_env_step)
         execute_horizon = int(min(execute_horizon, remaining_budget))
-    if spec.phase_train and int(state.train_env_step) < int(cfg.training.random_steps):
-        execute_horizon = int(
-            min(
-                execute_horizon,
-                int(cfg.training.random_steps) - int(state.train_env_step),
-            )
-        )
     if execute_horizon <= 0:
         return deque()
 
@@ -449,7 +445,9 @@ def _plan_chunk(
             _PlannedStep(
                 sequence_id=int(sequence_id),
                 obs_before=(obs_raw if chunk_step == 0 else None),
-                base_action=np.asarray(executed_base_chunk[chunk_step], dtype=np.float32),
+                base_action=np.asarray(
+                    executed_base_chunk[chunk_step], dtype=np.float32
+                ),
                 policy_residual=np.asarray(
                     executed_policy_residual_chunk[chunk_step], dtype=np.float32
                 ),
@@ -514,7 +512,9 @@ def _run_controller_episode(
     queue_empty_since: Optional[float] = None
     current_obs_raw = obs_raw
 
-    while not state.episode_done and int(state.episode_steps) < int(spec.max_episode_steps):
+    while not state.episode_done and int(state.episode_steps) < int(
+        spec.max_episode_steps
+    ):
         meta = env.get_controller_meta()
         controller_state = str(meta.get("state", None))
         terminal_signal = meta.get("terminal_signal", None)
@@ -614,7 +614,8 @@ def _run_controller_episode(
             continue
 
         if (
-            terminal_signal in {
+            terminal_signal
+            in {
                 TERMINAL_SUCCESS,
                 TERMINAL_FAIL,
                 TERMINAL_RESET,
@@ -658,9 +659,11 @@ def _run_controller_episode(
             queue_empty_since = None
             if planned_steps:
                 continue
-            if spec.phase_train and int(ctx.max_train_env_steps) > 0 and int(
-                state.train_env_step
-            ) >= int(ctx.max_train_env_steps):
+            if (
+                spec.phase_train
+                and int(ctx.max_train_env_steps) > 0
+                and int(state.train_env_step) >= int(ctx.max_train_env_steps)
+            ):
                 state.episode_done = True
                 break
 
@@ -715,7 +718,9 @@ def run_agibot_controller_actor_loop(
     async_learner = ctx.async_learner
     phase_progress = None
 
-    def _update_train_progress(*, force_postfix: bool = False, train_env_step_value=None) -> None:
+    def _update_train_progress(
+        *, force_postfix: bool = False, train_env_step_value=None
+    ) -> None:
         if train_env_step_value is not None:
             state.train_env_step = int(train_env_step_value)
         update_train_progress(ctx, state, force_postfix=force_postfix)
@@ -790,9 +795,9 @@ def run_agibot_controller_actor_loop(
             phase_episode_count = 0
             try:
                 while phase_episode_count < phase_episodes:
-                    if int(ctx.max_train_env_steps) > 0 and int(state.train_env_step) >= int(
-                        ctx.max_train_env_steps
-                    ):
+                    if int(ctx.max_train_env_steps) > 0 and int(
+                        state.train_env_step
+                    ) >= int(ctx.max_train_env_steps):
                         break
 
                     seed = int(state.seed_cursor)
@@ -816,7 +821,9 @@ def run_agibot_controller_actor_loop(
 
                     state.init_episode_idx += 1
                     clear_obs_cache(ctx)
-                    obs_raw = env.reset(seed=seed, init_episode_idx=current_init_episode_idx)
+                    obs_raw = env.reset(
+                        seed=seed, init_episode_idx=current_init_episode_idx
+                    )
                     episode_result = _run_controller_episode(
                         ctx,
                         EpisodeSpec(
@@ -861,21 +868,25 @@ def run_agibot_controller_actor_loop(
                         episode_result.profiling_last_flush_step
                     )
                     state.train_total_success += int(episode_result.episode_success)
-                    state.train_recent_successes.append(int(episode_result.episode_success))
+                    state.train_recent_successes.append(
+                        int(episode_result.episode_success)
+                    )
 
                     running_success_rate = float(state.train_total_success) / float(
                         current_train_episode_id
                     )
-                    recent_success_rate = float(sum(state.train_recent_successes)) / float(
-                        len(state.train_recent_successes)
-                    )
+                    recent_success_rate = float(
+                        sum(state.train_recent_successes)
+                    ) / float(len(state.train_recent_successes))
                     episode_logger.write(
                         {
                             "phase": phase_name,
                             "warmup_episode_id": None,
                             "train_episode_id": int(current_train_episode_id),
                             "phase_episode_idx": int(current_phase_episode_idx),
-                            "seed": int(env.last_seed if env.last_seed is not None else seed),
+                            "seed": int(
+                                env.last_seed if env.last_seed is not None else seed
+                            ),
                             "init_state_idx": (
                                 int(env.current_init_state_idx)
                                 if env.current_init_state_idx is not None
@@ -928,7 +939,10 @@ def run_agibot_controller_actor_loop(
                         running_success_rate,
                         recent_success_rate,
                     )
-                    if bool(ctx.external_agentlace_actor_mode) and ctx.async_learner is not None:
+                    if (
+                        bool(ctx.external_agentlace_actor_mode)
+                        and ctx.async_learner is not None
+                    ):
                         _maybe_send_agentlace_timer_stats(
                             train_env_step_value=int(state.train_env_step),
                             decision_step_value=int(state.decision_step),
@@ -989,7 +1003,9 @@ def run_agibot_controller_actor_loop(
             "skipped_seeds": int(state.skipped_seeds),
             "seed_start": int(cfg.task.seed_base),
             "seed_next": int(state.seed_cursor),
-            "replay_size": int(len(ctx.replay_buffer) if ctx.replay_buffer is not None else 0),
+            "replay_size": int(
+                len(ctx.replay_buffer) if ctx.replay_buffer is not None else 0
+            ),
             "last_update_info": _to_jsonable(state.last_update_info),
             "offline_stats": _to_jsonable(ctx.offline_stats),
             "online_prefill_stats": _to_jsonable(ctx.online_prefill_stats),
