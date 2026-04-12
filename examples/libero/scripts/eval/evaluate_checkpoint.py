@@ -305,7 +305,7 @@ def main(cfg: DictConfig) -> None:
                     min(probing_steps_target, max_episode_steps - episode_steps)
                 )
                 while probing_remaining > 0 and episode_steps < max_episode_steps:
-                    probe_chunk, probe_info = policy_client.infer_chunk(
+                    probe_chunk, probe_info = policy_client.infer(
                         _policy_input(obs_raw, env.current_instruction)
                     )
                     probe_base_chunk = select_action_chunk_window(
@@ -368,7 +368,7 @@ def main(cfg: DictConfig) -> None:
             while episode_steps < max_episode_steps:
                 if decision_done:
                     break
-                openpi_chunk, infer_info = policy_client.infer_chunk(
+                openpi_chunk, infer_info = policy_client.infer(
                     _policy_input(obs_raw, env.current_instruction)
                 )
                 base_chunk = select_action_chunk_window(

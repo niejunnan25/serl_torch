@@ -283,7 +283,7 @@ def _build_residual_obs(
     prompt: str,
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
     policy_input = build_agibot_policy_input(obs_raw, prompt)
-    base_policy_chunk, _metadata = policy_client.infer_chunk(policy_input)
+    base_policy_chunk, _metadata = policy_client.infer(policy_input)
     base_chunk = select_action_chunk_window(
         base_policy_chunk,
         horizon=1,

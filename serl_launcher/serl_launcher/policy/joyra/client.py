@@ -142,7 +142,7 @@ class JoyRAPolicyClient:
                 self._ws.close()
                 self._ws = None
 
-    def infer_chunk(
+    def infer(
         self, policy_input: PolicyInput
     ) -> Tuple[np.ndarray, PolicyInferInfo]:
         send_data = build_joyra_request(policy_input)
@@ -195,3 +195,9 @@ class JoyRAPolicyClient:
                     time.sleep(self._reconnect_retry_backoff_sec)
 
         raise RuntimeError("JoyRA infer retry loop exited unexpectedly.")
+
+    def infer_chunk(
+        self, policy_input: PolicyInput
+    ) -> Tuple[np.ndarray, PolicyInferInfo]:
+        """Backward-compatible alias for older call sites."""
+        return self.infer(policy_input)

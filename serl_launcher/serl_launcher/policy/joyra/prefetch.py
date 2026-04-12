@@ -44,11 +44,11 @@ class AsyncJoyRAPolicyPrefetcher:
                 )
             return self._client
 
-    def _infer_chunk(
+    def _infer(
         self,
         policy_input: PolicyInput,
     ) -> tuple[np.ndarray, PolicyInferInfo]:
-        return self._get_client().infer_chunk(policy_input)
+        return self._get_client().infer(policy_input)
 
     def submit(
         self,
@@ -56,7 +56,7 @@ class AsyncJoyRAPolicyPrefetcher:
     ) -> Future[tuple[np.ndarray, PolicyInferInfo]]:
         if self._closed:
             raise RuntimeError("JoyRA prefetcher is closed")
-        return self._executor.submit(self._infer_chunk, policy_input)
+        return self._executor.submit(self._infer, policy_input)
 
     def close(self) -> None:
         if self._closed:

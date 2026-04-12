@@ -16,6 +16,7 @@ try:
     import gym
 except ModuleNotFoundError:
     import gymnasium as gym
+    
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
@@ -93,8 +94,10 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     policy_client = build_policy_client(cfg, logger=logger)
     policy_type = resolve_policy_backend_type(cfg)
     policy_id = resolve_policy_backend_id(cfg)
-    backend_label = policy_type if policy_id == policy_type else f"{policy_type}:{policy_id}"
-    logger.info("Chunk policy backend: %s", backend_label)
+    policy_backend = (
+        policy_type if policy_id == policy_type else f"{policy_type}:{policy_id}"
+    )
+    logger.info("Chunk policy backend: %s", policy_backend)
 
     image_keys = tuple(resolve_libero_cfg_image_keys(cfg))
     action_dim = int(cfg.env.action_dim)
@@ -163,23 +166,18 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
             seed = int(episode_seed)
             init_episode_idx = int(episode_id - 1)
             obs = env.reset(seed=seed, init_episode_idx=init_episode_idx)
-            cached_base_action_chunk = None
-            cached_residual_obs = None
+            prefetched = None
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
-            last_env_info: dict[str, Any] = {}
-            max_episode_steps = int(env.step_limit)
+            last_info: dict[str, Any] = {}
 
             while env_steps < max_env_steps:
                 timer.tick("total")
                 with timer.context("sample_actions"):
-                    if (
-                        cached_base_action_chunk is None
-                        or cached_residual_obs is None
-                    ):
+                    if prefetched is None:
                         base_policy_input = build_libero_policy_input(obs, task_prompt)
-                        base_action_chunk, _ = policy_client.infer_chunk(
+                        base_action_chunk, _ = policy_client.infer(
                             base_policy_input
                         )
                         base_action_chunk = base_action_chunk[:chunk_horizon]
@@ -190,103 +188,91 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                             residual_alpha=residual_alpha,
                         )
                     else:
-                        base_action_chunk = cached_base_action_chunk
-                        residual_obs = cached_residual_obs
-                        cached_base_action_chunk = None
-                        cached_residual_obs = None
+                        base_action_chunk = prefetched["base_action_chunk"]
+                        residual_obs = prefetched["residual_obs"]
+                        prefetched = None
 
-                    residual_action = agent.sample_action(residual_obs, deterministic=False)
+                    residual_action = agent.sample_action(
+                        residual_obs, deterministic=False
+                    )
 
                     final_action_chunk = residual_action_spec.compose_chunk(
                         base_action_chunk=base_action_chunk,
                         residual_action=residual_action,
                     )
-                    execute_horizon = min(
-                        max_episode_steps - episode_steps,
-                        max_env_steps - env_steps,
-                    )
-                    executed_final_action_chunk = final_action_chunk[:execute_horizon]
 
-                with timer.context("step_env"):
-                    chunk_result = env.step_chunk(executed_final_action_chunk)
-                    next_obs = dict(chunk_result["obs"])
-                    raw_next_observations = [
-                        dict(step_obs) for step_obs in chunk_result["observations"]
-                    ]
-                    chunk_rewards = [float(v) for v in chunk_result["rewards"]]
-                    chunk_dones = [bool(v) for v in chunk_result["dones"]]
-                    chunk_infos = [dict(v) for v in chunk_result["infos"]]
-                with timer.context("build_decision_obs"):
-                    decision_base_action_chunks = [base_action_chunk]
-                    decision_observations = [residual_obs]
-                    for step_obs in raw_next_observations:
+                episode_done = False
+                for actions in final_action_chunk:
+
+                    if env_steps >= max_env_steps:
+                        break
+
+                    with timer.context("step_env"):
+                        next_obs, reward, done, truncated, info = env.step(actions)
+
+                    with timer.context("build_decision_obs"):
                         next_base_policy_input = build_libero_policy_input(
-                            step_obs,
+                            next_obs,
                             task_prompt,
                         )
-                        next_base_action_chunk, _ = policy_client.infer_chunk(
+                        next_base_action_chunk, _ = policy_client.infer(
                             next_base_policy_input
                         )
                         next_base_action_chunk = next_base_action_chunk[:chunk_horizon]
-                        decision_base_action_chunks.append(next_base_action_chunk)
+
                         next_residual_obs = _build_chunk_residual_obs(
-                            obs=step_obs,
+                            obs=next_obs,
                             base_action_chunk=next_base_action_chunk,
                             image_keys=image_keys,
                             residual_alpha=residual_alpha,
                         )
-                        decision_observations.append(next_residual_obs)
 
-                timer.tock("total")
-
-                obs = next_obs
-                cached_base_action_chunk = decision_base_action_chunks[-1]
-                cached_residual_obs = decision_observations[-1]
-                decision_done = False
-                for chunk_step, reward in enumerate(chunk_rewards):
-                    env_done = bool(chunk_dones[chunk_step])
-                    chunk_info = dict(chunk_infos[chunk_step])
-                    hit_step_limit = bool((episode_steps + 1) >= max_episode_steps)
-                    episode_done = bool(env_done or hit_step_limit)
+                    env_done = bool(info.get("env_done", False))
+                    episode_done = bool(done or truncated)
                     transition = {
                         "episode_id": int(episode_id),
                         "episode_step": int(episode_steps),
-                        "observations": decision_observations[chunk_step],
-                        "actions": np.asarray(
-                            executed_final_action_chunk[chunk_step],
-                            dtype=np.float32,
-                        ).reshape(-1),
-                        "next_observations": decision_observations[chunk_step + 1],
+                        "observations": residual_obs,
+                        "actions": np.asarray(actions, dtype=np.float32).reshape(-1),
+                        "next_observations": next_residual_obs,
                         "rewards": float(reward),
                         "masks": float(0.0 if env_done else 1.0),
-                        "dones": bool(episode_done),
+                        "dones": episode_done,
                     }
                     data_store.insert(transition)
 
-                    last_env_info = chunk_info
+                    last_info = dict(info)
                     env_steps += 1
                     episode_steps += 1
                     episode_return += float(reward)
                     episode_success = bool(episode_success or env_done)
+                    obs = dict(next_obs)
+                    prefetched = {
+                        "base_action_chunk": next_base_action_chunk,
+                        "residual_obs": next_residual_obs,
+                    }
+                    residual_obs = next_residual_obs
 
                     if env_steps % steps_per_update == 0:
                         client.update()
+
                     if env_steps % log_period == 0:
                         client.request(
                             "send-stats",
                             {"actor_timer": to_jsonable(timer.get_average_times())},
                         )
-                    if episode_done:
-                        decision_done = True
+                    if episode_done or env_steps >= max_env_steps:
                         break
 
-                if decision_done:
+                timer.tock("total")
+
+                if episode_done:
                     break
 
             client.update()
             success_count += int(episode_success)
             episode_stats = {
-                "train": to_jsonable(last_env_info),
+                "train": to_jsonable(last_info),
                 "env_steps": int(env_steps),
                 "actor_episode": {
                     "episode_id": int(episode_id),
@@ -298,6 +284,7 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                     "running_success_rate": float(success_count / max(1, episode_id)),
                 },
             }
+
             client.request("send-stats", episode_stats)
             logger.info(
                 "episode=%s success=%s steps=%s return=%.3f env_steps=%s",

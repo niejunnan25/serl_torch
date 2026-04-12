@@ -1,0 +1,23 @@
+{
+  "extraPaths": [
+    "..",
+    "serl_launcher"
+  ],
+  "exclude": [
+    "**/.git",
+    "**/__pycache__",
+    "**/.mypy_cache",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/.tox",
+    "**/.nox",
+    "**/.venv",
+    "**/wandb",
+    "**/outputs",
+    "docs",
+    "reference",
+    "pretrained_models",
+    "third_party",
+    "serl_launcher/serl_launcher.egg-info"
+  ]
+}

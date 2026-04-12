@@ -313,7 +313,7 @@ def execute_chunk_decision(
 
     train_env_step_after_chunk = int(state.train_env_step)
     if not done:
-        next_policy_chunk, next_infer_info = policy_client.infer_chunk(
+        next_policy_chunk, next_infer_info = policy_client.infer(
             build_policy_input(ctx, next_obs_raw, env.current_instruction)
         )
         next_base_chunk = select_action_chunk_window(

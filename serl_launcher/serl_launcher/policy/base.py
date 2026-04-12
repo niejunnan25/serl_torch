@@ -27,8 +27,8 @@ class PolicyOutput:
 
 
 class PolicyClient(Protocol):
-    def infer_chunk(self, policy_input: PolicyInput) -> PolicyInferResult:
-        """Run a chunked policy and return `(action_chunk, info)`."""
+    def infer(self, policy_input: PolicyInput) -> PolicyInferResult:
+        """Run the policy and return `(action_chunk, info)`."""
 
 
 class PolicyPrefetcher(Protocol):

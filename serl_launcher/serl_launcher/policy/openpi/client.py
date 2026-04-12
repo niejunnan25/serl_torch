@@ -98,7 +98,7 @@ class OpenPIPolicyClient:
     def _is_retryable_connection_error(self, err: BaseException) -> bool:
         return isinstance(err, (self._websocket_connection_closed_error, OSError))
 
-    def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
+    def infer(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
         send_data = build_openpi_request(policy_input)
         for attempt_idx in range(self._reconnect_retry_count + 1):
             try:
@@ -135,3 +135,7 @@ class OpenPIPolicyClient:
                     time.sleep(self._reconnect_retry_backoff_sec)
 
         raise RuntimeError("OpenPI infer retry loop exited unexpectedly.")
+
+    def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
+        """Backward-compatible alias for older call sites."""
+        return self.infer(policy_input)
