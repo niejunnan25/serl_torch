@@ -11,7 +11,7 @@ import numpy as np
 import websockets.sync.client
 from websockets import exceptions as websocket_exceptions
 
-from serl_launcher.policy.base import PolicyInferInfo, PolicyInput
+from serl_launcher.policy.base import coerce_action_chunk, PolicyInferInfo, PolicyInput
 from serl_launcher.policy.joyra import msgpack_numpy
 from serl_launcher.policy.joyra.request_builder import build_joyra_request
 
@@ -30,31 +30,6 @@ def maybe_get_server_infer_ms(pred: Dict[str, Any]) -> Optional[float]:
         if ms is not None:
             return float(ms)
     return None
-
-
-def _coerce_action_chunk(actions: Any, *, action_dim: int) -> np.ndarray:
-    chunk = np.asarray(actions, dtype=np.float32)
-    if chunk.ndim == 3 and chunk.shape[0] == 1:
-        chunk = chunk[0]
-    elif chunk.ndim == 1:
-        if chunk.size % int(action_dim) != 0:
-            raise ValueError(
-                "Flat JoyRA action payload must be divisible by action_dim, got "
-                f"shape={chunk.shape}, action_dim={int(action_dim)}"
-            )
-        chunk = chunk.reshape(-1, int(action_dim))
-    if chunk.ndim != 2:
-        raise ValueError(f"Unexpected JoyRA action chunk shape: {chunk.shape}")
-    if chunk.shape[1] < int(action_dim):
-        raise ValueError(
-            f"JoyRA action dim {chunk.shape[1]} is smaller than required env action dim "
-            f"{int(action_dim)}"
-        )
-    if chunk.shape[1] > int(action_dim):
-        chunk = chunk[:, : int(action_dim)]
-    return np.asarray(chunk, dtype=np.float32)
-
-
 class JoyRAPolicyClient:
     def __init__(
         self,
@@ -189,7 +164,7 @@ class JoyRAPolicyClient:
                     raise RuntimeError(
                         f"Expected JoyRA inference response dict, got {type(pred).__name__}"
                     )
-                chunk = _coerce_action_chunk(
+                chunk = coerce_action_chunk(
                     pred["actions"],
                     action_dim=self._action_dim,
                 )

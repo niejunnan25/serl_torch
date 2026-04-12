@@ -7,16 +7,15 @@ import numpy as np
 
 from serl_launcher.policy.base import PolicyInput
 
-from .obs_adapter import LiberoObservationCache
-from .obs_adapter import build_libero_state
-from .obs_adapter import extract_residual_images
+from .observation import build_libero_state
+from .observation import extract_residual_images
 
 
 def build_libero_policy_input(
     obs: Dict[str, Any],
     prompt: str,
     *,
-    obs_cache: Optional[LiberoObservationCache] = None,
+    obs_cache: Optional[Any] = None,
     cache_key: Optional[Hashable] = None,
 ) -> PolicyInput:
     images = extract_residual_images(obs, obs_cache=obs_cache, cache_key=cache_key)

@@ -1,6 +1,7 @@
 import copy
 from contextlib import nullcontext
-from typing import FrozenSet, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, FrozenSet, Mapping, Optional, Tuple
 
 import numpy as np
 import torch
@@ -22,6 +23,266 @@ _AUTOCAST_DTYPE_ALIASES = {
 _AUTOCAST_TORCH_DTYPES = {
     "bfloat16": torch.bfloat16,
 }
+
+
+def _clip_gripper_last_dim(actions: torch.Tensor) -> torch.Tensor:
+    if actions.shape[-1] <= 0:
+        return actions
+    clipped_last = torch.clamp(actions[..., -1:], -1.0, 1.0)
+    if actions.shape[-1] == 1:
+        return clipped_last
+    return torch.cat([actions[..., :-1], clipped_last], dim=-1)
+
+
+def _coerce_single_action(actions: np.ndarray) -> np.ndarray:
+    action = np.asarray(actions, dtype=np.float32)
+    if action.ndim == 2 and action.shape[0] == 1:
+        action = action[0]
+    if action.ndim != 1:
+        raise ValueError(f"Expected single action shape (A,) or (1, A), got {action.shape}")
+    return np.asarray(action, dtype=np.float32)
+
+
+@dataclass(frozen=True)
+class _LegacyResidualCombinedActionTransform:
+    control_indices: np.ndarray
+    limits: np.ndarray
+    full_action_dim: int
+    chunk_horizon: int = 1
+    chunk_step_enabled: bool = False
+    clip_gripper: bool = True
+    base_action_key: str = "base_action"
+    base_action_chunk_key: str = "base_action_chunk"
+    scale_key: str = "alpha"
+
+    @classmethod
+    def from_mapping(
+        cls, config: Mapping[str, Any]
+    ) -> "_LegacyResidualCombinedActionTransform":
+        transform_type = str(config.get("type", "residual_combined")).strip().lower()
+        if transform_type != "residual_combined":
+            raise ValueError(f"Unsupported action_transform.type: {transform_type!r}")
+        return cls(
+            control_indices=np.asarray(config["control_indices"], dtype=np.int64),
+            limits=np.asarray(config["limits"], dtype=np.float32),
+            full_action_dim=int(config["full_action_dim"]),
+            chunk_horizon=int(config.get("chunk_horizon", 1)),
+            chunk_step_enabled=bool(config.get("chunk_step_enabled", False)),
+            clip_gripper=bool(config.get("clip_gripper", True)),
+            base_action_key=str(config.get("base_action_key", "base_action")),
+            base_action_chunk_key=str(
+                config.get("base_action_chunk_key", "base_action_chunk")
+            ),
+            scale_key=str(config.get("scale_key", "alpha")),
+        )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "control_indices",
+            np.asarray(self.control_indices, dtype=np.int64).reshape(-1),
+        )
+        object.__setattr__(
+            self,
+            "limits",
+            np.asarray(self.limits, dtype=np.float32).reshape(-1),
+        )
+        object.__setattr__(self, "full_action_dim", int(self.full_action_dim))
+        object.__setattr__(self, "chunk_horizon", int(self.chunk_horizon))
+        object.__setattr__(self, "chunk_step_enabled", bool(self.chunk_step_enabled))
+        object.__setattr__(self, "clip_gripper", bool(self.clip_gripper))
+        object.__setattr__(self, "base_action_key", str(self.base_action_key))
+        object.__setattr__(
+            self, "base_action_chunk_key", str(self.base_action_chunk_key)
+        )
+        object.__setattr__(self, "scale_key", str(self.scale_key))
+
+    def project_critic_action_mask_to_policy_space(
+        self,
+        action_mask: torch.Tensor,
+        *,
+        policy_action_dim: int,
+    ) -> torch.Tensor:
+        control_indices = torch.as_tensor(
+            self.control_indices,
+            device=action_mask.device,
+            dtype=torch.long,
+        )
+        if self.chunk_step_enabled:
+            expected_critic_dim = int(self.chunk_horizon * self.full_action_dim)
+            if int(action_mask.shape[-1]) != expected_critic_dim:
+                raise ValueError(
+                    "Unexpected chunk critic action_mask dim: "
+                    f"{action_mask.shape[-1]} != {expected_critic_dim}"
+                )
+            projected = action_mask.reshape(
+                *action_mask.shape[:-1], int(self.chunk_horizon), int(self.full_action_dim)
+            )
+            projected = projected.index_select(dim=-1, index=control_indices)
+            projected = projected.reshape(*projected.shape[:-2], -1)
+        else:
+            expected_critic_dim = int(self.full_action_dim)
+            if int(action_mask.shape[-1]) != expected_critic_dim:
+                raise ValueError(
+                    "Unexpected step critic action_mask dim: "
+                    f"{action_mask.shape[-1]} != {expected_critic_dim}"
+                )
+            projected = action_mask.index_select(dim=-1, index=control_indices)
+
+        if int(projected.shape[-1]) != int(policy_action_dim):
+            raise ValueError(
+                "Projected policy action_mask dim mismatch: "
+                f"{projected.shape[-1]} != {policy_action_dim}"
+            )
+        return projected
+
+    def compose_step_torch(
+        self,
+        *,
+        base_action: torch.Tensor,
+        residual_action: torch.Tensor,
+        alpha: torch.Tensor,
+    ) -> torch.Tensor:
+        control_indices = torch.as_tensor(
+            self.control_indices,
+            device=residual_action.device,
+            dtype=torch.long,
+        )
+        limits = torch.as_tensor(
+            self.limits,
+            device=residual_action.device,
+            dtype=residual_action.dtype,
+        )
+        scale = alpha.to(device=residual_action.device, dtype=residual_action.dtype)
+        if scale.ndim == 1:
+            scale = scale.unsqueeze(-1)
+        clipped = torch.clamp(residual_action, -1.0, 1.0)
+        if clipped.ndim == 2:
+            delta = clipped * scale * limits.view(1, -1)
+            final_action = base_action.to(dtype=residual_action.dtype).clone()
+            final_action[:, control_indices] = final_action[:, control_indices] + delta
+        elif clipped.ndim == 3:
+            delta = clipped * scale.unsqueeze(1) * limits.view(1, 1, -1)
+            final_action = (
+                base_action.to(dtype=residual_action.dtype)
+                .unsqueeze(1)
+                .expand(-1, clipped.shape[1], -1)
+                .clone()
+            )
+            final_action[:, :, control_indices] = (
+                final_action[:, :, control_indices] + delta
+            )
+        else:
+            raise ValueError(
+                f"Unsupported policy action rank for step transform: {clipped.shape}"
+            )
+        if self.clip_gripper and final_action.shape[-1] > 0:
+            final_action = _clip_gripper_last_dim(final_action)
+        return final_action
+
+    def compose_chunk_torch(
+        self,
+        *,
+        base_chunk: torch.Tensor,
+        residual_action: torch.Tensor,
+        alpha: torch.Tensor,
+    ) -> torch.Tensor:
+        if base_chunk.ndim != 3:
+            raise ValueError(f"Unexpected base action chunk shape: {base_chunk.shape}")
+        if (
+            base_chunk.shape[1] != int(self.chunk_horizon)
+            or base_chunk.shape[2] != int(self.full_action_dim)
+        ):
+            raise ValueError(
+                "Unexpected base action chunk dims: "
+                f"{tuple(base_chunk.shape)} vs (*, {int(self.chunk_horizon)}, {int(self.full_action_dim)})"
+            )
+
+        control_indices = torch.as_tensor(
+            self.control_indices,
+            device=residual_action.device,
+            dtype=torch.long,
+        )
+        limits = torch.as_tensor(
+            self.limits,
+            device=residual_action.device,
+            dtype=residual_action.dtype,
+        )
+        scale = alpha.to(device=residual_action.device, dtype=residual_action.dtype)
+        if scale.ndim == 1:
+            scale = scale.unsqueeze(-1)
+        clipped = torch.clamp(residual_action, -1.0, 1.0)
+        residual_action_dim = int(self.control_indices.shape[0])
+
+        if clipped.ndim == 2:
+            residual_chunk = clipped.reshape(
+                -1, int(self.chunk_horizon), residual_action_dim
+            )
+            delta = residual_chunk * scale.unsqueeze(1) * limits.view(1, 1, -1)
+            final_chunk = base_chunk.to(dtype=residual_action.dtype).clone()
+            final_chunk[:, :, control_indices] = (
+                final_chunk[:, :, control_indices] + delta
+            )
+            if self.clip_gripper and final_chunk.shape[-1] > 0:
+                final_chunk = _clip_gripper_last_dim(final_chunk)
+            return final_chunk.reshape(-1, int(self.chunk_horizon * self.full_action_dim))
+
+        if clipped.ndim == 3:
+            residual_chunk = clipped.reshape(
+                -1, clipped.shape[1], int(self.chunk_horizon), residual_action_dim
+            )
+            delta = (
+                residual_chunk
+                * scale.unsqueeze(1).unsqueeze(1)
+                * limits.view(1, 1, 1, -1)
+            )
+            final_chunk = (
+                base_chunk.to(dtype=residual_action.dtype)
+                .unsqueeze(1)
+                .expand(-1, clipped.shape[1], -1, -1)
+                .clone()
+            )
+            final_chunk[:, :, :, control_indices] = (
+                final_chunk[:, :, :, control_indices] + delta
+            )
+            if self.clip_gripper and final_chunk.shape[-1] > 0:
+                final_chunk = _clip_gripper_last_dim(final_chunk)
+            return final_chunk.reshape(
+                -1, clipped.shape[1], int(self.chunk_horizon * self.full_action_dim)
+            )
+
+        raise ValueError(
+            f"Unsupported policy action rank for chunk transform: {clipped.shape}"
+        )
+
+
+def _coerce_action_transform(value: Any) -> Any:
+    if value is None:
+        return None
+    required_attrs = (
+        "scale_key",
+        "base_action_key",
+        "base_action_chunk_key",
+        "chunk_step_enabled",
+        "full_action_dim",
+        "chunk_horizon",
+    )
+    required_methods = (
+        "project_critic_action_mask_to_policy_space",
+        "compose_step_torch",
+        "compose_chunk_torch",
+    )
+    if all(hasattr(value, name) for name in required_attrs) and all(
+        callable(getattr(value, name, None)) for name in required_methods
+    ):
+        return value
+    if isinstance(value, Mapping):
+        return _LegacyResidualCombinedActionTransform.from_mapping(value)
+    raise TypeError(
+        "action_transform must be None, a residual transform object exposing the "
+        "expected methods, or a compatible mapping; "
+        f"got {type(value)}"
+    )
 
 
 def _to_torch(data, device: torch.device):
@@ -187,6 +448,12 @@ class SACAgent:
             value = value[:, 0]
         return value
 
+    def _residual_action_transform(self) -> Optional[Any]:
+        transform = _coerce_action_transform(self.config.get("action_transform", None))
+        if transform is not self.config.get("action_transform", None):
+            self.config["action_transform"] = transform
+        return transform
+
     @staticmethod
     def _apply_action_mask(
         actions: torch.Tensor,
@@ -215,52 +482,16 @@ class SACAgent:
         if action_mask.shape[-1] == int(policy_action_dim):
             return action_mask
 
-        transform_cfg = self.config.get("action_transform", None)
-        if (
-            transform_cfg is None
-            or transform_cfg.get("type", None) != "residual_combined"
-        ):
+        transform = self._residual_action_transform()
+        if transform is None:
             raise ValueError(
                 "action_mask dim does not match policy action dim and no residual action transform is configured: "
                 f"mask_dim={action_mask.shape[-1]} policy_dim={policy_action_dim}"
             )
-
-        control_indices = torch.as_tensor(
-            transform_cfg["control_indices"],
-            device=action_mask.device,
-            dtype=torch.long,
+        return transform.project_critic_action_mask_to_policy_space(
+            action_mask,
+            policy_action_dim=int(policy_action_dim),
         )
-        full_action_dim = int(transform_cfg["full_action_dim"])
-        chunk_horizon = int(transform_cfg.get("chunk_horizon", 1))
-        chunk_step_enabled = bool(transform_cfg.get("chunk_step_enabled", False))
-
-        if chunk_step_enabled:
-            expected_critic_dim = int(chunk_horizon * full_action_dim)
-            if int(action_mask.shape[-1]) != expected_critic_dim:
-                raise ValueError(
-                    "Unexpected chunk critic action_mask dim: "
-                    f"{action_mask.shape[-1]} != {expected_critic_dim}"
-                )
-            projected = action_mask.reshape(
-                *action_mask.shape[:-1], chunk_horizon, full_action_dim
-            )
-            projected = projected.index_select(dim=-1, index=control_indices)
-            projected = projected.reshape(*projected.shape[:-2], -1)
-        else:
-            expected_critic_dim = int(full_action_dim)
-            if int(action_mask.shape[-1]) != expected_critic_dim:
-                raise ValueError(
-                    "Unexpected step critic action_mask dim: "
-                    f"{action_mask.shape[-1]} != {expected_critic_dim}"
-                )
-            projected = action_mask.index_select(dim=-1, index=control_indices)
-
-        if int(projected.shape[-1]) != int(policy_action_dim):
-            raise ValueError(
-                "Projected policy action_mask dim mismatch: "
-                f"{projected.shape[-1]} != {policy_action_dim}"
-            )
-        return projected
 
     @staticmethod
     def _reduce_log_prob_with_mask(
@@ -282,44 +513,16 @@ class SACAgent:
             )
         return (log_prob_per_dim * mask).sum(dim=-1)
 
-    @staticmethod
-    def _clip_gripper_last_dim(actions: torch.Tensor) -> torch.Tensor:
-        """Clip only the last action dim without in-place writes."""
-        if actions.shape[-1] <= 0:
-            return actions
-        clipped_last = torch.clamp(actions[..., -1:], -1.0, 1.0)
-        if actions.shape[-1] == 1:
-            return clipped_last
-        return torch.cat([actions[..., :-1], clipped_last], dim=-1)
-
     def _transform_policy_actions_for_critic(
         self,
         observations: Data,
         policy_actions: torch.Tensor,
     ) -> torch.Tensor:
-        transform_cfg = self.config.get("action_transform", None)
-        if (
-            transform_cfg is None
-            or transform_cfg.get("type", None) != "residual_combined"
-        ):
+        transform = self._residual_action_transform()
+        if transform is None:
             return policy_actions
 
-        control_indices = torch.as_tensor(
-            transform_cfg["control_indices"],
-            device=policy_actions.device,
-            dtype=torch.long,
-        )
-        limits = torch.as_tensor(
-            transform_cfg["limits"],
-            device=policy_actions.device,
-            dtype=policy_actions.dtype,
-        )
-        full_action_dim = int(transform_cfg["full_action_dim"])
-        chunk_horizon = int(transform_cfg.get("chunk_horizon", 1))
-        chunk_step_enabled = bool(transform_cfg.get("chunk_step_enabled", False))
-        clip_gripper = bool(transform_cfg.get("clip_gripper", True))
-        scale_key = str(transform_cfg.get("scale_key", "alpha"))
-        raw_scale = self._extract_aux_tensor(observations, scale_key)
+        raw_scale = self._extract_aux_tensor(observations, transform.scale_key)
 
         scale = raw_scale.to(
             device=policy_actions.device,
@@ -330,98 +533,48 @@ class SACAgent:
         if torch.any(scale < 0.0):
             min_scale = float(scale.min().detach().cpu().item())
             raise ValueError(
-                f"Observation residual scale '{scale_key}' must be >= 0.0, got min={min_scale}"
+                f"Observation residual scale '{transform.scale_key}' must be >= 0.0, got min={min_scale}"
             )
 
-        if not chunk_step_enabled:
-            base_key = str(transform_cfg.get("base_action_key", "base_action"))
-            base_action = self._extract_aux_tensor(observations, base_key).to(
+        if not transform.chunk_step_enabled:
+            base_action = self._extract_aux_tensor(
+                observations,
+                transform.base_action_key,
+            ).to(
                 device=policy_actions.device,
                 dtype=policy_actions.dtype,
             )
-            if base_action.shape[-1] != full_action_dim:
+            if base_action.shape[-1] != int(transform.full_action_dim):
                 raise ValueError(
-                    f"Unexpected base action dim: {base_action.shape[-1]} != {full_action_dim}"
+                    "Unexpected base action dim: "
+                    f"{base_action.shape[-1]} != {int(transform.full_action_dim)}"
                 )
+            return transform.compose_step_torch(
+                base_action=base_action,
+                residual_action=policy_actions,
+                alpha=scale,
+            )
 
-            clipped = torch.clamp(policy_actions, -1.0, 1.0)
-            if clipped.ndim == 2:
-                delta = clipped * scale * limits.view(1, -1)
-                final_action = base_action.clone()
-                final_action[:, control_indices] = (
-                    final_action[:, control_indices] + delta
-                )
-            elif clipped.ndim == 3:
-                delta = clipped * scale.unsqueeze(1) * limits.view(1, 1, -1)
-                final_action = (
-                    base_action.unsqueeze(1).expand(-1, clipped.shape[1], -1).clone()
-                )
-                final_action[:, :, control_indices] = (
-                    final_action[:, :, control_indices] + delta
-                )
-            else:
-                raise ValueError(
-                    f"Unsupported policy action rank for step transform: {clipped.shape}"
-                )
-
-            if clip_gripper and final_action.shape[-1] > 0:
-                final_action = self._clip_gripper_last_dim(final_action)
-            return final_action
-
-        base_chunk_key = str(
-            transform_cfg.get("base_action_chunk_key", "base_action_chunk")
-        )
-        base_chunk = self._extract_aux_tensor(observations, base_chunk_key).to(
+        base_chunk = self._extract_aux_tensor(
+            observations,
+            transform.base_action_chunk_key,
+        ).to(
             device=policy_actions.device,
             dtype=policy_actions.dtype,
         )
         if base_chunk.ndim != 3:
             raise ValueError(f"Unexpected base action chunk shape: {base_chunk.shape}")
-        if (
-            base_chunk.shape[1] != chunk_horizon
-            or base_chunk.shape[2] != full_action_dim
-        ):
+        if base_chunk.shape[1] != int(transform.chunk_horizon) or base_chunk.shape[
+            2
+        ] != int(transform.full_action_dim):
             raise ValueError(
                 "Unexpected base action chunk dims: "
-                f"{tuple(base_chunk.shape)} vs (*, {chunk_horizon}, {full_action_dim})"
+                f"{tuple(base_chunk.shape)} vs (*, {int(transform.chunk_horizon)}, {int(transform.full_action_dim)})"
             )
-
-        residual_action_dim = int(control_indices.numel())
-        clipped = torch.clamp(policy_actions, -1.0, 1.0)
-        if clipped.ndim == 2:
-            residual_chunk = clipped.reshape(-1, chunk_horizon, residual_action_dim)
-            delta = residual_chunk * scale.unsqueeze(1) * limits.view(1, 1, -1)
-            final_chunk = base_chunk.clone()
-            final_chunk[:, :, control_indices] = (
-                final_chunk[:, :, control_indices] + delta
-            )
-            if clip_gripper and final_chunk.shape[-1] > 0:
-                final_chunk = self._clip_gripper_last_dim(final_chunk)
-            return final_chunk.reshape(-1, chunk_horizon * full_action_dim)
-
-        if clipped.ndim == 3:
-            residual_chunk = clipped.reshape(
-                -1, clipped.shape[1], chunk_horizon, residual_action_dim
-            )
-            delta = (
-                residual_chunk
-                * scale.unsqueeze(1).unsqueeze(1)
-                * limits.view(1, 1, 1, -1)
-            )
-            final_chunk = (
-                base_chunk.unsqueeze(1).expand(-1, clipped.shape[1], -1, -1).clone()
-            )
-            final_chunk[:, :, :, control_indices] = (
-                final_chunk[:, :, :, control_indices] + delta
-            )
-            if clip_gripper and final_chunk.shape[-1] > 0:
-                final_chunk = self._clip_gripper_last_dim(final_chunk)
-            return final_chunk.reshape(
-                -1, clipped.shape[1], chunk_horizon * full_action_dim
-            )
-
-        raise ValueError(
-            f"Unsupported policy action rank for chunk transform: {clipped.shape}"
+        return transform.compose_chunk_torch(
+            base_chunk=base_chunk,
+            residual_action=policy_actions,
+            alpha=scale,
         )
 
     def temperature_lagrange_penalty(self, entropy: torch.Tensor):
@@ -846,6 +999,25 @@ class SACAgent:
         actions = dist.mode() if argmax else dist.sample()
         return actions.detach().cpu().numpy()
 
+    @torch.no_grad()
+    def sample_action(
+        self,
+        observations: Data,
+        *,
+        seed: Optional[int] = None,
+        argmax: bool = False,
+        deterministic: Optional[bool] = None,
+        **kwargs,
+    ) -> np.ndarray:
+        actions = self.sample_actions(
+            observations,
+            seed=seed,
+            argmax=argmax,
+            deterministic=deterministic,
+            **kwargs,
+        )
+        return _coerce_single_action(actions)
+
     @classmethod
     def create(
         cls,
@@ -869,7 +1041,7 @@ class SACAgent:
         otf_num_samples: int = 1,
         cql_n_actions: int = 10,
         cql_temperature: float = 1.0,
-        action_transform: Optional[dict] = None,
+        action_transform: Optional[Any] = None,
         mixed_precision: Optional[dict] = None,
         device: Optional[torch.device | str] = None,
     ):
@@ -942,6 +1114,7 @@ class SACAgent:
 
         if target_entropy is None:
             target_entropy = -float(act_t.shape[-1]) / 2.0
+        action_transform_obj = _coerce_action_transform(action_transform)
 
         return cls(
             state=state,
@@ -955,7 +1128,7 @@ class SACAgent:
                 otf_num_samples=int(max(1, otf_num_samples)),
                 cql_n_actions=int(max(1, cql_n_actions)),
                 cql_temperature=float(max(1e-6, cql_temperature)),
-                action_transform=copy.deepcopy(action_transform),
+                action_transform=copy.deepcopy(action_transform_obj),
                 mixed_precision=mixed_precision_cfg,
             ),
         )
