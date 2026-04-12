@@ -7,15 +7,6 @@ import numpy as np
 
 from serl_launcher.data.normalizer import StateActionNormalizer
 
-_RESIDUAL_OBSERVATION_STATE_MODE_ALIASES = {
-    "fused": "fused",
-    "raw": "raw",
-    "raw_state": "raw",
-    "raw_proprio": "raw",
-    "obs_only": "raw",
-    "observation_only": "raw",
-}
-
 
 def _resolve_residual_scale(*, alpha: Optional[float], default: float = 1.0) -> float:
     scale = default if alpha is None else alpha
@@ -25,18 +16,6 @@ def _resolve_residual_scale(*, alpha: Optional[float], default: float = 1.0) -> 
     if scale_value < 0.0:
         raise ValueError(f"Residual alpha must be >= 0, got {scale_value}")
     return scale_value
-
-
-def normalize_residual_observation_state_mode(state_mode: Optional[str]) -> str:
-    mode = str("fused" if state_mode is None else state_mode).strip().lower()
-    normalized = _RESIDUAL_OBSERVATION_STATE_MODE_ALIASES.get(mode, None)
-    if normalized is None:
-        raise ValueError(
-            "Unsupported residual observation state_mode: "
-            f"{state_mode!r}. Expected one of "
-            f"{sorted(_RESIDUAL_OBSERVATION_STATE_MODE_ALIASES)}"
-        )
-    return normalized
 
 
 def _normalize_action_chunk(
@@ -94,7 +73,6 @@ def build_residual_step_obs_from_core(
     base_action_chunk: Optional[np.ndarray] = None,
     alpha: Optional[float] = None,
     normalizer: Optional[StateActionNormalizer] = None,
-    state_mode: str = "fused",
     stack_horizon: int = 1,
 ) -> Dict[str, np.ndarray]:
     if int(stack_horizon) != 1:
@@ -105,7 +83,6 @@ def build_residual_step_obs_from_core(
         raise KeyError("core must include 'state_core'")
 
     residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
-    normalized_state_mode = normalize_residual_observation_state_mode(state_mode)
     state_core_arr = np.asarray(core["state_core"], dtype=np.float32).reshape(-1)
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
     base_action_chunk_arr = (
@@ -114,16 +91,13 @@ def build_residual_step_obs_from_core(
         else None
     )
 
-    if normalized_state_mode == "raw":
-        policy_state = state_core_arr.astype(np.float32)
-    else:
-        policy_state = _build_fused_residual_state(
-            state_core=state_core_arr,
-            base_action=base_action_arr,
-            normalizer=normalizer,
-            base_action_chunk=base_action_chunk_arr,
-            alpha=float(residual_scale),
-        )
+    policy_state = _build_fused_residual_state(
+        state_core=state_core_arr,
+        base_action=base_action_arr,
+        normalizer=normalizer,
+        base_action_chunk=base_action_chunk_arr,
+        alpha=float(residual_scale),
+    )
 
     obs_out: Dict[str, np.ndarray] = {
         "state": np.expand_dims(policy_state, axis=0).astype(np.float32),

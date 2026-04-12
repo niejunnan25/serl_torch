@@ -129,7 +129,6 @@ def save_actor_bootstrap(
     action_transform: Any,
     chunk_step_enabled: bool,
     chunk_horizon: int,
-    state_mode: str,
     learner_agent: Any,
     logger: logging.Logger,
 ) -> Path:
@@ -150,7 +149,6 @@ def save_actor_bootstrap(
             "action_transform": action_transform,
             "chunk_step_enabled": bool(chunk_step_enabled),
             "chunk_horizon": int(chunk_horizon),
-            "state_mode": str(state_mode),
             "initial_agent_payload": snapshot_agent_checkpoint_payload(
                 learner_agent,
                 step=int(learner_agent.state.step),

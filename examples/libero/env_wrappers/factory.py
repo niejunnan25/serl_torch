@@ -31,13 +31,20 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
         logger=logger,
     )
     if env_backend == "local":
-        return LiberoTaskEnv(**common_kwargs)
-    if env_backend == "remote":
+        env = LiberoTaskEnv(**common_kwargs)
+    elif env_backend == "remote":
         remote_cfg = cfg.get("env", {}).get("remote", {})
-        return RemoteLiberoTaskEnv(
+        env = RemoteLiberoTaskEnv(
             host=str(remote_cfg.get("host", "127.0.0.1")),
             port=int(remote_cfg.get("port", 30000)),
             timeout_sec=float(remote_cfg.get("timeout_sec", 120.0)),
             **common_kwargs,
         )
-    raise ValueError(f"env.backend must be 'local' or 'remote', got {env_backend}")
+    else:
+        raise ValueError(f"env.backend must be 'local' or 'remote', got {env_backend}")
+
+    if int(env.action_dim) <= 0:
+        raise ValueError(f"LIBERO env action_dim must be positive, got {env.action_dim}")
+    if int(env.step_limit) <= 0:
+        raise ValueError(f"LIBERO env step_limit must be positive, got {env.step_limit}")
+    return env

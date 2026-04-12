@@ -12,7 +12,6 @@ from typing import Tuple
 import numpy as np
 from PIL import Image
 from serl_launcher.residual.observation import build_residual_step_obs_from_core
-from serl_launcher.residual.observation import normalize_residual_observation_state_mode
 
 from ..schema import resolve_agibot_image_keys
 
@@ -269,13 +268,9 @@ class AgiBotObservationCache:
         action_dim: Optional[int] = None,
         base_action_chunk: Optional[np.ndarray] = None,
         alpha: Optional[float] = None,
-        state_mode: str = "fused",
     ) -> Dict[str, np.ndarray]:
         with self._lock:
             image_keys = resolve_agibot_image_keys(image_keys)
-            normalized_state_mode = normalize_residual_observation_state_mode(
-                state_mode
-            )
             if int(stack_horizon) != 1:
                 raise ValueError(
                     f"Only stack_horizon=1 is currently supported, got {stack_horizon}"
@@ -297,7 +292,6 @@ class AgiBotObservationCache:
                 None if alpha is None else float(alpha),
                 image_keys,
                 int(stack_horizon),
-                normalized_state_mode,
                 None if action_dim is None else int(action_dim),
             )
             cached = _lru_get(self._step_obs_cache, fused_key)
@@ -315,7 +309,6 @@ class AgiBotObservationCache:
                 base_action=base_action_arr,
                 base_action_chunk=base_action_chunk_arr,
                 alpha=alpha,
-                state_mode=normalized_state_mode,
                 stack_horizon=int(stack_horizon),
             )
             if action_dim is not None and base_action_arr.shape[0] != int(action_dim):
@@ -412,7 +405,6 @@ def build_residual_step_obs(
     action_dim: Optional[int] = None,
     base_action_chunk: Optional[np.ndarray] = None,
     alpha: Optional[float] = None,
-    state_mode: str = "fused",
 ) -> Dict[str, np.ndarray]:
     if obs_cache is not None:
         return obs_cache.build_residual_step_obs(
@@ -424,7 +416,6 @@ def build_residual_step_obs(
             action_dim=action_dim,
             base_action_chunk=base_action_chunk,
             alpha=alpha,
-            state_mode=state_mode,
         )
 
     core = build_residual_step_core(
@@ -446,6 +437,5 @@ def build_residual_step_obs(
         base_action=base_action_arr,
         base_action_chunk=base_action_chunk_arr,
         alpha=alpha,
-        state_mode=state_mode,
         stack_horizon=int(stack_horizon),
     )

@@ -25,7 +25,6 @@ from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
 from serl_launcher.residual.train.bindings import ResidualDataBindings
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
-from serl_launcher.residual.train.config import resolve_residual_observation_state_mode
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
 from serl_launcher.residual.utils.alpha_utils import validate_alpha
@@ -223,7 +222,6 @@ def _build_online_replay(
     env_action_dim: int,
     chunk_horizon: int,
     chunk_step_enabled: bool,
-    state_mode: str,
 ) -> Any:
     chunk_step_cfg = cfg.get("chunk_step", None)
     chunk_step_sample_stride = (
@@ -250,7 +248,6 @@ def _build_online_replay(
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
-            state_mode=str(state_mode),
         )
 
     action_space = gym.spaces.Box(
@@ -275,7 +272,6 @@ def _build_offline_replay(
     env_action_dim: int,
     chunk_horizon: int,
     chunk_step_enabled: bool,
-    state_mode: str,
 ) -> Any:
     chunk_step_cfg = cfg.get("chunk_step", None)
     chunk_step_sample_stride = (
@@ -302,7 +298,6 @@ def _build_offline_replay(
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
-            state_mode=str(state_mode),
         )
 
     action_space = gym.spaces.Box(
@@ -427,12 +422,6 @@ def run_residual_learner_service(
     image_keys = tuple(bootstrap.get("image_keys", tuple(bindings.image_keys)))
     chunk_step_enabled = bool(bootstrap.get("chunk_step_enabled", False))
     chunk_horizon = int(bootstrap.get("chunk_horizon", int(cfg.residual.chunk_horizon)))
-    state_mode = str(
-        bootstrap.get(
-            "state_mode",
-            resolve_residual_observation_state_mode(cfg),
-        )
-    )
     control_indices = resolve_control_indices_from_cfg(
         cfg, full_action_dim=int(env_action_dim)
     )
@@ -465,7 +454,6 @@ def run_residual_learner_service(
         env_action_dim=env_action_dim,
         chunk_horizon=chunk_horizon,
         chunk_step_enabled=chunk_step_enabled,
-        state_mode=state_mode,
     )
 
     learner_agent = agent_runtime.create_learner_agent(
@@ -522,7 +510,6 @@ def run_residual_learner_service(
             env_action_dim=env_action_dim,
             chunk_horizon=chunk_horizon,
             chunk_step_enabled=chunk_step_enabled,
-            state_mode=state_mode,
         )
         offline_residual_alpha = _resolve_alpha_step(
             cfg,
@@ -542,7 +529,6 @@ def run_residual_learner_service(
             data_config=bindings.data_config,
             normalizer=normalizer,
             profiler=None,
-            state_mode=state_mode,
             max_transitions=cfg.offline.max_transitions,
             expected_task_key=task_key,
             expected_alpha=float(offline_residual_alpha),
@@ -596,7 +582,6 @@ def run_residual_learner_service(
             normalizer=normalizer,
             profiler=None,
             max_episodes=int(configured_warmup_episodes),
-            state_mode=state_mode,
             expected_task_key=task_key,
             expected_alpha=0.0,
             dataset_label="online residual training",

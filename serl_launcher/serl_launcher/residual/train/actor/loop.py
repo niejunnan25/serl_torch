@@ -98,7 +98,6 @@ from serl_launcher.training.profiling import _emit_profiling_snapshot
 from serl_launcher.training.profiling import _profile_call
 from serl_launcher.training.replay_batch import _consume_prepared_replay_batch
 from serl_launcher.training.replay_batch import _prepare_replay_batch
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.telemetry import _append_tb_step_window
 from serl_launcher.residual.train.telemetry import _flush_tb_step_window
 from serl_launcher.residual.train.telemetry import _log_update_metrics
@@ -128,7 +127,6 @@ def run_actor_loop(
     policy_prefetcher = ctx.policy_prefetcher
     algorithm = ctx.algorithm
     stack_horizon = int(ctx.stack_horizon)
-    obs_state_mode = str(ctx.obs_state_mode)
     env_action_dim = int(ctx.env_action_dim)
     control_indices = ctx.control_indices
     step_action_dim = int(ctx.step_action_dim)

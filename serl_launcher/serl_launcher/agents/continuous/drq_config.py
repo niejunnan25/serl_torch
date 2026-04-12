@@ -118,7 +118,7 @@ def create_drq_agent_from_cfg(
     action_dim: int,
     image_keys: tuple[str, ...],
     critic_action_dim: int | None = None,
-    action_transform: Dict[str, Any] | None = None,
+    action_transform: Any | None = None,
     device: str | torch.device | None = None,
 ):
     sac_cfg = cfg.get("sac", {})

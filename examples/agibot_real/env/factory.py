@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
@@ -10,27 +9,9 @@ from omegaconf import OmegaConf
 from .task_env import AgiBotTaskEnv
 
 
-def _resolve_robot_asset_path(
-    cfg: DictConfig,
-    key: str,
-    default_name: str,
-) -> str:
-    robot_cfg = cfg.get("robot", {})
-    explicit = robot_cfg.get(key, None)
-    if explicit is not None:
-        return str(Path(str(explicit)).expanduser().resolve())
-    assets_root = robot_cfg.get("assets_root", None)
-    if assets_root is not None:
-        return str(
-            (Path(str(assets_root)).expanduser() / "G1" / default_name).resolve()
-        )
-    return str(
-        (Path(__file__).resolve().parents[1] / "assets" / "G1" / default_name).resolve()
-    )
-
-
 def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, object]:
     task_cfg = cfg.get("task", {})
+    robot_cfg = cfg.get("robot", {})
     controller_cfg = cfg.get("controller", {})
     return {
         "task_name": str(task_cfg.get("name", "agibot_real_task")),
@@ -41,13 +22,10 @@ def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, o
         "use_smooth_trajectory": bool(task_cfg.get("use_smooth_trajectory", False)),
         "trajectory_time": task_cfg.get("trajectory_time", None),
         "max_episode_steps": task_cfg.get("max_episode_steps", None),
-        "retargeter_urdf_path": _resolve_robot_asset_path(
-            cfg, "retargeter_urdf_path", "model.urdf"
-        ),
-        "retargeter_camera_extrinsic_path": _resolve_robot_asset_path(
-            cfg,
-            "retargeter_camera_extrinsic_path",
-            "head_extrinsic_ours.json",
+        "assets_root": robot_cfg.get("assets_root", None),
+        "retargeter_urdf_path": robot_cfg.get("retargeter_urdf_path", None),
+        "retargeter_camera_extrinsic_path": robot_cfg.get(
+            "retargeter_camera_extrinsic_path", None
         ),
         "controller": OmegaConf.to_container(controller_cfg, resolve=True),
         "reset_hook": task_cfg.get("reset_hook", None),

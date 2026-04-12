@@ -16,8 +16,6 @@ mixed infrastructure files in place.
   -> `serl_launcher/serl_launcher/residual/train/async_eval.py`
 - `serl_launcher/serl_launcher/residual/runtime/pretrain.py`
   -> `serl_launcher/serl_launcher/residual/train/pretrain.py`
-- `serl_launcher/serl_launcher/residual/runtime/schedules.py`
-  -> `serl_launcher/serl_launcher/residual/train/schedules.py`
 - `serl_launcher/serl_launcher/residual/runtime/step_chunk_replay.py`
   -> `serl_launcher/serl_launcher/residual/train/step_chunk_replay.py`
 - `serl_launcher/serl_launcher/residual/runtime/obs_utils.py`

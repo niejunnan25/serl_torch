@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Protocol
 import torch
 
 from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
+from serl_launcher.residual.action import ResidualActionTransform
 
 
 class ResidualAgentRuntime(Protocol):
@@ -21,7 +22,7 @@ class ResidualAgentRuntime(Protocol):
         action_dim: int,
         image_keys: tuple[str, ...],
         critic_action_dim: Optional[int] = None,
-        action_transform: Optional[Dict[str, Any]] = None,
+        action_transform: Optional[ResidualActionTransform] = None,
         device: Any = None,
     ) -> Any:
         ...
@@ -34,7 +35,7 @@ class ResidualAgentRuntime(Protocol):
         action_dim: int,
         image_keys: tuple[str, ...],
         critic_action_dim: Optional[int] = None,
-        action_transform: Optional[Dict[str, Any]] = None,
+        action_transform: Optional[ResidualActionTransform] = None,
         device: Any = None,
     ) -> Any:
         ...
@@ -72,7 +73,7 @@ class ResidualSACRuntime:
         action_dim: int,
         image_keys: tuple[str, ...],
         critic_action_dim: Optional[int] = None,
-        action_transform: Optional[Dict[str, Any]] = None,
+        action_transform: Optional[ResidualActionTransform] = None,
         device: Any = None,
     ) -> Any:
         return create_drq_agent_from_cfg(
@@ -93,7 +94,7 @@ class ResidualSACRuntime:
         action_dim: int,
         image_keys: tuple[str, ...],
         critic_action_dim: Optional[int] = None,
-        action_transform: Optional[Dict[str, Any]] = None,
+        action_transform: Optional[ResidualActionTransform] = None,
         device: Any = None,
     ) -> Any:
         return self._create_agent(
@@ -114,7 +115,7 @@ class ResidualSACRuntime:
         action_dim: int,
         image_keys: tuple[str, ...],
         critic_action_dim: Optional[int] = None,
-        action_transform: Optional[Dict[str, Any]] = None,
+        action_transform: Optional[ResidualActionTransform] = None,
         device: Any = None,
     ) -> Any:
         return self._create_agent(

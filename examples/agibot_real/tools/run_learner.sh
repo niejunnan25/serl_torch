@@ -8,7 +8,6 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo
     echo "Default learner wrapper for AgiBot split-process training."
     echo "This alias forwards to tools/run_learner_agentlace.sh."
-    echo "Config-driven alternative: tools/run_learner_generic.sh"
     exit 0
 fi
 

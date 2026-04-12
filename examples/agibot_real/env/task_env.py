@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
@@ -35,6 +36,23 @@ def _clone_obs_tree(value: Any) -> Any:
     return np.array(value, copy=True)
 
 
+def _resolve_robot_asset_path(
+    explicit_path: Optional[str],
+    *,
+    assets_root: Optional[str],
+    default_name: str,
+) -> str:
+    if explicit_path is not None:
+        return str(Path(str(explicit_path)).expanduser().resolve())
+    if assets_root is not None:
+        return str(
+            (Path(str(assets_root)).expanduser() / "G1" / default_name).resolve()
+        )
+    return str(
+        (Path(__file__).resolve().parents[1] / "assets" / "G1" / default_name).resolve()
+    )
+
+
 class AgiBotTaskEnv:
     def __init__(
         self,
@@ -47,6 +65,7 @@ class AgiBotTaskEnv:
         use_smooth_trajectory: bool = False,
         trajectory_time: Optional[float] = None,
         max_episode_steps: Optional[int] = None,
+        assets_root: Optional[str] = None,
         retargeter_urdf_path: Optional[str] = None,
         retargeter_camera_extrinsic_path: Optional[str] = None,
         controller: Optional[Mapping[str, Any]] = None,
@@ -76,8 +95,16 @@ class AgiBotTaskEnv:
             raise ValueError(
                 f"AgiBot camera_position mode expects env.action_dim=14, got {self._action_dim}"
             )
-        if retargeter_urdf_path is None or retargeter_camera_extrinsic_path is None:
-            raise ValueError("retargeter asset paths must be provided")
+        retargeter_urdf_path = _resolve_robot_asset_path(
+            retargeter_urdf_path,
+            assets_root=assets_root,
+            default_name="model.urdf",
+        )
+        retargeter_camera_extrinsic_path = _resolve_robot_asset_path(
+            retargeter_camera_extrinsic_path,
+            assets_root=assets_root,
+            default_name="head_extrinsic_ours.json",
+        )
 
         self.robot_node = AgiBotRobotNode(hz=self.hz)
         self.retargeter = BodyRetargeter(

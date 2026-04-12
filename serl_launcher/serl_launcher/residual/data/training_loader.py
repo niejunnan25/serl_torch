@@ -58,7 +58,6 @@ def load_residual_training_buffer(
     profiler: Optional[Any] = None,
     max_episodes: Optional[int] = None,
     max_transitions: Optional[int] = None,
-    state_mode: str = "fused",
     expected_task_key: Optional[str] = None,
     expected_alpha: Optional[float] = None,
     expected_projection: Optional[Mapping[str, Any]] = None,
@@ -237,7 +236,6 @@ def load_residual_training_buffer(
                     base_action=base_action,
                     alpha=float(alpha),
                     normalizer=normalizer,
-                    state_mode=state_mode,
                     stack_horizon=stack_horizon,
                 )
 
@@ -270,7 +268,6 @@ def load_residual_training_buffer(
                         ),
                         alpha=float(alpha),
                         normalizer=normalizer,
-                        state_mode=state_mode,
                         stack_horizon=stack_horizon,
                     )
                     mask = 1.0

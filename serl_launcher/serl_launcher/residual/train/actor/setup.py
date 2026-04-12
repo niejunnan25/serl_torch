@@ -53,9 +53,6 @@ from serl_launcher.residual.train.bindings import ResidualRuntimeBindings
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_action_mask_from_cfg
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
-from serl_launcher.residual.train.config import (
-    resolve_residual_observation_state_mode,
-)
 from serl_launcher.training.checkpoint import AsyncCheckpointWriter
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
@@ -88,13 +85,6 @@ def build_actor_runtime_session(
     build_residual_step_obs_profiled = bindings.build_step_obs_profiled
     build_residual_step_core = bindings.build_step_core
 
-    norm_cfg = cfg.get("normalization", None)
-    obs_state_mode = resolve_residual_observation_state_mode(cfg)
-    logger.info(
-        "Residual observation state_mode=%s normalization.enabled=%s",
-        obs_state_mode,
-        bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
-    )
     agent_runtime = create_residual_agent_runtime(cfg)
     logger.info("Residual runtime: %s", agent_runtime.name)
 
@@ -842,7 +832,6 @@ def build_actor_runtime_session(
         obs_cache=obs_cache,
         base_action_chunk=(sample_base_chunk if chunk_step_enabled else None),
         alpha=float(residual_alpha),
-        state_mode=obs_state_mode,
     )
     sample_state_core = build_residual_step_core(
         sample_obs_raw,
@@ -933,7 +922,6 @@ def build_actor_runtime_session(
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
-            state_mode=obs_state_mode,
         )
     else:
         replay_buffer = ReplayBuffer(
@@ -953,7 +941,6 @@ def build_actor_runtime_session(
                 sample_stride=chunk_step_sample_stride,
                 require_full_horizon=chunk_step_require_full_horizon,
                 pad_action_to_horizon=chunk_step_pad_action,
-                state_mode=obs_state_mode,
             )
         else:
             offline_buffer = ReplayBuffer(
@@ -977,7 +964,6 @@ def build_actor_runtime_session(
             data_config=data_config,
             normalizer=normalizer,
             profiler=profiler,
-            state_mode=obs_state_mode,
             max_transitions=cfg.offline.max_transitions,
             expected_task_key=task_key,
             expected_alpha=float(offline_residual_alpha),
@@ -1027,7 +1013,6 @@ def build_actor_runtime_session(
             action_transform=action_transform,
             chunk_step_enabled=bool(chunk_step_enabled),
             chunk_horizon=int(chunk_horizon),
-            state_mode=str(obs_state_mode),
             learner_agent=learner_agent,
             logger=logger,
         )
@@ -1118,7 +1103,6 @@ def build_actor_runtime_session(
             normalizer=normalizer,
             profiler=profiler,
             max_episodes=configured_warmup_episodes,
-            state_mode=obs_state_mode,
             expected_task_key=task_key,
             expected_alpha=0.0,
             dataset_label="online residual training",
@@ -1287,7 +1271,6 @@ def build_actor_runtime_session(
         policy_client=policy_client,
         policy_prefetcher=policy_prefetcher,
         stack_horizon=stack_horizon,
-        obs_state_mode=obs_state_mode,
         env_action_dim=env_action_dim,
         control_indices=control_indices,
         step_action_dim=step_action_dim,

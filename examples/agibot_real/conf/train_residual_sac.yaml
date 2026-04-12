@@ -58,8 +58,6 @@ controller:
 residual:
   image_keys: [head_image, wrist_left_image, wrist_right_image]
   alpha: 0.2
-  observation:
-    state_mode: fused
   epsilon_gating:
     enabled: false
     schedule: linear

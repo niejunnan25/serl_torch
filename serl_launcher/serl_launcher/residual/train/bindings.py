@@ -54,7 +54,6 @@ class ResidualRuntimeBindings(ResidualDataBindings, Protocol):
         action_dim: Optional[int] = None,
         base_action_chunk: Any = None,
         alpha: Optional[float] = None,
-        state_mode: str = "fused",
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Build the actor-side residual observation for the current decision step."""

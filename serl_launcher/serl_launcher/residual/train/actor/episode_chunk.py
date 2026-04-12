@@ -7,8 +7,8 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from serl_launcher.residual.action import as_numpy_action
-from serl_launcher.residual.action import reshape_flat_action_to_chunk
 from serl_launcher.residual.action import compose_residual_action_chunk
+from serl_launcher.residual.action import reshape_flat_action_to_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.train.actor.episode_shared import (
     apply_training_updates_and_runtime_hooks,
@@ -20,9 +20,9 @@ from serl_launcher.residual.train.actor.support import build_chunk_step_record
 from serl_launcher.residual.train.actor.support import build_policy_input
 from serl_launcher.residual.train.actor.support import build_step_obs_profiled
 from serl_launcher.residual.train.actor.support import replay_progress_size
+from serl_launcher.residual.train.actor.support import resolve_alpha_step
 from serl_launcher.residual.train.actor.support import resolve_train_gate
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.telemetry import _append_tb_step_window
 from serl_launcher.residual.train.telemetry import _flush_tb_step_window
 from serl_launcher.training.loop_utils import _count_env_step_update_triggers
@@ -72,7 +72,7 @@ def execute_chunk_decision(
         if chunk_step_scheduler_clock == "env_step"
         else int(state.decision_step)
     )
-    alpha_step = _scheduled_alpha(
+    alpha_step = resolve_alpha_step(
         cfg,
         base_alpha=residual_alpha,
         schedule_step=schedule_step,

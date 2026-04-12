@@ -280,7 +280,6 @@ def build_step_obs_profiled(
         action_dim=action_dim,
         base_action_chunk=base_action_chunk,
         alpha=alpha,
-        state_mode=str(ctx.obs_state_mode),
     )
 
 

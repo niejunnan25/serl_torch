@@ -64,7 +64,6 @@ class AgiBotRuntimeBindings(AgiBotDataBindings, ResidualRuntimeBindings):
         action_dim: Optional[int] = None,
         base_action_chunk: Any = None,
         alpha: Optional[float] = None,
-        state_mode: str = "fused",
         **_: Any,
     ) -> dict[str, Any]:
         return build_residual_step_obs(
@@ -77,7 +76,6 @@ class AgiBotRuntimeBindings(AgiBotDataBindings, ResidualRuntimeBindings):
             action_dim=action_dim,
             base_action_chunk=base_action_chunk,
             alpha=alpha,
-            state_mode=state_mode,
         )
 
     def build_step_obs_profiled(

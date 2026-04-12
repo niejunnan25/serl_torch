@@ -18,22 +18,14 @@ from serl_launcher.policy.factory import build_policy_client
 from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
 from serl_launcher.residual.action import as_numpy_action
 from serl_launcher.residual.action import reshape_flat_action_to_chunk
-from serl_launcher.residual.action import compose_residual_action
-from serl_launcher.residual.action import compose_residual_action_chunk
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
-from serl_launcher.residual.train.config import (
-    resolve_residual_observation_state_mode,
-)
 from serl_launcher.residual.train.config import sample_probing_steps
-from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
-from serl_launcher.residual.train.schedules import _epsilon_gating_eval_force_on
-from serl_launcher.residual.train.schedules import _scheduled_epsilon_gating_probability
+from serl_launcher.training.jsonl import JsonlWriter
 from serl_launcher.training.seeding import set_global_seeds
 from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
-from serl_launcher.utils.logger import JsonlLogger
 
 REPO_PARENT = Path(__file__).resolve().parents[5]
 if str(REPO_PARENT) not in sys.path:
@@ -49,6 +41,53 @@ from serl_torch.examples.libero.runtime.policy_adapter import build_libero_polic
 from torch.utils.tensorboard import SummaryWriter
 
 from serl_launcher.utils.checkpoint_utils import load_agent_checkpoint
+
+
+def _epsilon_gating_enabled(cfg: DictConfig) -> bool:
+    gating_cfg = cfg.get("residual", {}).get("epsilon_gating", None)
+    return bool(gating_cfg is not None and gating_cfg.get("enabled", False))
+
+
+def _epsilon_gating_eval_force_on(cfg: DictConfig) -> bool:
+    gating_cfg = cfg.get("residual", {}).get("epsilon_gating", None)
+    if gating_cfg is None:
+        return True
+    return bool(gating_cfg.get("eval_force_on", True))
+
+
+def _scheduled_epsilon_gating_probability(
+    cfg: DictConfig, *, schedule_step: int
+) -> float:
+    gating_cfg = cfg.get("residual", {}).get("epsilon_gating", None)
+    if gating_cfg is None or (not bool(gating_cfg.get("enabled", False))):
+        return 1.0
+
+    schedule_type = str(gating_cfg.get("schedule", "linear")).strip().lower()
+    if schedule_type not in {"linear", "constant"}:
+        raise ValueError(
+            "residual.epsilon_gating.schedule must be one of "
+            "['linear', 'constant'], "
+            f"got {schedule_type!r}"
+        )
+
+    min_prob = float(gating_cfg.get("min_prob", 0.0))
+    max_prob = float(gating_cfg.get("max_prob", 1.0))
+    min_prob = float(min(1.0, max(0.0, min_prob)))
+    max_prob = float(min(1.0, max(0.0, max_prob)))
+    if max_prob < min_prob:
+        min_prob, max_prob = max_prob, min_prob
+
+    if schedule_type == "constant":
+        return float(max_prob)
+
+    warmup_steps = int(gating_cfg.get("warmup_steps", 0))
+    ramp_steps = int(gating_cfg.get("ramp_steps", 1))
+    if schedule_step < warmup_steps:
+        return float(min_prob)
+    if ramp_steps <= 0:
+        return float(max_prob)
+    progress = min(1.0, max(0.0, (schedule_step - warmup_steps) / float(ramp_steps)))
+    return float(min_prob + (max_prob - min_prob) * progress)
 
 
 def _create_env(cfg: DictConfig, logger: logging.Logger):
@@ -120,10 +159,8 @@ def main(cfg: DictConfig) -> None:
         normalizer = load_normalizer(task_key, stats_dir=stats_dir)
         if normalizer is not None:
             logger.info("Loaded normalizer for task_key=%s", task_key)
-    obs_state_mode = resolve_residual_observation_state_mode(cfg)
     logger.info(
-        "Residual observation state_mode=%s normalization.enabled=%s",
-        obs_state_mode,
+        "Residual observation normalization.enabled=%s",
         bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
     )
 
@@ -205,8 +242,8 @@ def main(cfg: DictConfig) -> None:
 
     checkpoint_loaded = False
     agent = None
-    step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
-    episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
+    step_logger = JsonlWriter(run_dir / str(cfg.logging.step_log_file))
+    episode_logger = JsonlWriter(run_dir / str(cfg.logging.episode_log_file))
     enable_tensorboard = bool(cfg.logging.get("tensorboard", True))
     tb_writer: Optional[SummaryWriter] = None
     if enable_tensorboard:
@@ -354,7 +391,6 @@ def main(cfg: DictConfig) -> None:
                         obs_cache=obs_cache,
                         base_action_chunk=(base_chunk if chunk_step_enabled else None),
                         alpha=float(residual_alpha),
-                        state_mode=obs_state_mode,
                     )
 
                     if checkpoint_path and agent is None:
@@ -396,13 +432,10 @@ def main(cfg: DictConfig) -> None:
                         )
                         executed_base_chunk = base_chunk[:execute_horizon]
                         executed_residual_chunk = residual_chunk[:execute_horizon]
-                        delta_chunk, final_chunk = compose_residual_action_chunk(
+                        delta_chunk, final_chunk = action_transform.compose_chunk(
                             base_chunk=executed_base_chunk,
                             residual_chunk=executed_residual_chunk,
-                            indices=control_indices,
-                            limits=residual_limits,
                             alpha=residual_alpha,
-                            clip_gripper=bool(cfg.residual.clip_gripper),
                         )
 
                         total_policy_steps += 1
@@ -478,13 +511,10 @@ def main(cfg: DictConfig) -> None:
                         if not gate_on:
                             residual_step_action = np.zeros_like(residual_step_action)
 
-                        delta_action, final_action = compose_residual_action(
+                        delta_action, final_action = action_transform.compose(
                             base_action=base_chunk[chunk_step],
                             residual_action=residual_step_action,
-                            indices=control_indices,
-                            limits=residual_limits,
                             alpha=residual_alpha,
-                            clip_gripper=bool(cfg.residual.clip_gripper),
                         )
 
                         total_policy_steps += 1

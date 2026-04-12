@@ -175,6 +175,7 @@ class LiberoTaskEnv:
             else resolve_max_episode_steps(self.suite_name)
         )
         self._take_action_cnt = 0
+        self._last_obs: Optional[Dict[str, Any]] = None
         self.last_seed: Optional[int] = None
         self.current_init_state_idx: Optional[int] = None
 
@@ -271,27 +272,35 @@ class LiberoTaskEnv:
             self.current_init_state_idx,
             applied_seed,
         )
+        self._last_obs = _clone_obs_tree(obs)
         return obs
 
     def step(
         self, action: np.ndarray
     ) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
-        obs, reward, done, info = self.env.step(
+        obs, reward, env_done, info = self.env.step(
             np.asarray(action, dtype=np.float32).tolist()
         )
         self._take_action_cnt += 1
-        success = bool(done)
+        env_done = bool(env_done)
+        truncated = bool((not env_done) and self._take_action_cnt >= self._step_limit)
+        done = bool(env_done or truncated)
+        success = bool(env_done)
         info_dict = dict(info) if isinstance(info, dict) else {}
         info_dict.update(
             {
                 "success": success,
+                "env_done": bool(env_done),
+                "episode_done": bool(done),
+                "step_limit_reached": bool(truncated),
                 "take_action_cnt": int(self._take_action_cnt),
                 "step_lim": int(self._step_limit),
                 "task_description": self._task_description,
                 "init_state_idx": self.current_init_state_idx,
             }
         )
-        return obs, float(reward), bool(done), False, info_dict
+        self._last_obs = _clone_obs_tree(obs)
+        return obs, float(reward), bool(done), bool(truncated), info_dict
 
     def step_chunk(self, actions: np.ndarray) -> Dict[str, Any]:
         action_chunk = np.asarray(actions, dtype=np.float32)
@@ -305,20 +314,39 @@ class LiberoTaskEnv:
         if action_chunk.ndim != 2 or action_chunk.shape[1] != self._action_dim:
             raise ValueError(f"Unexpected action chunk shape: {action_chunk.shape}")
 
+        if self._last_obs is None:
+            raise RuntimeError("step_chunk called before reset")
+
         observations: List[Dict[str, Any]] = []
         rewards: List[float] = []
         dones: List[bool] = []
         infos: List[Dict[str, Any]] = []
+        steps: List[Dict[str, Any]] = []
 
         truncated = False
         for step_action in action_chunk:
+            prev_obs = _clone_obs_tree(self._last_obs)
             obs, reward, done, truncated, info = self.step(step_action)
             # OffScreen envs may reuse internal observation buffers.
             # Clone per-step observations so chunk history is immutable.
-            observations.append(_clone_obs_tree(obs))
+            next_obs = _clone_obs_tree(obs)
+            observations.append(next_obs)
             rewards.append(float(reward))
             dones.append(bool(done))
-            infos.append(dict(info))
+            info_dict = dict(info)
+            infos.append(info_dict)
+            steps.append(
+                {
+                    "obs": prev_obs,
+                    "action": np.array(step_action, copy=True),
+                    "next_obs": next_obs,
+                    "reward": float(reward),
+                    "env_done": bool(info_dict.get("env_done", False)),
+                    "truncated": bool(truncated),
+                    "done": bool(done),
+                    "info": info_dict,
+                }
+            )
             if done or truncated:
                 break
 
@@ -326,6 +354,7 @@ class LiberoTaskEnv:
             raise RuntimeError("step_chunk received an empty action chunk")
 
         return {
+            "steps": steps,
             "obs": observations[-1],
             "observations": observations,
             "reward_sum": float(sum(rewards)),

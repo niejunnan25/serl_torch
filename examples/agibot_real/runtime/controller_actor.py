@@ -365,7 +365,6 @@ def _plan_chunk(
             action_dim=int(ctx.env_action_dim),
             base_action_chunk=base_chunk,
             alpha=float(alpha_step),
-            state_mode=str(ctx.obs_state_mode),
         )
         if state.async_learner is not None:
             sampled_chunk = state.async_learner.sample_actor_action(

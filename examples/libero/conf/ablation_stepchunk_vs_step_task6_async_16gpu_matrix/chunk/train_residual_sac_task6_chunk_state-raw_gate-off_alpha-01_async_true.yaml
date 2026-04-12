@@ -41,8 +41,6 @@ env:
 residual:
   image_keys: [image, wrist_image]
   alpha: 0.1
-  observation:
-    state_mode: raw
   epsilon_gating:
     enabled: false
     schedule: linear

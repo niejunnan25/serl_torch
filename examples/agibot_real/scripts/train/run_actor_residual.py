@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Reference-style AgiBot residual DRQ training script."""
+"""AgiBot residual DRQ training script."""
 
 import json
 import logging
@@ -14,6 +14,10 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
+from agentlace.data.data_store import QueuedDataStore
+from agentlace.trainer import TrainerClient
+from agentlace.trainer import TrainerConfig
+from agentlace.trainer import TrainerServer
 
 try:
     import gym
@@ -24,17 +28,14 @@ from serl_launcher.agents.continuous.drq_config import create_drq_agent_from_cfg
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.common.wandb import WandBLogger
+from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
 from serl_launcher.policy.joyra.client import JoyRAPolicyClient
 from serl_launcher.policy.openpi.client import OpenPIPolicyClient
-from serl_launcher.residual.action import compose_residual_action
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.observation import build_residual_step_obs_from_core
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
-from serl_launcher.residual.train.config import (
-    resolve_residual_observation_state_mode,
-)
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
@@ -72,8 +73,6 @@ def _normalize_role(value: Any) -> str:
 
 
 def _make_trainer_config(port_number: int, broadcast_port: int):
-    from agentlace.trainer import TrainerConfig
-
     return TrainerConfig(
         port_number=int(port_number),
         broadcast_port=int(broadcast_port),
@@ -197,7 +196,6 @@ def _build_sample_obs(
     image_keys: tuple[str, ...],
     env_action_dim: int,
     residual_alpha: float,
-    obs_state_mode: str,
 ) -> dict[str, np.ndarray]:
     core: dict[str, np.ndarray] = {
         "state_core": np.zeros((AGIBOT_STATE_DIM,), dtype=np.float32),
@@ -211,7 +209,6 @@ def _build_sample_obs(
         core,
         base_action=np.zeros((env_action_dim,), dtype=np.float32),
         alpha=float(residual_alpha),
-        state_mode=str(obs_state_mode),
         stack_horizon=1,
     )
 
@@ -233,7 +230,6 @@ def _build_agent_context(
         action_limits=cfg.residual.get("action_limits", None),
     )
     residual_alpha = require_residual_alpha(cfg.get("residual", None))
-    obs_state_mode = resolve_residual_observation_state_mode(cfg)
     action_transform = build_residual_action_transform(
         control_indices=control_indices,
         residual_limits=residual_limits,
@@ -245,7 +241,7 @@ def _build_agent_context(
     agent = create_drq_agent_from_cfg(
         cfg,
         sample_obs=sample_obs,
-        action_dim=int(len(control_indices)),
+        action_dim=int(action_transform.policy_action_dim),
         image_keys=tuple(image_keys),
         critic_action_dim=env_action_dim,
         action_transform=action_transform,
@@ -253,11 +249,8 @@ def _build_agent_context(
     return agent, {
         "env_action_dim": env_action_dim,
         "image_keys": tuple(image_keys),
-        "control_indices": np.asarray(control_indices, dtype=np.int64),
-        "residual_limits": np.asarray(residual_limits, dtype=np.float32),
         "residual_alpha": float(residual_alpha),
-        "obs_state_mode": str(obs_state_mode),
-        "clip_gripper": bool(cfg.residual.get("clip_gripper", True)),
+        "action_transform": action_transform,
     }
 
 
@@ -267,8 +260,6 @@ def _create_replay_store(
     sample_obs: dict[str, np.ndarray],
     image_keys: tuple[str, ...],
 ):
-    from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
-
     action_space = gym.spaces.Box(
         low=-np.inf,
         high=np.inf,
@@ -306,26 +297,20 @@ def _build_residual_obs(
         stack_horizon=1,
         action_dim=int(agent_ctx["env_action_dim"]),
         alpha=float(agent_ctx["residual_alpha"]),
-        state_mode=str(agent_ctx["obs_state_mode"]),
     )
     return obs, base_action
 
 
 def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
-    from agentlace.data.data_store import QueuedDataStore
-    from agentlace.trainer import TrainerClient
-
     env = _create_env(cfg, logger)
     policy_client = _create_policy_client(cfg, logger)
     image_keys = tuple(resolve_agibot_cfg_image_keys(cfg))
     env_action_dim = int(cfg.env.action_dim)
     residual_alpha = require_residual_alpha(cfg.get("residual", None))
-    obs_state_mode = resolve_residual_observation_state_mode(cfg)
     sample_obs = _build_sample_obs(
         image_keys=image_keys,
         env_action_dim=env_action_dim,
         residual_alpha=float(residual_alpha),
-        obs_state_mode=str(obs_state_mode),
     )
     agent, agent_ctx = _build_agent_context(
         cfg,
@@ -394,13 +379,10 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                         agent.sample_actions(obs, deterministic=False),
                         dtype=np.float32,
                     ).reshape(-1)
-                    _delta, env_action = compose_residual_action(
+                    _delta, env_action = agent_ctx["action_transform"].compose(
                         base_action=base_action,
                         residual_action=residual_action,
-                        indices=agent_ctx["control_indices"],
-                        limits=agent_ctx["residual_limits"],
                         alpha=float(agent_ctx["residual_alpha"]),
-                        clip_gripper=bool(agent_ctx["clip_gripper"]),
                     )
 
                 with timer.context("step_env"):
@@ -452,9 +434,7 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                     "episode_steps": int(episode_steps),
                     "episode_return": float(episode_return),
                     "success": bool(episode_success),
-                    "running_success_rate": float(
-                        success_count / max(1, episode_id)
-                    ),
+                    "running_success_rate": float(success_count / max(1, episode_id)),
                 },
             }
             client.request("send-stats", stats)
@@ -494,17 +474,13 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
 
 
 def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
-    from agentlace.trainer import TrainerServer
-
     image_keys = tuple(resolve_agibot_cfg_image_keys(cfg))
     env_action_dim = int(cfg.env.action_dim)
     residual_alpha = require_residual_alpha(cfg.get("residual", None))
-    obs_state_mode = resolve_residual_observation_state_mode(cfg)
     sample_obs = _build_sample_obs(
         image_keys=image_keys,
         env_action_dim=env_action_dim,
         residual_alpha=float(residual_alpha),
-        obs_state_mode=str(obs_state_mode),
     )
     agent, _agent_ctx = _build_agent_context(
         cfg,
@@ -557,7 +533,9 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
         )
         time.sleep(FILL_WAIT_SLEEP_SEC)
 
-    server.publish_network(snapshot_agent_checkpoint_payload(agent, step=int(update_steps)))
+    server.publish_network(
+        snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
+    )
     logger.info("Published initial learner network")
 
     checkpoint_every = int(cfg.training.checkpoint.every_steps)
@@ -602,7 +580,9 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
 
             if update_steps % log_period == 0:
                 wandb_logger.log(update_info, step=update_steps)
-                wandb_logger.log({"timer": timer.get_average_times()}, step=update_steps)
+                wandb_logger.log(
+                    {"timer": timer.get_average_times()}, step=update_steps
+                )
                 logger.info(
                     "update_steps=%s env_steps=%s replay=%s info=%s",
                     int(update_steps),
@@ -632,7 +612,10 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
         with open(run_dir / str(cfg.logging.summary_file), "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2)
         try:
-            if wandb_logger is not None and getattr(wandb_logger, "run", None) is not None:
+            if (
+                wandb_logger is not None
+                and getattr(wandb_logger, "run", None) is not None
+            ):
                 wandb_logger.run.finish()
         except Exception:  # noqa: BLE001
             pass
@@ -652,7 +635,7 @@ def main(cfg: DictConfig) -> None:
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s %(message)s",
     )
-    logger = logging.getLogger("agibot_reference_style_residual")
+    logger = logging.getLogger("agibot_residual")
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 

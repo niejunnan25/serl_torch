@@ -19,11 +19,11 @@ from serl_launcher.residual.train.actor.episode_shared import insert_online_tran
 from serl_launcher.residual.train.actor.support import build_policy_input
 from serl_launcher.residual.train.actor.support import build_step_obs_profiled
 from serl_launcher.residual.train.actor.support import replay_progress_size
+from serl_launcher.residual.train.actor.support import resolve_alpha_step
 from serl_launcher.residual.train.actor.support import resolve_train_gate
 from serl_launcher.residual.train.obs_utils import _clone_obs_dict
 from serl_launcher.residual.train.obs_utils import _zero_obs_like
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.telemetry import _append_tb_step_window
 from serl_launcher.residual.train.telemetry import _flush_tb_step_window
 
@@ -69,7 +69,7 @@ def execute_step_decision(
             break
 
         train_env_step_before_step = int(state.train_env_step)
-        alpha_step = _scheduled_alpha(
+        alpha_step = resolve_alpha_step(
             cfg,
             base_alpha=residual_alpha,
             schedule_step=train_env_step_before_step,
@@ -144,7 +144,7 @@ def execute_step_decision(
             state.train_env_step += 1
             update_train_progress(train_env_step_value=state.train_env_step)
         train_env_step_after_step = int(state.train_env_step)
-        next_alpha_step = _scheduled_alpha(
+        next_alpha_step = resolve_alpha_step(
             cfg,
             base_alpha=residual_alpha,
             schedule_step=train_env_step_after_step,

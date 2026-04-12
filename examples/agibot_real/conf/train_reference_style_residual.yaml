@@ -63,8 +63,6 @@ controller:
 residual:
   image_keys: [head_image, wrist_left_image, wrist_right_image]
   alpha: 0.2
-  observation:
-    state_mode: fused
   action_mask: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true

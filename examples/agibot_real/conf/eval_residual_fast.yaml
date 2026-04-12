@@ -48,8 +48,6 @@ controller:
 residual:
   image_keys: [head_image, wrist_left_image, wrist_right_image]
   alpha: 0.2
-  observation:
-    state_mode: fused
   epsilon_gating:
     enabled: false
     schedule: linear
@@ -123,8 +121,6 @@ eval:
   probing_max_steps: 20
 
 logging:
-  step_log_file: step_logs.jsonl
-  episode_log_file: episode_logs.jsonl
   summary_file: summary.json
   tensorboard: true
 
