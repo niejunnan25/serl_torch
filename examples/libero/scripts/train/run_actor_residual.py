@@ -249,6 +249,7 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                         "base_actions": next_base_actions,
                         "residual_obs": next_residual_obs,
                     }
+
                     residual_obs = next_residual_obs
 
                     if env_steps % steps_per_update == 0:
