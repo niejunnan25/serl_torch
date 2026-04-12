@@ -51,7 +51,10 @@ from serl_torch.examples.libero.runtime.observation import (
     build_chunk_residual_sample_obs,
 )
 from serl_torch.examples.libero.runtime.observation import (
-    build_fused_chunk_residual_observation,
+    build_libero_state,
+)
+from serl_torch.examples.libero.runtime.observation import (
+    extract_residual_images,
 )
 from serl_torch.examples.libero.runtime.policy_adapter import build_libero_policy_input
 from serl_torch.examples.libero.utils import validate_reference_style_residual_cfg
@@ -76,6 +79,7 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
         cfg,
         action_dim=action_dim,
     )
+    residual_alpha = float(residual_action_spec.alpha)
     sample_obs = build_chunk_residual_sample_obs(
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
@@ -154,23 +158,40 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                         base_action_chunk, _ = policy_client.infer_chunk(
                             base_policy_input
                         )
-                        if int(base_action_chunk.shape[0]) < chunk_horizon:
-                            raise ValueError(
-                                "Base policy chunk horizon is shorter than residual chunk_horizon: "
-                                f"{base_action_chunk.shape} vs ({chunk_horizon}, {action_dim})"
-                            )
-                        base_action_chunk = np.asarray(
-                            base_action_chunk[:chunk_horizon],
+                        base_action_chunk = base_action_chunk[:chunk_horizon]
+
+                        robot_proprio = build_libero_state(obs)
+                        base_action = np.asarray(
+                            base_action_chunk[0],
                             dtype=np.float32,
-                        )
-                        residual_obs = build_fused_chunk_residual_observation(
-                            obs=obs,
-                            base_action_chunk=base_action_chunk,
-                            image_keys=image_keys,
-                            alpha=float(residual_action_spec.alpha),
-                            action_dim=action_dim,
-                            chunk_horizon=chunk_horizon,
-                        )
+                        ).reshape(-1)
+                        fused_state = np.concatenate(
+                            (
+                                robot_proprio,
+                                base_action,
+                                base_action_chunk.reshape(-1),
+                                np.asarray([residual_alpha], dtype=np.float32),
+                            ),
+                            axis=-1,
+                        ).astype(np.float32)
+                        images = extract_residual_images(obs)
+                        residual_obs = {
+                            "state": np.expand_dims(fused_state, axis=0).astype(np.float32),
+                            "base_action": np.expand_dims(base_action, axis=0).astype(
+                                np.float32
+                            ),
+                            "base_action_chunk": np.expand_dims(
+                                base_action_chunk,
+                                axis=0,
+                            ).astype(np.float32),
+                            "alpha": np.asarray([[residual_alpha]], dtype=np.float32),
+                        }
+                        for key in image_keys:
+                            if key not in images:
+                                raise KeyError(
+                                    f"Unsupported image key {key!r}. Available keys: {list(images.keys())}"
+                                )
+                            residual_obs[key] = np.expand_dims(images[key].copy(), axis=0)
                     else:
                         base_action_chunk = cached_base_action_chunk
                         residual_obs = cached_residual_obs
@@ -216,26 +237,47 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                         next_base_action_chunk, _ = policy_client.infer_chunk(
                             next_base_policy_input
                         )
-                        if int(next_base_action_chunk.shape[0]) < chunk_horizon:
-                            raise ValueError(
-                                "Next base policy chunk horizon is shorter than residual chunk_horizon: "
-                                f"{next_base_action_chunk.shape} vs ({chunk_horizon}, {action_dim})"
-                            )
-                        next_base_action_chunk = np.asarray(
-                            next_base_action_chunk[:chunk_horizon],
+                        next_base_action_chunk = next_base_action_chunk[:chunk_horizon]
+                        next_robot_proprio = build_libero_state(step_obs)
+                        next_base_action = np.asarray(
+                            next_base_action_chunk[0],
                             dtype=np.float32,
-                        )
+                        ).reshape(-1)
+                        next_fused_state = np.concatenate(
+                            (
+                                next_robot_proprio,
+                                next_base_action,
+                                next_base_action_chunk.reshape(-1),
+                                np.asarray([residual_alpha], dtype=np.float32),
+                            ),
+                            axis=-1,
+                        ).astype(np.float32)
+                        next_images = extract_residual_images(step_obs)
                         decision_base_action_chunks.append(next_base_action_chunk)
-                        decision_observations.append(
-                            build_fused_chunk_residual_observation(
-                                obs=step_obs,
-                                base_action_chunk=next_base_action_chunk,
-                                image_keys=image_keys,
-                                alpha=float(residual_action_spec.alpha),
-                                action_dim=action_dim,
-                                chunk_horizon=chunk_horizon,
+                        next_residual_obs = {
+                            "state": np.expand_dims(next_fused_state, axis=0).astype(
+                                np.float32
+                            ),
+                            "base_action": np.expand_dims(
+                                next_base_action,
+                                axis=0,
+                            ).astype(np.float32),
+                            "base_action_chunk": np.expand_dims(
+                                next_base_action_chunk,
+                                axis=0,
+                            ).astype(np.float32),
+                            "alpha": np.asarray([[residual_alpha]], dtype=np.float32),
+                        }
+                        for key in image_keys:
+                            if key not in next_images:
+                                raise KeyError(
+                                    f"Unsupported image key {key!r}. Available keys: {list(next_images.keys())}"
+                                )
+                            next_residual_obs[key] = np.expand_dims(
+                                next_images[key].copy(),
+                                axis=0,
                             )
-                        )
+                        decision_observations.append(next_residual_obs)
 
                 timer.tock("total")
 
