@@ -67,18 +67,18 @@ LEARNER_IDLE_SLEEP_SEC = 1.0
 def _build_chunk_residual_obs(
     *,
     obs: dict[str, Any],
-    base_action_chunk: np.ndarray,
+    base_actions: np.ndarray,
     image_keys: tuple[str, ...],
     residual_alpha: float,
 ) -> dict[str, np.ndarray]:
-    base_action_chunk = np.asarray(base_action_chunk, dtype=np.float32)
+    base_actions = np.asarray(base_actions, dtype=np.float32)
     images = extract_residual_images(obs)
     residual_obs: dict[str, np.ndarray] = {
         "robot_proprio": np.expand_dims(build_libero_state(obs), axis=0).astype(
             np.float32
         ),
-        "base_action": np.expand_dims(base_action_chunk[0], axis=0).astype(np.float32),
-        "base_action_chunk": np.expand_dims(base_action_chunk, axis=0).astype(
+        "base_action": np.expand_dims(base_actions[0], axis=0).astype(np.float32),
+        "base_action_chunk": np.expand_dims(base_actions, axis=0).astype(
             np.float32
         ),
         "alpha": np.asarray([[residual_alpha]], dtype=np.float32),
@@ -177,32 +177,32 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                 with timer.context("sample_actions"):
                     if prefetched is None:
                         base_policy_input = build_libero_policy_input(obs, task_prompt)
-                        base_action_chunk, _ = policy_client.infer(
-                            base_policy_input
-                        )
-                        base_action_chunk = base_action_chunk[:chunk_horizon]
+
+                        base_actions, _ = policy_client.infer(base_policy_input)
+
+                        base_actions = base_actions[:chunk_horizon]
+
                         residual_obs = _build_chunk_residual_obs(
                             obs=obs,
-                            base_action_chunk=base_action_chunk,
+                            base_actions=base_actions,
                             image_keys=image_keys,
                             residual_alpha=residual_alpha,
                         )
                     else:
-                        base_action_chunk = prefetched["base_action_chunk"]
+                        base_actions = prefetched["base_actions"]
                         residual_obs = prefetched["residual_obs"]
                         prefetched = None
 
-                    residual_action = agent.sample_action(
-                        residual_obs, deterministic=False
-                    )
+                    residual_actions = agent.sample_action(residual_obs, deterministic=False)
 
-                    final_action_chunk = residual_action_spec.compose_chunk(
-                        base_action_chunk=base_action_chunk,
-                        residual_action=residual_action,
+                    final_actions = residual_action_spec.compose_chunk(
+                        base_action_chunk=base_actions,
+                        residual_action=residual_actions,
                     )
 
                 episode_done = False
-                for actions in final_action_chunk:
+
+                for actions in final_actions:
 
                     if env_steps >= max_env_steps:
                         break
@@ -212,17 +212,14 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
 
                     with timer.context("build_decision_obs"):
                         next_base_policy_input = build_libero_policy_input(
-                            next_obs,
-                            task_prompt,
+                            next_obs, task_prompt
                         )
-                        next_base_action_chunk, _ = policy_client.infer(
-                            next_base_policy_input
-                        )
-                        next_base_action_chunk = next_base_action_chunk[:chunk_horizon]
+                        next_base_actions, _ = policy_client.infer(next_base_policy_input)
+                        next_base_actions = next_base_actions[:chunk_horizon]
 
                         next_residual_obs = _build_chunk_residual_obs(
                             obs=next_obs,
-                            base_action_chunk=next_base_action_chunk,
+                            base_actions=next_base_actions,
                             image_keys=image_keys,
                             residual_alpha=residual_alpha,
                         )
@@ -247,8 +244,9 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                     episode_return += float(reward)
                     episode_success = bool(episode_success or env_done)
                     obs = dict(next_obs)
+
                     prefetched = {
-                        "base_action_chunk": next_base_action_chunk,
+                        "base_actions": next_base_actions,
                         "residual_obs": next_residual_obs,
                     }
                     residual_obs = next_residual_obs
