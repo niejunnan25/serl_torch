@@ -1,0 +1,32 @@
+{
+  "extraPaths": [
+    "..",
+    "serl_launcher"
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownParameterType": "none",
+  "exclude": [
+    "**/.git",
+    "**/__pycache__",
+    "**/.mypy_cache",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/.tox",
+    "**/.nox",
+    "**/.venv",
+    "**/wandb",
+    "**/outputs",
+    "docs",
+    "reference",
+    "pretrained_models",
+    "third_party",
+    "serl_launcher/serl_launcher.egg-info"
+  ]
+}

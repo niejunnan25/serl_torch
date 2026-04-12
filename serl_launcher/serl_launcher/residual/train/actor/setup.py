@@ -814,7 +814,7 @@ def build_actor_runtime_session(
         env.reset,
         **sample_reset_kwargs,
     )
-    sample_policy_chunk, _ = policy_client.infer_chunk(
+    sample_policy_chunk, _ = policy_client.infer(
         _policy_input(sample_obs_raw, env.current_instruction)
     )
     sample_base_chunk = select_action_chunk_window(

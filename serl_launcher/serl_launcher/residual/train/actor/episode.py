@@ -51,7 +51,7 @@ def _run_probing_steps(
             probe_chunk, probe_info = probe_future.result()
             probe_future = None
         else:
-            probe_chunk, probe_info = policy_client.infer_chunk(
+            probe_chunk, probe_info = policy_client.infer(
                 build_policy_input(ctx, state.obs_raw, env.current_instruction)
             )
         probe_base_chunk = select_action_chunk_window(
@@ -193,7 +193,7 @@ def run_policy_episode(
 
     while state.episode_steps < spec.max_episode_steps and not state.episode_done:
         if state.cached_base_chunk is None:
-            policy_chunk, infer_info = policy_client.infer_chunk(
+            policy_chunk, infer_info = policy_client.infer(
                 build_policy_input(ctx, state.obs_raw, ctx.env.current_instruction)
             )
             base_chunk = select_action_chunk_window(

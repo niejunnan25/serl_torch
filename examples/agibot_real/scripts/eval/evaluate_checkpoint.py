@@ -234,7 +234,7 @@ def main(cfg: DictConfig) -> None:
                     remaining_steps: int,
                 ) -> list[ControllerPlannedStep]:
                     nonlocal agent, checkpoint_loaded, total_policy_steps
-                    action_chunk, infer_info = policy_client.infer_chunk(
+                    action_chunk, infer_info = policy_client.infer(
                         build_agibot_policy_input(
                             controller_obs,
                             env.current_instruction,
@@ -394,7 +394,7 @@ def main(cfg: DictConfig) -> None:
             else:
                 decision_done = False
                 while (not decision_done) and episode_steps < max_episode_steps:
-                    action_chunk, infer_info = policy_client.infer_chunk(
+                    action_chunk, infer_info = policy_client.infer(
                         build_agibot_policy_input(
                             obs_raw, env.current_instruction, obs_cache=obs_cache
                         )

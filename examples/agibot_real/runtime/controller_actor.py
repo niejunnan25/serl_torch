@@ -328,7 +328,7 @@ def _plan_chunk(
 ) -> Deque[_PlannedStep]:
     cfg = ctx.cfg
     env = ctx.env
-    action_chunk, infer_info = ctx.policy_client.infer_chunk(
+    action_chunk, infer_info = ctx.policy_client.infer(
         build_policy_input(ctx, obs_raw, env.current_instruction)
     )
     base_chunk = select_action_chunk_window(

@@ -254,7 +254,7 @@ def execute_step_decision(
             if next_chunk_future is not None:
                 next_policy_chunk, next_infer_info = next_chunk_future.result()
             else:
-                next_policy_chunk, next_infer_info = policy_client.infer_chunk(
+                next_policy_chunk, next_infer_info = policy_client.infer(
                     build_policy_input(ctx, next_obs_raw, env.current_instruction)
                 )
             next_base_chunk = select_action_chunk_window(
