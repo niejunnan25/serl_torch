@@ -24,9 +24,7 @@ class RemoteLiberoTaskEnv:
         libero_root: Optional[str] = None,
         libero_config_dir: Optional[str] = None,
         libero_datasets_root: Optional[str] = None,
-        env_seed_mode: str = "per_episode",
-        fixed_env_seed: Optional[int] = None,
-        init_state_index_mode: str = "seed",
+        env_seed: Optional[int] = None,
         timeout_sec: float = 120.0,
         logger: Optional[logging.Logger] = None,
     ) -> None:
@@ -50,9 +48,7 @@ class RemoteLiberoTaskEnv:
         self.libero_datasets_root = (
             None if libero_datasets_root is None else str(libero_datasets_root)
         )
-        self.env_seed_mode = str(env_seed_mode)
-        self.fixed_env_seed = None if fixed_env_seed is None else int(fixed_env_seed)
-        self.init_state_index_mode = str(init_state_index_mode)
+        self.env_seed = None if env_seed is None else int(env_seed)
 
         self.last_seed: Optional[int] = None
         self.current_init_state_idx: Optional[int] = None
@@ -80,9 +76,7 @@ class RemoteLiberoTaskEnv:
                 libero_root=self.libero_root,
                 libero_config_dir=self.libero_config_dir,
                 libero_datasets_root=self.libero_datasets_root,
-                env_seed_mode=self.env_seed_mode,
-                fixed_env_seed=self.fixed_env_seed,
-                init_state_index_mode=self.init_state_index_mode,
+                env_seed=self.env_seed,
             )
             self._apply_meta(self._rpc("get_meta"))
         except Exception:
@@ -147,23 +141,6 @@ class RemoteLiberoTaskEnv:
             raise RuntimeError("remote reset returned invalid payload")
         self._apply_meta(result.get("meta", {}))
         return result["obs"]
-
-    def expert_precheck(
-        self, seed: int, init_episode_idx: int
-    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        result = self._rpc(
-            "expert_precheck",
-            seed=int(seed),
-            init_episode_idx=int(init_episode_idx),
-        )
-        if not isinstance(result, dict):
-            raise RuntimeError("remote expert_precheck returned invalid payload")
-        self._apply_meta(result.get("meta", {}))
-        passed = bool(result.get("passed", False))
-        episode_info = result.get("episode_info", None)
-        if episode_info is not None and (not isinstance(episode_info, dict)):
-            episode_info = None
-        return passed, episode_info
 
     def step(
         self, action: np.ndarray

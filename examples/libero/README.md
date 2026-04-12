@@ -13,8 +13,7 @@
 - LIBERO 环境适配
 - remote env server
 - residual 训练入口
-- residual 评测入口
-- offline / online 数据准备
+- 实验数据和输出资产
 - 实验配置和补充文档
 
 共享训练逻辑已经尽量下沉到：
@@ -34,22 +33,22 @@
 
 - `conf/`
   当前主流程的 Hydra 基础配置
-- `configs/`
+- `experiments/`
   历史实验 yaml 和实验矩阵
+- `data/`
+  数据资产
+- `outputs/`
+  运行输出资产
 - `env_wrappers/`
   本地 env、remote env、LIBERO setup
 - `runtime/`
   观测构造和 policy 输入适配
-- `scripts/train/`
-  训练入口
-- `scripts/eval/`
-  评测入口
-- `scripts/data/`
-  数据准备入口
-- `scripts/services/`
-  环境服务入口
+- `training/`
+  训练专属的 agent 构造、残差动作语义和配置校验
+- `scripts/`
+  训练 / 服务入口
 - `tools/`
-  仍保留的服务 / 数据 / 评测 shell 包装
+  仍保留的服务 shell 包装
 - `docs/`
   LIBERO 补充设计说明
 
@@ -70,7 +69,7 @@
 
 ### 运行环境
 
-训练 / 评测 / 数据准备默认使用 `serl_torch`：
+训练 / 数据准备默认使用 `serl_torch`：
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch
@@ -82,7 +81,7 @@ pip install -e /vla/users/niejunnan/codebase/openpi/packages/openpi-client
 常用环境：
 
 - `serl_torch`
-  actor / learner / eval / 数据准备
+  actor / learner / 数据准备
 - `libero`
   env server
 - `openpi-modified`
@@ -92,25 +91,18 @@ pip install -e /vla/users/niejunnan/codebase/openpi/packages/openpi-client
 
 现在训练主流程只有一个：
 
-- [run_actor_residual.py](scripts/train/run_actor_residual.py)
+- [run_residual_training.py](scripts/run_residual_training.py)
 
 这个脚本通过：
 
-- `reference_style.role=learner`
-- `reference_style.role=actor`
+- `runtime.role=learner`
+- `runtime.role=actor`
 
 来分别启动 learner 和 actor。
 
 当前 canonical 配置是：
 
-- [train_reference_style_residual.yaml](conf/train_reference_style_residual.yaml)
-
-旧的这些入口已经删除：
-
-- `scripts/train/run_actor.py`
-- `scripts/train/run_learner.py`
-- `scripts/train/launch_async_train.py`
-- 对应的旧 shell wrapper
+- [train_residual.yaml](conf/train_residual.yaml)
 
 ### 当前怎么跑
 
@@ -138,9 +130,9 @@ bash examples/libero/tools/serve_openpi.sh \
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/train/run_actor_residual.py \
-  reference_style.role=learner \
-  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/reference_style/task8/learner \
+conda run -n serl_torch python scripts/run_residual_training.py \
+  runtime.role=learner \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/residual/task8/learner \
   libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
@@ -149,9 +141,9 @@ conda run -n serl_torch python scripts/train/run_actor_residual.py \
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/train/run_actor_residual.py \
-  reference_style.role=actor \
-  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/reference_style/task8/actor \
+conda run -n serl_torch python scripts/run_residual_training.py \
+  runtime.role=actor \
+  hydra.run.dir=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/residual/task8/actor \
   libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
@@ -160,12 +152,12 @@ conda run -n serl_torch python scripts/train/run_actor_residual.py \
 
 actor 和 learner 必须对齐：
 
-- `reference_style.trainer_port`
-- `reference_style.broadcast_port`
+- `runtime.trainer_port`
+- `runtime.broadcast_port`
 - `env.remote.host`
 - `env.remote.port`
-- `openpi.host`
-- `openpi.port`
+- `policy.host`
+- `policy.port`
 
 如果你改了其中一侧，另一侧也要一起改。
 
@@ -173,7 +165,7 @@ actor 和 learner 必须对齐：
 
 脚本默认吃的是：
 
-- `conf/train_reference_style_residual.yaml`
+- `conf/train_residual.yaml`
 
 如果你要换到别的实验 yaml，直接像普通 Hydra 一样传：
 
@@ -183,7 +175,7 @@ actor 和 learner 必须对齐：
 
 或者继续用默认配置，再叠加 overrides。
 
-`configs/exp11`、`configs/exp12` 这类目录现在更适合作为：
+`experiments/exp11`、`experiments/exp12` 这类目录现在更适合作为：
 
 - 历史实验记录
 - 实验矩阵
@@ -207,33 +199,11 @@ actor 和 learner 必须对齐：
 - `.../your_run/learner`
 - `.../your_run/actor`
 
-### 评测怎么跑
-
-评测入口仍然是：
-
-- [evaluate_checkpoint.py](scripts/eval/evaluate_checkpoint.py)
-
-最小示例：
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/eval/evaluate_checkpoint.py \
-  policy.type=openpi \
-  policy.id=pi05_libero \
-  env.remote.host=127.0.0.1 \
-  env.remote.port=30000 \
-  openpi.host=127.0.0.1 \
-  openpi.port=30001 \
-  eval.checkpoint_path=/abs/path/to/checkpoint.pt \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets
-```
-
 ### 数据准备入口
 
 旧的离线转换、online prefill 收集和 HDF5 统计脚本已经移除。
 
-当前这个目录只保留在线训练、评测和 env service 主流程入口。
+当前这个目录只保留在线训练和 env service 主流程入口。
 
 ### LIBERO runtime config 是怎么处理的
 

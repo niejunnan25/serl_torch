@@ -15,19 +15,17 @@ def _create_env(cfg: DictConfig, logger: logging.Logger):
         suite_name=str(cfg.task.suite_name),
         task_id=int(cfg.task.task_id),
         action_dim=cfg.get("env", {}).get("action_dim", None),
-        resolution=int(cfg.task.resolution),
-        num_steps_wait=int(cfg.task.num_steps_wait),
+        resolution=int(cfg.env.resolution),
+        num_steps_wait=int(cfg.env.num_steps_wait),
         max_episode_steps=(
-            int(cfg.task.max_episode_steps)
-            if cfg.task.max_episode_steps is not None
+            int(cfg.env.max_episode_steps)
+            if cfg.env.max_episode_steps is not None
             else None
         ),
         libero_root=cfg.get("libero_root", None),
         libero_config_dir=cfg.get("libero_config_dir", None),
         libero_datasets_root=cfg.get("libero_datasets_root", None),
-        env_seed_mode=str(cfg.task.get("env_seed_mode", "per_episode")),
-        fixed_env_seed=cfg.task.get("fixed_env_seed", None),
-        init_state_index_mode=str(cfg.task.get("init_state_index_mode", "seed")),
+        env_seed=cfg.env.get("seed", None),
         logger=logger,
     )
     if env_backend == "local":

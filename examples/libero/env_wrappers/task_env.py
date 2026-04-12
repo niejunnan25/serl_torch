@@ -91,9 +91,7 @@ class LiberoTaskEnv:
         libero_root: Optional[str] = None,
         libero_config_dir: Optional[str] = None,
         libero_datasets_root: Optional[str] = None,
-        env_seed_mode: str = "per_episode",
-        fixed_env_seed: Optional[int] = None,
-        init_state_index_mode: str = "seed",
+        env_seed: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.logger = logger or logging.getLogger(__name__)
@@ -101,15 +99,9 @@ class LiberoTaskEnv:
         self.task_id = int(task_id)
         self.resolution = int(resolution)
         self.num_steps_wait = int(num_steps_wait)
-        self.env_seed_mode = str(env_seed_mode).lower()
-        self.fixed_env_seed = None if fixed_env_seed is None else int(fixed_env_seed)
-        self.init_state_index_mode = str(init_state_index_mode).lower()
-        if self.env_seed_mode not in {"per_episode", "fixed"}:
-            raise ValueError(f"Unsupported env_seed_mode: {env_seed_mode}")
-        if self.init_state_index_mode not in {"seed", "episode_id"}:
-            raise ValueError(
-                f"Unsupported init_state_index_mode: {init_state_index_mode}"
-            )
+        if env_seed is None:
+            raise ValueError("env.seed must be explicitly set")
+        self.env_seed = int(env_seed)
         self.libero_root = resolve_libero_root(libero_root)
         self.libero_config_dir = resolve_libero_config_dir(libero_config_dir)
         self.libero_datasets_root = resolve_libero_datasets_root(
@@ -162,12 +154,7 @@ class LiberoTaskEnv:
             self._action_dim,
             runtime_action_dim_source,
         )
-        if self.env_seed_mode == "fixed":
-            if self.fixed_env_seed is None:
-                raise ValueError(
-                    "fixed_env_seed must be provided when env_seed_mode='fixed'"
-                )
-            self.env.seed(self.fixed_env_seed)
+        self.env.seed(self.env_seed)
 
         self._step_limit = int(
             max_episode_steps
@@ -199,33 +186,27 @@ class LiberoTaskEnv:
     def action_dim(self) -> int:
         return int(self._action_dim)
 
-    def expert_precheck(
-        self, seed: int, init_episode_idx: int
-    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        del seed, init_episode_idx
-        return True, None
-
     def reset(
         self,
         seed: int,
         init_episode_idx: int,
         episode_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        del episode_info
-        applied_seed = int(seed)
-        if self.env_seed_mode == "fixed":
-            applied_seed = int(self.fixed_env_seed)
-        self.last_seed = int(applied_seed)
-        if self.init_state_index_mode == "episode_id" and int(init_episode_idx) >= 0:
-            self.current_init_state_idx = int(init_episode_idx) % len(
-                self.initial_states
+        del episode_info, seed
+        episode_index = int(init_episode_idx)
+        if episode_index < 0:
+            raise ValueError(
+                f"init_episode_idx must be >= 0, got {init_episode_idx}"
             )
-        else:
-            self.current_init_state_idx = int(seed) % len(self.initial_states)
+
+        # Mainline semantics: keep env RNG fixed across episodes while
+        # cycling LIBERO init states deterministically by episode id.
+        applied_seed = int(self.env_seed)
+        self.last_seed = int(applied_seed)
+        self.current_init_state_idx = int(episode_index) % len(self.initial_states)
         self._take_action_cnt = 0
 
-        if self.env_seed_mode != "fixed":
-            self.env.seed(int(seed))
+        self.env.seed(applied_seed)
         dummy_action = np.zeros((self._action_dim,), dtype=np.float32)
         if self._action_dim > 0:
             dummy_action[-1] = -1.0

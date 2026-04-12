@@ -77,4 +77,4 @@ then
     exit 1
 fi
 
-exec "$PYTHON_BIN" scripts/services/serve_env.py --host "$HOST" --port "$PORT" "${EXTRA_ARGS[@]}"
+exec "$PYTHON_BIN" scripts/serve_env.py --host "$HOST" --port "$PORT" "${EXTRA_ARGS[@]}"
