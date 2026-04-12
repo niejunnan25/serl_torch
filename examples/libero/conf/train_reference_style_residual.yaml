@@ -72,7 +72,9 @@ sac:
     bottleneck_dim: 256
   shared_encoder: true
   use_proprio: true
+  proprio_latent_dim: 64
   image_keys: [image, wrist_image]
+  vector_obs_keys: [robot_proprio, base_action_chunk, alpha]
   obs_stack_horizon: 1
   learning_rate: 3.0e-4
   std_min: 1.0e-5

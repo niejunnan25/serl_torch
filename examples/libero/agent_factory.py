@@ -81,6 +81,27 @@ def _mixed_precision_kwargs(cfg: DictConfig) -> dict[str, Any]:
     }
 
 
+def _vector_obs_keys(cfg: DictConfig) -> tuple[str, ...] | None:
+    sac_cfg = cfg.get("sac", {})
+    keys = sac_cfg.get("vector_obs_keys", None)
+    if keys is None:
+        return None
+    resolved = tuple(str(key) for key in keys)
+    if len(resolved) == 0:
+        raise ValueError("sac.vector_obs_keys must not be empty when configured")
+    return resolved
+
+
+def _proprio_latent_dim(cfg: DictConfig) -> int:
+    sac_cfg = cfg.get("sac", {})
+    latent_dim = int(sac_cfg.get("proprio_latent_dim", 64))
+    if latent_dim <= 0:
+        raise ValueError(
+            f"sac.proprio_latent_dim must be positive, got {latent_dim}"
+        )
+    return latent_dim
+
+
 def _resnet_kwargs(cfg: DictConfig) -> dict[str, Any] | None:
     sac_cfg = cfg.get("sac", {})
     resnet_cfg = sac_cfg.get("resnet", None)
@@ -118,6 +139,14 @@ def make_drq_agent(
     device: Any = None,
 ) -> DrQAgent:
     sac_cfg = cfg.get("sac", {})
+    vector_obs_keys = _vector_obs_keys(cfg)
+    if bool(sac_cfg.get("use_proprio", False)) and vector_obs_keys is None and (
+        "state" not in sample_obs
+    ):
+        raise ValueError(
+            "sac.use_proprio=true requires either observations['state'] or "
+            "sac.vector_obs_keys to be configured"
+        )
     sample_action = np.zeros((int(action_dim),), dtype=np.float32)
     sample_critic_action = np.zeros(
         (int(critic_action_dim) if critic_action_dim is not None else int(action_dim)),
@@ -129,6 +158,8 @@ def make_drq_agent(
         "shared_encoder": bool(sac_cfg.get("shared_encoder", True)),
         "use_proprio": bool(sac_cfg.get("use_proprio", False)),
         "image_keys": tuple(image_keys),
+        "vector_obs_keys": vector_obs_keys,
+        "proprio_latent_dim": _proprio_latent_dim(cfg),
         "resnet_kwargs": _resnet_kwargs(cfg),
         "critic_network_kwargs": {
             "activations": str(sac_cfg.get("critic_activation", "relu")),

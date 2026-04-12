@@ -64,6 +64,7 @@ def _find_first_key(obs: dict[str, Any], candidates: tuple[str, ...]) -> Any:
     )
 
 
+# TODO：这个函数是有问题的
 def build_libero_state(
     obs: dict[str, Any],
     *,
@@ -191,16 +192,7 @@ def build_chunk_residual_sample_obs(
     if int(chunk_horizon) <= 0:
         raise ValueError(f"chunk_horizon must be positive, got {chunk_horizon}")
     sample_obs: dict[str, np.ndarray] = {
-        "state": np.zeros(
-            (
-                1,
-                LIBERO_STATE_DIM
-                + int(action_dim)
-                + int(chunk_horizon) * int(action_dim)
-                + 1,
-            ),
-            dtype=np.float32,
-        ),
+        "robot_proprio": np.zeros((1, LIBERO_STATE_DIM), dtype=np.float32),
         "base_action": np.zeros((1, int(action_dim)), dtype=np.float32),
         "base_action_chunk": np.zeros(
             (1, int(chunk_horizon), int(action_dim)),

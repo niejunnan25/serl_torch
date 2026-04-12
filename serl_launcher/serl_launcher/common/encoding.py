@@ -14,6 +14,12 @@ def _flatten_history_image(image: torch.Tensor) -> torch.Tensor:
     return image
 
 
+def _flatten_vector_features(vector: torch.Tensor) -> torch.Tensor:
+    if vector.ndim <= 1:
+        return vector.reshape(-1)
+    return vector.reshape(vector.shape[0], -1)
+
+
 def _maybe_call_encoder(module: nn.Module, image: torch.Tensor, train: bool, encode: bool):
     try:
         return module(image, train=train, encode=encode)
@@ -34,12 +40,18 @@ class EncodingWrapper(nn.Module):
         proprio_latent_dim: int = 64,
         enable_stacking: bool = False,
         image_keys: Iterable[str] = ("image",),
+        vector_obs_keys: Optional[Iterable[str]] = None,
     ):
         super().__init__()
         self.use_proprio = use_proprio
         self.proprio_latent_dim = proprio_latent_dim
         self.enable_stacking = enable_stacking
         self.image_keys = tuple(image_keys)
+        self.vector_obs_keys = (
+            tuple(str(key) for key in vector_obs_keys)
+            if vector_obs_keys is not None
+            else None
+        )
 
         if isinstance(encoder, dict):
             self.encoder = nn.ModuleDict(encoder)
@@ -78,7 +90,18 @@ class EncodingWrapper(nn.Module):
 
         encoding = torch.cat(encoded, dim=-1)
 
-        if self.use_proprio:
+        vector_inputs = None
+        if self.vector_obs_keys is not None and len(self.vector_obs_keys) > 0:
+            vector_parts = []
+            for key in self.vector_obs_keys:
+                if key not in observations:
+                    raise KeyError(
+                        f"Missing vector observation key {key!r}. "
+                        f"Available keys: {list(observations.keys())}"
+                    )
+                vector_parts.append(_flatten_vector_features(observations[key]))
+            vector_inputs = torch.cat(vector_parts, dim=-1)
+        elif self.use_proprio:
             state = observations["state"]
             if self.enable_stacking:
                 if state.ndim == 2:
@@ -86,13 +109,15 @@ class EncodingWrapper(nn.Module):
                     encoding = encoding.reshape(-1)
                 elif state.ndim == 3:
                     state = rearrange(state, "b t c -> b (t c)")
+            vector_inputs = state
 
-            state = self.proprio_proj(state)
-            state = F.layer_norm(state, state.shape[-1:])
-            state = torch.tanh(state)
+        if vector_inputs is not None:
+            vector_features = self.proprio_proj(vector_inputs)
+            vector_features = F.layer_norm(vector_features, vector_features.shape[-1:])
+            vector_features = torch.tanh(vector_features)
             if stop_gradient:
-                state = state.detach()
-            encoding = torch.cat([encoding, state], dim=-1)
+                vector_features = vector_features.detach()
+            encoding = torch.cat([encoding, vector_features], dim=-1)
 
         return encoding
 
