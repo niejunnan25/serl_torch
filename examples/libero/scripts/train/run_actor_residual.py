@@ -194,25 +194,18 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                         residual_obs = cached_residual_obs
                         cached_base_action_chunk = None
                         cached_residual_obs = None
-                    residual_action = agent.sample_action(
-                        residual_obs,
-                        deterministic=False,
-                    )
+
+                    residual_action = agent.sample_action(residual_obs, deterministic=False)
+
                     final_action_chunk = residual_action_spec.compose_chunk(
                         base_action_chunk=base_action_chunk,
                         residual_action=residual_action,
                     )
-                    execute_horizon = int(
-                        min(
-                            chunk_horizon,
-                            max_episode_steps - episode_steps,
-                            max_env_steps - env_steps,
-                        )
+                    execute_horizon = min(
+                        max_episode_steps - episode_steps,
+                        max_env_steps - env_steps,
                     )
-                    executed_final_action_chunk = np.asarray(
-                        final_action_chunk[:execute_horizon],
-                        dtype=np.float32,
-                    )
+                    executed_final_action_chunk = final_action_chunk[:execute_horizon]
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(executed_final_action_chunk)
