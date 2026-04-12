@@ -6,7 +6,6 @@ from typing import Hashable
 from typing import Optional
 from typing import Protocol
 
-from serl_launcher.data.normalizer import StateActionNormalizer
 from serl_launcher.policy.base import PolicyInput
 from serl_launcher.training.profiling import _RuntimeProfiler
 
@@ -15,7 +14,6 @@ class ResidualDataBindings(Protocol):
     """Dataset- and task-facing binding contract used by training services."""
 
     image_keys: tuple[str, ...]
-    normalizer: StateActionNormalizer | None
     task_key: str
     data_config: Any
 

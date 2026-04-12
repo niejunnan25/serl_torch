@@ -4,7 +4,6 @@
 
 - Added [examples/libero/runtime/runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py) to concentrate LIBERO-specific runtime construction:
   - create env
-  - load task normalizer
   - resolve image keys
   - expose `build_policy_input`, `build_step_core`, and profiled `build_step_obs`
 - Added [serl_launcher/serl_launcher/residual/runtime/actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py) as the new home for the actor-side residual runtime orchestration.

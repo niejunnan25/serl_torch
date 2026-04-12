@@ -18,7 +18,6 @@ Align the standalone learner path with the shared bindings model, without forcin
 - Updated [serl_launcher/serl_launcher/residual/runtime/learner_service.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py) so the learner service now consumes `bindings: ResidualDataBindings` instead of separately receiving:
   - `data_config`
   - `resolve_cfg_image_keys(...)`
-  - local normalizer/task-key reconstruction logic
 - Updated [examples/libero/scripts/run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py) to construct `build_libero_data_bindings(...)` and pass that into the learner service.
 - Updated [examples/libero/runtime/__init__.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/__init__.py) to lazily expose:
   - `LiberoDataBindings`
@@ -52,7 +51,6 @@ Align the standalone learner path with the shared bindings model, without forcin
   - `conda run -n serl_torch python examples/libero/scripts/run_learner.py --help`
 - Verified the learner service now reads:
   - `image_keys`
-  - `normalizer`
   - `task_key`
   - `data_config`
   from bindings instead of reconstructing them internally.
@@ -61,4 +59,3 @@ Align the standalone learner path with the shared bindings model, without forcin
 
 - Introduce a smaller learner/data-facing bindings protocol
 - Reuse LIBERO binding metadata across actor and learner entrypoints
-- Remove learner-side ad hoc reconstruction of image keys, task key, normalizer, and data config

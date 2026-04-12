@@ -64,7 +64,6 @@ from utils.config_utils import (
     create_drq_agent,
     sample_probing_steps,
 )
-from data import StateActionNormalizer, load_normalizer
 from env_wrappers import (
     RemoteRoboTwinTaskEnv,
     RoboTwinTaskEnv,
@@ -533,7 +532,6 @@ def _convert_expert_transition_to_residual(
     openpi_client: OpenPIChunkClient,
     image_keys: Tuple[str, ...],
     stack_horizon: int,
-    normalizer: Optional[StateActionNormalizer] = None,
     debug_logger: Optional[logging.Logger] = None,
     debug_log_counter: Optional[List[int]] = None,
 ) -> Optional[Tuple[Dict[str, Any], int]]:
@@ -597,7 +595,6 @@ def _convert_expert_transition_to_residual(
         base_action,
         image_keys=image_keys,
         stack_horizon=stack_horizon,
-        normalizer=normalizer,
     )
     obs_input = _normalize_obs_dict_for_buffer(obs_input_raw, sample_obs_template)
     if obs_input is None:
@@ -690,7 +687,6 @@ def _convert_expert_transition_to_residual(
             next_base_action,
             image_keys=image_keys,
             stack_horizon=stack_horizon,
-            normalizer=normalizer,
         )
         next_obs_input = _normalize_obs_dict_for_buffer(
             next_obs_input_raw, sample_obs_template
@@ -734,7 +730,6 @@ def _load_offline_residual_buffer(
     image_keys: Tuple[str, ...],
     stack_horizon: int,
     logger: logging.Logger,
-    normalizer: Optional[StateActionNormalizer] = None,
 ) -> Dict[str, int]:
     """加载离线数据并写入离线 buffer。"""
     stats = {
@@ -868,7 +863,6 @@ def _load_offline_residual_buffer(
                     openpi_client=openpi_client,
                     image_keys=image_keys,
                     stack_horizon=stack_horizon,
-                    normalizer=normalizer,
                     debug_logger=logger,
                     debug_log_counter=debug_log_counter,
                 )
@@ -1040,7 +1034,6 @@ def _bootstrap_offline_with_base_success(
     stack_horizon: int,
     chunk_horizon: int,
     logger: logging.Logger,
-    normalizer: Optional[StateActionNormalizer] = None,
 ) -> Dict[str, int]:
     """
     用 base policy 自动收集成功轨迹，写入 offline buffer（residual action 全零）。
@@ -1141,7 +1134,6 @@ def _bootstrap_offline_with_base_success(
                         base_chunk[chunk_step],
                         image_keys=image_keys,
                         stack_horizon=stack_horizon,
-                        normalizer=normalizer,
                     )
                     obs_input = _normalize_obs_dict_for_buffer(
                         obs_input, sample_obs_template
@@ -1168,7 +1160,6 @@ def _bootstrap_offline_with_base_success(
                             base_chunk[chunk_step + 1],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
-                            normalizer=normalizer,
                         )
                         next_obs_input = _normalize_obs_dict_for_buffer(
                             next_obs_input_raw, sample_obs_template
@@ -1191,7 +1182,6 @@ def _bootstrap_offline_with_base_success(
                             next_base_chunk[0],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
-                            normalizer=normalizer,
                         )
                         next_obs_input = _normalize_obs_dict_for_buffer(
                             next_obs_input_raw, sample_obs_template
@@ -1535,17 +1525,6 @@ def main(cfg: DictConfig) -> None:
             logger=logger,
         )
 
-    # ---------- 归一化器（可选）----------
-    norm_cfg = cfg.get("normalization", None)
-    normalizer: StateActionNormalizer | None = None
-    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
-        stats_dir = norm_cfg.get("stats_dir", None)
-        normalizer = load_normalizer(str(cfg.task.name), stats_dir=stats_dir)
-        if normalizer is not None:
-            logger.info("State/action normalizer loaded for task=%s", cfg.task.name)
-    else:
-        logger.info("Normalization disabled (normalization.enabled not set)")
-
     # OpenPI 客户端：提供 base policy chunk 推理。
     openpi_client = OpenPIChunkClient(
         host=str(cfg.openpi.host),
@@ -1879,7 +1858,6 @@ def main(cfg: DictConfig) -> None:
                             base_chunk[chunk_step],
                             image_keys=image_keys,
                             stack_horizon=stack_horizon,
-                            normalizer=normalizer,
                         )
 
                         # 首次拿到真实观测形状后，初始化 agent 和 replay。
@@ -1914,7 +1892,6 @@ def main(cfg: DictConfig) -> None:
                                             stack_horizon=stack_horizon,
                                             chunk_horizon=chunk_horizon,
                                             logger=logger,
-                                            normalizer=normalizer,
                                         )
                                     )
                                 else:
@@ -1962,7 +1939,6 @@ def main(cfg: DictConfig) -> None:
                                     image_keys=image_keys,
                                     stack_horizon=stack_horizon,
                                     logger=logger,
-                                    normalizer=normalizer,
                                 )
                                 logger.info(
                                     (
@@ -2183,7 +2159,6 @@ def main(cfg: DictConfig) -> None:
                                 base_chunk[chunk_step + 1],
                                 image_keys=image_keys,
                                 stack_horizon=stack_horizon,
-                                normalizer=normalizer,
                             )
                             mask = 1.0
                         else:
@@ -2202,7 +2177,6 @@ def main(cfg: DictConfig) -> None:
                                 next_base_chunk[0],
                                 image_keys=image_keys,
                                 stack_horizon=stack_horizon,
-                                normalizer=normalizer,
                             )
                             cached_base_chunk = next_base_chunk
                             cached_infer_info = next_infer_info

@@ -232,10 +232,6 @@ def runtime_image_keys(ctx: ActorRuntimeContext) -> tuple[str, ...]:
     return tuple(ctx.bindings.image_keys)
 
 
-def runtime_normalizer(ctx: ActorRuntimeContext):
-    return getattr(ctx.bindings, "normalizer", None)
-
-
 def runtime_obs_cache(ctx: ActorRuntimeContext):
     return ctx.bindings.obs_cache
 
@@ -308,14 +304,6 @@ def resolve_train_gate(
     return float(gate_prob), gate_on
 
 
-def normalize_step_action(ctx: ActorRuntimeContext, action: np.ndarray) -> np.ndarray:
-    action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-    normalizer = runtime_normalizer(ctx)
-    if normalizer is None:
-        return action_arr.astype(np.float32)
-    return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
-
-
 def build_chunk_step_record(
     ctx: ActorRuntimeContext,
     current_obs_raw: Dict[str, Any],
@@ -333,7 +321,6 @@ def build_chunk_step_record(
     return {
         "obs_core": obs_core,
         "base_action": base_action_arr,
-        "base_action_norm": normalize_step_action(ctx, base_action_arr),
         "actions": final_action_arr,
         "rewards": 0.0,
         "dones": bool(done),

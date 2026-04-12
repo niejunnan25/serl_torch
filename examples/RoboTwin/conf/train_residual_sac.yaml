@@ -160,9 +160,6 @@ logging:
   summary_file: summary.json
   tb_step_period: 100
 
-normalization:
-  enabled: true
-  stats_dir: null
 
 hydra:
   run:

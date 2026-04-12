@@ -95,9 +95,6 @@ class StepChunkReplayBuffer:
         self._base_action = np.empty(
             (self.capacity, self.step_action_dim), dtype=np.float32
         )
-        self._base_action_norm = np.empty(
-            (self.capacity, self.step_action_dim), dtype=np.float32
-        )
         self._final_action = np.empty(
             (self.capacity, self.step_action_dim), dtype=np.float32
         )
@@ -225,13 +222,9 @@ class StepChunkReplayBuffer:
             )
 
         base_action = np.asarray(data_dict["base_action"], dtype=np.float32).reshape(-1)
-        base_action_norm = np.asarray(
-            data_dict["base_action_norm"], dtype=np.float32
-        ).reshape(-1)
         final_action = np.asarray(data_dict["actions"], dtype=np.float32).reshape(-1)
         for name, arr in (
             ("base_action", base_action),
-            ("base_action_norm", base_action_norm),
             ("actions", final_action),
         ):
             if arr.shape[0] != self.step_action_dim:
@@ -248,7 +241,6 @@ class StepChunkReplayBuffer:
             )
         self._state_core[insert_index] = state_core
         self._base_action[insert_index] = base_action
-        self._base_action_norm[insert_index] = base_action_norm
         self._final_action[insert_index] = final_action
         if "alpha" not in data_dict:
             raise KeyError("chunk-step replay transition must include 'alpha'")
@@ -281,18 +273,14 @@ class StepChunkReplayBuffer:
         base_window = np.zeros(
             (self.chunk_horizon, self.step_action_dim), dtype=np.float32
         )
-        base_window_norm = np.zeros(
-            (self.chunk_horizon, self.step_action_dim), dtype=np.float32
-        )
         for offset, step_id in enumerate(step_ids[: self.chunk_horizon]):
             idx = self._buffer_index(step_id)
             base_window[offset] = self._base_action[idx]
-            base_window_norm[offset] = self._base_action_norm[idx]
         policy_state = np.concatenate(
             (
                 self._state_core[start_idx],
-                self._base_action_norm[start_idx],
-                base_window_norm.reshape(-1),
+                self._base_action[start_idx],
+                base_window.reshape(-1),
                 np.asarray([self._alphas[start_idx]], dtype=np.float32),
             ),
             axis=0,

@@ -5,8 +5,6 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from serl_launcher.data.normalizer import StateActionNormalizer
-
 
 def _resolve_residual_scale(*, alpha: Optional[float], default: float = 1.0) -> float:
     scale = default if alpha is None else alpha
@@ -18,49 +16,23 @@ def _resolve_residual_scale(*, alpha: Optional[float], default: float = 1.0) -> 
     return scale_value
 
 
-def _normalize_action_chunk(
-    action_chunk: np.ndarray,
-    *,
-    normalizer: Optional[StateActionNormalizer],
-) -> np.ndarray:
-    action_chunk_arr = np.asarray(action_chunk, dtype=np.float32)
-    if normalizer is None:
-        return action_chunk_arr.astype(np.float32)
-
-    flat = action_chunk_arr.reshape(-1, action_chunk_arr.shape[-1])
-    normalized = np.stack(
-        [normalizer.normalize_action(step) for step in flat],
-        axis=0,
-    )
-    return normalized.reshape(action_chunk_arr.shape).astype(np.float32)
-
-
 def _build_fused_residual_state(
     *,
     state_core: np.ndarray,
     base_action: np.ndarray,
-    normalizer: Optional[StateActionNormalizer],
     base_action_chunk: Optional[np.ndarray],
     alpha: Optional[float] = None,
 ) -> np.ndarray:
     residual_scale = _resolve_residual_scale(alpha=alpha, default=1.0)
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
-    if normalizer is not None:
-        base_action_norm = normalizer.normalize_action(base_action_arr)
-    else:
-        base_action_norm = base_action_arr
 
     fused_parts = [
         np.asarray(state_core, dtype=np.float32).reshape(-1),
-        np.asarray(base_action_norm, dtype=np.float32).reshape(-1),
+        base_action_arr,
     ]
 
     if base_action_chunk is not None:
-        fused_parts.append(
-            _normalize_action_chunk(base_action_chunk, normalizer=normalizer).reshape(
-                -1
-            )
-        )
+        fused_parts.append(np.asarray(base_action_chunk, dtype=np.float32).reshape(-1))
 
     fused_parts.append(np.asarray([float(residual_scale)], dtype=np.float32))
     return np.concatenate(fused_parts, axis=-1).astype(np.float32)
@@ -72,7 +44,6 @@ def build_residual_step_obs_from_core(
     base_action: np.ndarray,
     base_action_chunk: Optional[np.ndarray] = None,
     alpha: Optional[float] = None,
-    normalizer: Optional[StateActionNormalizer] = None,
     stack_horizon: int = 1,
 ) -> Dict[str, np.ndarray]:
     if int(stack_horizon) != 1:
@@ -94,7 +65,6 @@ def build_residual_step_obs_from_core(
     policy_state = _build_fused_residual_state(
         state_core=state_core_arr,
         base_action=base_action_arr,
-        normalizer=normalizer,
         base_action_chunk=base_action_chunk_arr,
         alpha=float(residual_scale),
     )

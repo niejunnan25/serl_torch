@@ -77,7 +77,6 @@ def build_actor_runtime_session(
     async_eval_watcher_path: Path,
 ):
     env = bindings.env
-    normalizer = getattr(bindings, "normalizer", None)
     image_keys = tuple(bindings.image_keys)
     obs_cache = bindings.obs_cache
     task_key = str(bindings.task_key)
@@ -828,7 +827,6 @@ def build_actor_runtime_session(
         sample_base_chunk[0],
         image_keys=image_keys,
         stack_horizon=stack_horizon,
-        normalizer=normalizer,
         obs_cache=obs_cache,
         base_action_chunk=(sample_base_chunk if chunk_step_enabled else None),
         alpha=float(residual_alpha),
@@ -836,15 +834,8 @@ def build_actor_runtime_session(
     sample_state_core = build_residual_step_core(
         sample_obs_raw,
         image_keys=image_keys,
-        normalizer=normalizer,
         obs_cache=obs_cache,
     )["state_core"]
-
-    def _normalize_step_action(action: np.ndarray) -> np.ndarray:
-        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-        if normalizer is None:
-            return action_arr.astype(np.float32)
-        return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
 
     def _build_chunk_step_record(
         current_obs_raw: Dict[str, Any],
@@ -859,7 +850,6 @@ def build_actor_runtime_session(
         obs_core = build_residual_step_core(
             current_obs_raw,
             image_keys=image_keys,
-            normalizer=normalizer,
             obs_cache=obs_cache,
         )
         base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
@@ -867,7 +857,6 @@ def build_actor_runtime_session(
         return {
             "obs_core": obs_core,
             "base_action": base_action_arr,
-            "base_action_norm": _normalize_step_action(base_action_arr),
             "actions": final_action_arr,
             "rewards": 0.0,
             "dones": bool(done),
@@ -962,7 +951,6 @@ def build_actor_runtime_session(
             chunk_step_enabled=chunk_step_enabled,
             logger=logger,
             data_config=data_config,
-            normalizer=normalizer,
             profiler=profiler,
             max_transitions=cfg.offline.max_transitions,
             expected_task_key=task_key,
@@ -1100,7 +1088,6 @@ def build_actor_runtime_session(
             chunk_step_enabled=chunk_step_enabled,
             logger=logger,
             data_config=data_config,
-            normalizer=normalizer,
             profiler=profiler,
             max_episodes=configured_warmup_episodes,
             expected_task_key=task_key,

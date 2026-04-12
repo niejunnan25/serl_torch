@@ -19,7 +19,7 @@ if str(REPO_PARENT) not in sys.path:
 if str(SERL_LAUNCHER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
-from serl_torch.examples.libero.env_wrappers.task_env import LiberoTaskEnv
+from serl_torch.examples.libero.env.task_env import LiberoTaskEnv
 from serl_launcher.envs.remote_http import make_pickle_rpc_handler
 
 LOGGER = logging.getLogger("libero_env_server")

@@ -380,14 +380,11 @@ def build_step_core_from_payload(
     frame_idx: int,
     image_keys: Sequence[str],
     image_views: Optional[Mapping[str, str]] = None,
-    normalizer: Optional[Any] = None,
 ) -> Dict[str, np.ndarray]:
     state = np.asarray(
         get_by_path(payload, schema.observation.state_path)[frame_idx],
         dtype=np.float32,
     ).reshape(-1)
-    if normalizer is not None:
-        state = np.asarray(normalizer.normalize_state(state), dtype=np.float32)
 
     images = get_by_path(payload, schema.observation.image_root_path)
     image_mask = get_by_path(payload, schema.observation.image_mask_path)

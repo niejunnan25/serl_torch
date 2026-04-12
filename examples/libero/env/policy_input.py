@@ -1,14 +1,17 @@
-"""LIBERO runtime adapters for canonical policy inputs."""
+"""LIBERO policy-input builders derived from raw environment observations."""
 from __future__ import annotations
 
-from typing import Any, Dict, Hashable, Optional
+from typing import Any
+from typing import Dict
+from typing import Hashable
+from typing import Optional
 
 import numpy as np
 
 from serl_launcher.policy.base import PolicyInput
 
 from .observation import build_libero_state
-from .observation import extract_residual_images
+from .observation import extract_libero_images
 
 
 def build_libero_policy_input(
@@ -18,7 +21,7 @@ def build_libero_policy_input(
     obs_cache: Optional[Any] = None,
     cache_key: Optional[Hashable] = None,
 ) -> PolicyInput:
-    images = extract_residual_images(obs, obs_cache=obs_cache, cache_key=cache_key)
+    images = extract_libero_images(obs, obs_cache=obs_cache, cache_key=cache_key)
     state = build_libero_state(obs, obs_cache=obs_cache, cache_key=cache_key)
     image_mask = {
         "image_rgb_0": True,
@@ -36,3 +39,6 @@ def build_libero_policy_input(
         image_mask=image_mask,
         metadata={},
     )
+
+
+__all__ = ["build_libero_policy_input"]

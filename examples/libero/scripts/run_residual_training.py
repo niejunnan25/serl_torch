@@ -9,30 +9,32 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agentlace.data.data_store import QueuedDataStore
+from agentlace.trainer import TrainerClient
+from agentlace.trainer import TrainerConfig
+from agentlace.trainer import TrainerServer
 import hydra
 import numpy as np
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import DictConfig
 
 try:
     import gym
 except ModuleNotFoundError:
     import gymnasium as gym
-    
-from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig
-from omegaconf import OmegaConf
-from agentlace.data.data_store import QueuedDataStore
-from agentlace.trainer import TrainerClient
-from agentlace.trainer import TrainerConfig
-from agentlace.trainer import TrainerServer
 
+from serl_launcher.agents.continuous.drq_typed_config import (
+    create_drq_agent_from_typed_cfg,
+)
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
-from serl_launcher.policy.factory import build_policy_client
-from serl_launcher.policy.factory import resolve_policy_backend_id
-from serl_launcher.policy.factory import resolve_policy_backend_type
+from serl_launcher.policy.typed_factory import build_policy_client
+from serl_launcher.policy.typed_factory import describe_policy_backend
+from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
+from serl_launcher.utils.seeding import set_global_seeds
 from serl_launcher.utils.serialization import to_jsonable
 from serl_launcher.utils.timer_utils import Timer
 
@@ -40,94 +42,64 @@ REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
-from serl_torch.examples.libero.env_wrappers.factory import _create_env as create_env
-from serl_torch.examples.libero.runtime.observation import (
+from serl_torch.examples.libero.config import LiberoTrainConfig
+from serl_torch.examples.libero.config import cfg_to_log_payload
+from serl_torch.examples.libero.config import parse_train_cfg
+from serl_torch.examples.libero.env.factory import _create_env as create_env
+from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
+from serl_torch.examples.libero.residual_observation import (
+    build_chunk_residual_obs,
+)
+from serl_torch.examples.libero.residual_observation import (
     build_chunk_residual_observation_space,
 )
-from serl_torch.examples.libero.runtime.observation import (
+from serl_torch.examples.libero.residual_observation import (
     build_chunk_residual_sample_obs,
 )
-from serl_torch.examples.libero.runtime.observation import (
-    build_libero_state,
+from serl_torch.examples.libero.residual_observation import (
+    prepare_base_actions_chunk,
 )
-from serl_torch.examples.libero.runtime.observation import (
-    extract_residual_images,
-)
-from serl_torch.examples.libero.runtime.policy_adapter import build_libero_policy_input
-from serl_torch.examples.libero.training import ResidualActionSpec
-from serl_torch.examples.libero.training import make_drq_agent
-from serl_torch.examples.libero.training import resolve_libero_cfg_image_keys
-from serl_torch.examples.libero.training import set_global_seeds
-from serl_torch.examples.libero.training import validate_residual_cfg
 
 FILL_WAIT_SLEEP_SEC = 1.0
 LEARNER_IDLE_SLEEP_SEC = 1.0
 
 
-def _build_chunk_residual_obs(
-    *,
-    obs: dict[str, Any],
-    base_actions: np.ndarray,
-    image_keys: tuple[str, ...],
-    residual_alpha: float,
-) -> dict[str, np.ndarray]:
-    base_actions = np.asarray(base_actions, dtype=np.float32)
-    images = extract_residual_images(obs)
-    residual_obs: dict[str, np.ndarray] = {
-        "robot_proprio": np.expand_dims(build_libero_state(obs), axis=0).astype(
-            np.float32
-        ),
-        "base_action": np.expand_dims(base_actions[0], axis=0).astype(np.float32),
-        "base_action_chunk": np.expand_dims(base_actions, axis=0).astype(
-            np.float32
-        ),
-        "alpha": np.asarray([[residual_alpha]], dtype=np.float32),
-    }
-    for key in image_keys:
-        residual_obs[key] = np.expand_dims(images[key].copy(), axis=0)
-    return residual_obs
-
-
-def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     env = create_env(cfg, logger)
     task_prompt = str(env.task_description)
     policy_client = build_policy_client(cfg, logger=logger)
-    policy_type = resolve_policy_backend_type(cfg)
-    policy_id = resolve_policy_backend_id(cfg)
-    policy_backend = (
-        policy_type if policy_id == policy_type else f"{policy_type}:{policy_id}"
-    )
+    policy_backend = describe_policy_backend(cfg)
     logger.info("Chunk policy backend: %s", policy_backend)
 
-    image_keys = tuple(resolve_libero_cfg_image_keys(cfg))
-    action_dim = int(cfg.env.action_dim)
-    chunk_horizon = int(cfg.residual.chunk_horizon)
-    residual_action_spec = ResidualActionSpec.from_cfg(
-        cfg,
-        action_dim=action_dim,
-    )
-    residual_alpha = float(residual_action_spec.alpha)
+    image_keys = cfg.obs.image_keys
+    action_dim = cfg.env.action_dim
+    chunk_horizon = cfg.residual.chunk_horizon
+    residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
+
+    residual_alpha = residual_action_spec.alpha
+
     sample_obs = build_chunk_residual_sample_obs(
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
     )
-    agent = make_drq_agent(
+
+    agent = create_drq_agent_from_typed_cfg(
         cfg,
         sample_obs=sample_obs,
-        action_dim=int(residual_action_spec.chunk_policy_action_dim),
+        action_dim=residual_action_spec.chunk_policy_action_dim,
         image_keys=image_keys,
-        critic_action_dim=int(residual_action_spec.chunk_critic_action_dim),
+        critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
 
-    data_store = QueuedDataStore(int(cfg.runtime.data_store_queue_size))
+    data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
     client = TrainerClient(
         "actor_env",
-        str(cfg.runtime.trainer_host),
+        cfg.runtime.trainer_host,
         TrainerConfig(  # pyright: ignore[reportCallIssue]
-            port_number=int(cfg.runtime.trainer_port),
-            broadcast_port=int(cfg.runtime.broadcast_port),
+            port_number=cfg.runtime.trainer_port,
+            broadcast_port=cfg.runtime.broadcast_port,
             request_types=["send-stats"],
         ),
         data_store,
@@ -144,10 +116,10 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     client.recv_network_callback(update_actor)
 
     timer = Timer()
-    steps_per_update = int(cfg.training.steps_per_update)
-    log_period = int(cfg.training.log_period)
-    max_env_steps = int(cfg.training.max_env_steps)
-    env_seed = int(cfg.env.seed)
+    steps_per_update = cfg.training.steps_per_update
+    log_period = cfg.training.log_period
+    max_env_steps = cfg.training.max_env_steps
+    env_seed = cfg.env.seed
 
     env_steps = 0
     episode_id = 0
@@ -163,8 +135,8 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     try:
         while env_steps < max_env_steps:
             episode_id += 1
-            reset_seed = int(env_seed)
-            init_episode_idx = int(episode_id - 1)
+            reset_seed = env_seed
+            init_episode_idx = episode_id - 1
             obs = env.reset(seed=reset_seed, init_episode_idx=init_episode_idx)
             prefetched = None
             episode_return = 0.0
@@ -179,10 +151,12 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                         base_policy_input = build_libero_policy_input(obs, task_prompt)
 
                         base_actions, _ = policy_client.infer(base_policy_input)
+                        base_actions = prepare_base_actions_chunk(
+                            base_actions=base_actions,
+                            chunk_horizon=chunk_horizon,
+                        )
 
-                        base_actions = base_actions[:chunk_horizon]
-
-                        residual_obs = _build_chunk_residual_obs(
+                        residual_obs = build_chunk_residual_obs(
                             obs=obs,
                             base_actions=base_actions,
                             image_keys=image_keys,
@@ -215,9 +189,12 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                             next_obs, task_prompt
                         )
                         next_base_actions, _ = policy_client.infer(next_base_policy_input)
-                        next_base_actions = next_base_actions[:chunk_horizon]
+                        next_base_actions = prepare_base_actions_chunk(
+                            base_actions=next_base_actions,
+                            chunk_horizon=chunk_horizon,
+                        )
 
-                        next_residual_obs = _build_chunk_residual_obs(
+                        next_residual_obs = build_chunk_residual_obs(
                             obs=next_obs,
                             base_actions=next_base_actions,
                             image_keys=image_keys,
@@ -302,7 +279,7 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                 "successes": int(success_count),
             }
         )
-        with open(run_dir / str(cfg.logging.summary_file), "w", encoding="utf-8") as fp:
+        with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2)
         try:
             client.update()
@@ -320,10 +297,10 @@ def actor(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                 pass
 
 
-def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
-    image_keys = tuple(resolve_libero_cfg_image_keys(cfg))
-    action_dim = int(cfg.env.action_dim)
-    chunk_horizon = int(cfg.residual.chunk_horizon)
+def learner(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+    image_keys = cfg.obs.image_keys
+    action_dim = cfg.env.action_dim
+    chunk_horizon = cfg.residual.chunk_horizon
     residual_action_spec = ResidualActionSpec.from_cfg(
         cfg,
         action_dim=action_dim,
@@ -333,12 +310,12 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
     )
-    agent = make_drq_agent(
+    agent = create_drq_agent_from_typed_cfg(
         cfg,
         sample_obs=sample_obs,
-        action_dim=int(residual_action_spec.chunk_policy_action_dim),
+        action_dim=residual_action_spec.chunk_policy_action_dim,
         image_keys=image_keys,
-        critic_action_dim=int(residual_action_spec.chunk_critic_action_dim),
+        critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
     observation_space = build_chunk_residual_observation_space(
@@ -353,36 +330,31 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
             shape=(action_dim,),
             dtype=np.float32,
         ),
-        capacity=int(cfg.replay.capacity),
+        capacity=cfg.replay.capacity,
         window_size=chunk_horizon,
-        discount=float(cfg.sac.discount),
+        discount=cfg.sac.discount,
         sample_stride=1,
         require_full_window=False,
         image_keys=image_keys,
     )
     wandb_cfg = WandBLogger.get_default_config()
-    run_name = str(
-        cfg.wandb.get(
-            "exp_name",
-            f"{cfg.task.suite_name}_task_{int(cfg.task.task_id)}_residual",
-        )
-    )
+    run_name = cfg.wandb.exp_name
     wandb_cfg.update(
         {
-            "project": str(cfg.wandb.get("project", "serl_dev")),
+            "project": cfg.wandb.project,
             "exp_descriptor": run_name,
             "tag": [run_name],
-            "group": cfg.wandb.get("group", None),
+            "group": cfg.wandb.group,
         }
     )
-    wandb_variant = OmegaConf.to_container(cfg, resolve=True)
+    wandb_variant = cfg_to_log_payload(cfg)
     wandb_dir = run_dir / "wandb"
     wandb_dir.mkdir(parents=True, exist_ok=True)
     wandb_logger = WandBLogger(
         wandb_config=wandb_cfg,
-        variant=wandb_variant if isinstance(wandb_variant, dict) else {},
+        variant=wandb_variant,
         wandb_output_dir=str(wandb_dir),
-        debug=bool(cfg.wandb.get("debug", False)),
+        debug=cfg.wandb.debug,
     )
 
     update_steps = 0
@@ -406,8 +378,8 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
 
     server = TrainerServer(
         TrainerConfig(  # pyright: ignore[reportCallIssue]
-            port_number=int(cfg.runtime.trainer_port),
-            broadcast_port=int(cfg.runtime.broadcast_port),
+            port_number=cfg.runtime.trainer_port,
+            broadcast_port=cfg.runtime.broadcast_port,
             request_types=["send-stats"],
         ),
         request_callback=stats_callback,
@@ -415,7 +387,7 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     server.register_data_store("actor_env", replay_buffer)
     server.start(threaded=True)
 
-    training_starts = int(cfg.training.training_starts)
+    training_starts = cfg.training.training_starts
     while len(replay_buffer) < training_starts:
         logger.info(
             "filling replay buffer: %s / %s",
@@ -429,17 +401,17 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     )
     logger.info("Published initial learner network")
 
-    checkpoint_every = int(cfg.training.checkpoint.every_steps)
-    checkpoint_keep = int(cfg.training.checkpoint.keep)
+    checkpoint_every = cfg.training.checkpoint.every_steps
+    checkpoint_keep = cfg.training.checkpoint.keep
     checkpoint_dir = Path(cfg.training.checkpoint.dir)
     if not checkpoint_dir.is_absolute():
         checkpoint_dir = run_dir / checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    log_period = int(cfg.training.log_period)
-    max_update_steps = int(cfg.training.max_update_steps)
-    critic_actor_ratio = max(1, int(cfg.training.critic_actor_ratio))
-    steps_per_update = int(cfg.training.steps_per_update)
+    log_period = cfg.training.log_period
+    max_update_steps = cfg.training.max_update_steps
+    critic_actor_ratio = max(1, cfg.training.critic_actor_ratio)
+    steps_per_update = cfg.training.steps_per_update
     timer = Timer()
 
     try:
@@ -450,7 +422,7 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
 
             for _ in range(max(0, critic_actor_ratio - 1)):
                 with timer.context("sample_replay_buffer"):
-                    batch = replay_buffer.sample(int(cfg.replay.batch_size))
+                    batch = replay_buffer.sample(cfg.replay.batch_size)
                     batch["actions"] = batch["actions"].reshape(
                         int(batch["actions"].shape[0]),
                         -1,
@@ -463,7 +435,7 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                     agent, _critics_info = agent.update_critics(batch)
 
             with timer.context("train"):
-                batch = replay_buffer.sample(int(cfg.replay.batch_size))
+                batch = replay_buffer.sample(cfg.replay.batch_size)
                 batch["actions"] = batch["actions"].reshape(
                     int(batch["actions"].shape[0]),
                     -1,
@@ -474,7 +446,7 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                 )
                 agent, update_info = agent.update_high_utd(
                     batch,
-                    utd_ratio=int(cfg.sac.utd_ratio),
+                    utd_ratio=cfg.sac.utd_ratio,
                 )
 
             if update_steps > 0 and update_steps % steps_per_update == 0:
@@ -515,7 +487,7 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
                 "replay_size": int(len(replay_buffer)),
             }
         )
-        with open(run_dir / str(cfg.logging.summary_file), "w", encoding="utf-8") as fp:
+        with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2)
         try:
             if getattr(wandb_logger, "run", None) is not None:
@@ -530,10 +502,11 @@ def learner(cfg: DictConfig, *, run_dir: Path, logger: logging.Logger) -> None:
 
 @hydra.main(
     version_base=None,
-    config_path="../conf",
+    config_path="../configs",
     config_name="train_residual",
 )
 def main(cfg: DictConfig) -> None:
+    typed_cfg = parse_train_cfg(cfg)
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -543,15 +516,14 @@ def main(cfg: DictConfig) -> None:
     )
     logger = logging.getLogger("libero_residual")
     logger.info("Hydra run dir: %s", run_dir)
-    logger.info("Config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
+    logger.info("Config:\n%s", json.dumps(cfg_to_log_payload(typed_cfg), indent=2))
 
-    set_global_seeds(int(cfg.global_seed))
+    set_global_seeds(typed_cfg.global_seed)
 
-    role = validate_residual_cfg(cfg)
-    if role == "actor":
-        actor(cfg, run_dir=run_dir, logger=logger)
+    if typed_cfg.runtime.role == "actor":
+        actor(typed_cfg, run_dir=run_dir, logger=logger)
         return
-    learner(cfg, run_dir=run_dir, logger=logger)
+    learner(typed_cfg, run_dir=run_dir, logger=logger)
 
 
 if __name__ == "__main__":

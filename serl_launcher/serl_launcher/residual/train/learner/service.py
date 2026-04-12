@@ -442,9 +442,6 @@ def run_residual_learner_service(
         )
 
     task_key = str(bindings.task_key)
-    normalizer = getattr(bindings, "normalizer", None)
-    if normalizer is not None:
-        logger.info("Loaded normalizer for task_key=%s", task_key)
 
     replay_buffer = _build_online_replay(
         cfg,
@@ -527,7 +524,6 @@ def run_residual_learner_service(
             chunk_step_enabled=bool(chunk_step_enabled),
             logger=logger,
             data_config=bindings.data_config,
-            normalizer=normalizer,
             profiler=None,
             max_transitions=cfg.offline.max_transitions,
             expected_task_key=task_key,
@@ -579,7 +575,6 @@ def run_residual_learner_service(
             chunk_step_enabled=bool(chunk_step_enabled),
             logger=logger,
             data_config=bindings.data_config,
-            normalizer=normalizer,
             profiler=None,
             max_episodes=int(configured_warmup_episodes),
             expected_task_key=task_key,

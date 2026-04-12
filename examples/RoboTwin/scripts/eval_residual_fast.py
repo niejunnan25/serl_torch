@@ -44,7 +44,6 @@ from utils.config_utils import (
     create_drq_agent,
     sample_probing_steps,
 )
-from data import StateActionNormalizer, load_normalizer
 from env_wrappers import (
     RoboTwinTaskEnv,
     RemoteRoboTwinTaskEnv,
@@ -136,17 +135,6 @@ def main(cfg: DictConfig) -> None:
             instruction_type=instruction_type,
             logger=logger,
         )
-
-    # ---------- 归一化器（可选）----------
-    norm_cfg = cfg.get("normalization", None)
-    normalizer: StateActionNormalizer | None = None
-    if norm_cfg is not None and bool(norm_cfg.get("enabled", False)):
-        stats_dir = norm_cfg.get("stats_dir", None)
-        normalizer = load_normalizer(str(cfg.task.name), stats_dir=stats_dir)
-        if normalizer is not None:
-            logger.info("State/action normalizer loaded for task=%s", cfg.task.name)
-    else:
-        logger.info("Normalization disabled (normalization.enabled not set)")
 
     # ---------- OpenPI 基策略客户端（用于获取 base action chunk）----------
     openpi_client = OpenPIChunkClient(
@@ -396,7 +384,6 @@ def main(cfg: DictConfig) -> None:
                         base_chunk[chunk_step],
                         image_keys=image_keys,
                         stack_horizon=stack_horizon,
-                        normalizer=normalizer,
                     )
 
                     # 3) 若配置了 checkpoint 且尚未加载，则构建 agent 并加载权重（懒加载）

@@ -8,7 +8,6 @@ Make actor-side runtime execution depend on `ResidualRuntimeBindings` at access 
 
 - Updated [serl_launcher/serl_launcher/residual/runtime/actor_support.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py) with protocol-backed helper accessors:
   - `runtime_image_keys(...)`
-  - `runtime_normalizer(...)`
   - `runtime_obs_cache(...)`
   - `runtime_task_key(...)`
   - `runtime_data_config(...)`
@@ -17,7 +16,6 @@ Make actor-side runtime execution depend on `ResidualRuntimeBindings` at access 
   - `build_step_obs_profiled(...)`
 - These helpers now route actor hot paths through `ctx.bindings` instead of duplicated values stored in `ctx.values`.
 - Updated [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py) so `ActorRuntimeContext` no longer caches these binding-derived fields:
-  - `normalizer`
   - `image_keys`
   - `obs_cache`
   - `task_key`
@@ -52,7 +50,6 @@ Make actor-side runtime execution depend on `ResidualRuntimeBindings` at access 
   - [actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
 - Ran `git diff --check`.
 - Verified there are no remaining actor-runtime references to the removed cached fields:
-  - `ctx.normalizer`
   - `ctx.image_keys`
   - `ctx.obs_cache`
   - `ctx.task_key`
