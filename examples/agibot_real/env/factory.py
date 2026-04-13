@@ -1,15 +1,41 @@
 """Local environment factory helpers for AgiBot real training/eval."""
 from __future__ import annotations
 
+from dataclasses import asdict
 import logging
+from typing import Any
 
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
+from ..config import AgiBotTrainConfig
 from .task_env import AgiBotTaskEnv
 
 
-def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, object]:
+def _build_common_kwargs(
+    cfg: DictConfig | AgiBotTrainConfig,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    if isinstance(cfg, AgiBotTrainConfig):
+        return {
+            "task_name": str(cfg.task.name),
+            "prompt": str(cfg.task.prompt),
+            "action_dim": int(cfg.env.action_dim),
+            "control_mode": str(cfg.task.control_mode),
+            "hz": float(cfg.task.hz),
+            "use_smooth_trajectory": bool(cfg.task.use_smooth_trajectory),
+            "trajectory_time": cfg.task.trajectory_time,
+            "max_episode_steps": cfg.task.max_episode_steps,
+            "assets_root": cfg.robot.assets_root,
+            "retargeter_urdf_path": cfg.robot.retargeter_urdf_path,
+            "retargeter_camera_extrinsic_path": cfg.robot.retargeter_camera_extrinsic_path,
+            "controller": asdict(cfg.controller),
+            "reset_hook": cfg.task.reset_hook,
+            "success_hook": cfg.task.success_hook,
+            "expert_precheck_hook": cfg.task.expert_precheck_hook,
+            "logger": logger,
+        }
+
     task_cfg = cfg.get("task", {})
     robot_cfg = cfg.get("robot", {})
     controller_cfg = cfg.get("controller", {})
@@ -35,8 +61,14 @@ def _build_common_kwargs(cfg: DictConfig, logger: logging.Logger) -> dict[str, o
     }
 
 
-def _create_env(cfg: DictConfig, logger: logging.Logger):
-    env_backend = str(cfg.get("env", {}).get("backend", "local")).strip().lower()
+def _resolve_env_backend(cfg: DictConfig | AgiBotTrainConfig) -> str:
+    if isinstance(cfg, AgiBotTrainConfig):
+        return str(cfg.env.backend).strip().lower()
+    return str(cfg.get("env", {}).get("backend", "local")).strip().lower()
+
+
+def _create_env(cfg: DictConfig | AgiBotTrainConfig, logger: logging.Logger):
+    env_backend = _resolve_env_backend(cfg)
     if env_backend != "local":
         raise ValueError(
             "AgiBot real env is local-only; remote support has been removed, "
