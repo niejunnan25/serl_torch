@@ -14,7 +14,7 @@ The training topology matches `examples/libero`:
   - [env/policy_input.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/env/policy_input.py)
   - [residual_observation.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/residual_observation.py)
 
-Older scripts under `scripts/train/` and `runtime/` are still present in the tree, but they are no longer the documented mainline for new work.
+The old Agentlace split-training and eval stack has been removed. This README documents the only supported mainline for now. A new canonical eval entrypoint has not been added yet.
 
 **Scope**
 
@@ -215,7 +215,4 @@ Default shell wrappers now follow the canonical mainline:
 - `tools/run_actor.sh`
 - `tools/run_learner.sh`
 
-Legacy split wrappers are still present and can be invoked explicitly with `--legacy` or by calling:
-
-- `tools/run_actor_agentlace.sh`
-- `tools/run_learner_agentlace.sh`
+Canonical eval has not been ported yet. Until that lands, this example only documents the new training path.
