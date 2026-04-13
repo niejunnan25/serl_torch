@@ -212,6 +212,25 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     with timer.context("step_env"):
                         next_obs, reward, done, truncated, info = env.step(action)
 
+                    done_flag = bool(done or truncated)
+                    action_executed = bool(
+                        info.get("controller_action_executed", True)
+                    )
+                    last_info = dict(info)
+
+                    if not action_executed:
+                        if not done_flag:
+                            raise RuntimeError(
+                                "controller reported an unexecuted action without a terminal outcome"
+                            )
+                        episode_return += float(reward)
+                        episode_success = bool(
+                            episode_success or info.get("success", False)
+                        )
+                        obs = dict(next_obs)
+                        prefetched = None
+                        break
+
                     with timer.context("build_decision_obs"):
                         next_base_policy_input = build_agibot_policy_input(
                             next_obs,
@@ -229,7 +248,6 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                             residual_alpha=residual_alpha,
                         )
 
-                    done_flag = bool(done or truncated)
                     transition = {
                         "episode_id": int(episode_id),
                         "episode_step": int(episode_steps),
@@ -242,7 +260,6 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     }
                     data_store.insert(transition)
 
-                    last_info = dict(info)
                     env_steps += 1
                     episode_steps += 1
                     episode_return += float(reward)
@@ -470,7 +487,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                     utd_ratio=cfg.sac.utd_ratio,
                 )
 
-            if update_steps > 0 and update_steps % steps_per_update == 0:
+            update_steps += 1
+
+            if update_steps % steps_per_update == 0:
                 server.publish_network(
                     snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
                 )
@@ -498,7 +517,6 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                     keep=int(checkpoint_keep),
                 )
 
-            update_steps += 1
 
     finally:
         summary.update(
