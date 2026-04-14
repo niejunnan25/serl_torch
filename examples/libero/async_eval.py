@@ -18,7 +18,7 @@ from serl_torch.examples.libero.config import LiberoTrainConfig
 @dataclass
 class AsyncEvalRuntime:
     enabled: bool = False
-    every_steps: int = 0
+    every_episodes: int = 0
     queue_path: Path | None = None
     summary_jsonl_path: Path | None = None
     worker_log_path: Path | None = None
@@ -83,10 +83,10 @@ def start_async_eval_worker(
     if not async_eval_cfg.enabled:
         return AsyncEvalRuntime()
 
-    every_steps = int(async_eval_cfg.every_steps)
-    if every_steps <= 0:
+    every_episodes = int(async_eval_cfg.every_episodes)
+    if every_episodes <= 0:
         raise ValueError(
-            "training.async_eval.enabled=true requires training.async_eval.every_steps > 0"
+            "training.async_eval.enabled=true requires training.async_eval.every_episodes > 0"
         )
 
     _validate_async_eval_env(cfg, async_eval_cfg=async_eval_cfg)
@@ -165,7 +165,7 @@ def start_async_eval_worker(
     )
     return AsyncEvalRuntime(
         enabled=True,
-        every_steps=int(every_steps),
+        every_episodes=int(every_episodes),
         queue_path=queue_path,
         summary_jsonl_path=summary_jsonl_path,
         worker_log_path=worker_log_path,

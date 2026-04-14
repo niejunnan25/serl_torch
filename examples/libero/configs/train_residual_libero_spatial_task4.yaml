@@ -4,8 +4,8 @@ libero_config_dir: null
 libero_datasets_root: null
 
 task:
-  suite_name: libero_10
-  task_id: 8
+  suite_name: libero_spatial
+  task_id: 4
 
 runtime:
   role: actor
@@ -80,7 +80,7 @@ sac:
   backup_entropy: true
   critic_ensemble_size: 2
   critic_subsample_size: 2
-  utd_ratio: 1
+  utd_ratio: 4
   otf_num_samples: 1
   cql_n_actions: 10
   cql_temperature: 1.0
@@ -98,7 +98,7 @@ replay:
 
 offline:
   enabled: false
-  prepared_path: data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
+  prepared_path: data/residual/offline_data/libero_spatial_task_4/openpi_chunk5_alpha0p1
   ratio: 0.5
   capacity: 50000
   load_max_episodes: null
@@ -114,9 +114,9 @@ offline:
 training:
   training_starts: 1000
   steps_per_update: 30
-  critic_actor_ratio: 4
-  max_env_steps: 300000
-  max_update_steps: 300000
+  critic_actor_ratio: 2
+  max_env_steps: 600000
+  max_update_steps: 600000
   log_period: 100
   mixed_precision:
     enabled: false
@@ -126,9 +126,9 @@ training:
     keep: 0
     dir: checkpoints
   async_eval:
-    enabled: false
+    enabled: true
     every_episodes: 20
-    episodes: 10
+    episodes: 50
     start_episode_idx: 0
     max_env_steps_per_episode: null
     deterministic: true
@@ -138,11 +138,8 @@ training:
     worker_log_file: async_eval_worker.log
     checkpoint:
       dir: async_eval_checkpoints
-      # Must stay 0 for now so queued eval checkpoints are never deleted before processing.
       keep: 0
     env:
-      # Async eval must use a dedicated remote env server and must not share the
-      # training actor's env.remote.host/port pair.
       backend: remote
       remote:
         host: 127.0.0.1

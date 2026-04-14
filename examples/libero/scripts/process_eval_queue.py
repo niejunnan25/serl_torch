@@ -115,6 +115,10 @@ def _process_one_request(
     request: dict[str, Any],
 ) -> None:
     eval_index = int(request["eval_index"])
+    train_episode_id_raw = request.get("train_episode_id", None)
+    train_episode_id = (
+        None if train_episode_id_raw is None else int(train_episode_id_raw)
+    )
     checkpoint_step = int(request["checkpoint_step"])
     train_update_step = int(request["train_update_step"])
     train_env_step = int(request["train_env_step"])
@@ -162,13 +166,16 @@ def _process_one_request(
             time.localtime(completed_at),
         ),
     }
+    if train_episode_id is not None:
+        record["train_episode_id"] = int(train_episode_id)
     if summary is not None:
         record["summary"] = summary
     record.update(error_payload)
     _append_jsonl(summary_jsonl, record)
     LOGGER.info(
-        "Processed eval_index=%s checkpoint_step=%s status=%s duration=%.2fs",
+        "Processed eval_index=%s episode=%s checkpoint_step=%s status=%s duration=%.2fs",
         eval_index,
+        train_episode_id,
         checkpoint_step,
         status,
         float(completed_at - started_at),

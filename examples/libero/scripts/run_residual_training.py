@@ -7,6 +7,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from agentlace.data.data_store import QueuedDataStore
@@ -56,6 +57,8 @@ from serl_torch.examples.libero.async_eval import summarize_async_eval_results
 from serl_torch.examples.libero.async_eval import wait_for_async_eval_worker
 from serl_torch.examples.libero.env.factory import create_env
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
+from serl_torch.examples.libero.offline_data import load_prepared_offline_replay
+from serl_torch.examples.libero.offline_data import resolve_and_validate_prepared_paths
 from serl_torch.examples.libero.residual_observation import (
     build_chunk_residual_obs,
 )
@@ -97,6 +100,7 @@ def _sync_async_eval_results_to_wandb(
             "async_eval/status_failed": 0.0 if status == "ok" else 1.0,
         }
         for payload_key, metric_key in (
+            ("train_episode_id", "async_eval/train_episode_id"),
             ("train_env_step", "async_eval/train_env_step"),
             ("checkpoint_step", "async_eval/checkpoint_step"),
             ("duration_sec", "async_eval/duration_sec"),
@@ -124,8 +128,9 @@ def _sync_async_eval_results_to_wandb(
 
         if status == "ok":
             logger.info(
-                "async eval done: eval_index=%s update_steps=%s env_steps=%s success_rate=%s",
+                "async eval done: eval_index=%s episode=%s update_steps=%s env_steps=%s success_rate=%s",
                 payload.get("eval_index", None),
+                payload.get("train_episode_id", None),
                 train_update_step,
                 payload.get("train_env_step", None),
                 (
@@ -136,8 +141,9 @@ def _sync_async_eval_results_to_wandb(
             )
         else:
             logger.warning(
-                "async eval failed: eval_index=%s update_steps=%s error=%s",
+                "async eval failed: eval_index=%s episode=%s update_steps=%s error=%s",
                 payload.get("eval_index", None),
+                payload.get("train_episode_id", None),
                 train_update_step,
                 payload.get("error", None),
             )
@@ -163,6 +169,7 @@ def _format_learner_heartbeat(
     replay_size: int,
     updates_per_sec: float,
     update_info: dict[str, Any],
+    offline_suffix: str = "",
 ) -> str:
     return (
         "learner heartbeat: "
@@ -178,7 +185,102 @@ def _format_learner_heartbeat(
         f"predicted_qs={_format_optional_metric(_maybe_float(update_info, 'predicted_qs'))} "
         f"target_qs={_format_optional_metric(_maybe_float(update_info, 'target_qs'))} "
         f"actor_predicted_q={_format_optional_metric(_maybe_float(update_info, 'actor_predicted_q'))}"
+        f"{offline_suffix}"
     )
+
+
+def _create_chunk_replay_buffer(
+    *,
+    cfg: LiberoTrainConfig,
+    observation_space: gym.spaces.Dict,
+    image_keys: tuple[str, ...],
+    capacity: int,
+) -> MemoryEfficientStepWindowReplayBufferDataStore:
+    return MemoryEfficientStepWindowReplayBufferDataStore(
+        observation_space=observation_space,
+        action_space=gym.spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(int(cfg.env.action_dim),),
+            dtype=np.float32,
+        ),
+        capacity=int(capacity),
+        window_size=int(cfg.residual.chunk_horizon),
+        discount=float(cfg.sac.discount),
+        sample_stride=1,
+        require_full_window=False,
+        image_keys=image_keys,
+    )
+
+
+def _reshape_chunk_batch_for_training(batch: dict[str, Any]) -> dict[str, Any]:
+    batch_out = dict(batch)
+    if "actions" in batch_out:
+        batch_out["actions"] = np.asarray(batch_out["actions"]).reshape(
+            int(np.asarray(batch_out["actions"]).shape[0]),
+            -1,
+        )
+    if "action_mask" in batch_out:
+        batch_out["action_mask"] = np.asarray(batch_out["action_mask"]).reshape(
+            int(np.asarray(batch_out["action_mask"]).shape[0]),
+            -1,
+        )
+    return batch_out
+
+
+def _concat_batch_trees(values: list[Any]) -> Any:
+    first = values[0]
+    if isinstance(first, dict):
+        return {
+            key: _concat_batch_trees([value[key] for value in values])
+            for key in first
+        }
+    arrays = [np.asarray(value) for value in values]
+    return np.concatenate(arrays, axis=0)
+
+
+def _sample_training_batch(
+    *,
+    online_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore,
+    offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None,
+    batch_size: int,
+    offline_ratio: float,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    offline_size = 0 if offline_replay_buffer is None else int(len(offline_replay_buffer))
+    online_size = int(len(online_replay_buffer))
+
+    if offline_replay_buffer is None or offline_size <= 0 or offline_ratio <= 0.0:
+        return online_replay_buffer.sample(int(batch_size)), {
+            "online_batch_size": int(batch_size),
+            "offline_batch_size": 0,
+        }
+    if online_size <= 0:
+        return offline_replay_buffer.sample(int(batch_size)), {
+            "online_batch_size": 0,
+            "offline_batch_size": int(batch_size),
+        }
+
+    offline_batch_size = int(round(float(batch_size) * float(offline_ratio)))
+    offline_batch_size = min(int(batch_size), max(0, int(offline_batch_size)))
+    online_batch_size = int(batch_size) - int(offline_batch_size)
+
+    if offline_batch_size <= 0:
+        return online_replay_buffer.sample(int(batch_size)), {
+            "online_batch_size": int(batch_size),
+            "offline_batch_size": 0,
+        }
+    if online_batch_size <= 0:
+        return offline_replay_buffer.sample(int(batch_size)), {
+            "online_batch_size": 0,
+            "offline_batch_size": int(batch_size),
+        }
+
+    online_batch = online_replay_buffer.sample(int(online_batch_size))
+    offline_batch = offline_replay_buffer.sample(int(offline_batch_size))
+    return _concat_batch_trees([online_batch, offline_batch]), {
+        "online_batch_size": int(online_batch_size),
+        "offline_batch_size": int(offline_batch_size),
+    }
 
 
 def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -464,21 +566,23 @@ def learner(
         sample_obs=sample_obs,
         image_keys=image_keys,
     )
-    replay_buffer = MemoryEfficientStepWindowReplayBufferDataStore(
+    replay_buffer = _create_chunk_replay_buffer(
+        cfg=cfg,
         observation_space=observation_space,
-        action_space=gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(action_dim,),
-            dtype=np.float32,
-        ),
-        capacity=cfg.replay.capacity,
-        window_size=chunk_horizon,
-        discount=cfg.sac.discount,
-        sample_stride=1,
-        require_full_window=False,
         image_keys=image_keys,
+        capacity=int(cfg.replay.capacity),
     )
+    offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None = None
+    offline_prepared_path: Path | None = None
+    offline_manifest_path: Path | None = None
+    offline_validation_stats: dict[str, Any] | None = None
+    offline_load_stats: dict[str, Any] = {
+        "files_total": 0,
+        "files_loaded": 0,
+        "episodes_loaded": 0,
+        "inserted": 0,
+        "errors": 0,
+    }
     wandb_cfg = WandBLogger.get_default_config()
     run_name = cfg.wandb.exp_name
     wandb_cfg.update(
@@ -506,6 +610,10 @@ def learner(
 
     update_steps = 0
     env_steps = 0
+    latest_completed_episode_id = 0
+    completed_episode_env_steps: dict[int, int] = {}
+    last_queued_async_eval_episode = 0
+    progress_state_lock = Lock()
     summary: dict[str, Any] = {
         "role": "learner",
         "mode": "residual",
@@ -516,10 +624,24 @@ def learner(
 
     def stats_callback(request_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal env_steps
+        nonlocal latest_completed_episode_id
         if request_type != "send-stats":
             raise ValueError(f"Invalid request type: {request_type}")
-        if "env_steps" in payload:
-            env_steps = max(int(env_steps), int(payload["env_steps"]))
+        with progress_state_lock:
+            if "env_steps" in payload:
+                env_steps = max(int(env_steps), int(payload["env_steps"]))
+            actor_episode = payload.get("actor_episode", None)
+            if isinstance(actor_episode, dict):
+                try:
+                    episode_id = int(actor_episode.get("episode_id", 0))
+                except Exception:
+                    episode_id = 0
+                if episode_id > 0:
+                    latest_completed_episode_id = max(
+                        int(latest_completed_episode_id),
+                        int(episode_id),
+                    )
+                    completed_episode_env_steps[int(episode_id)] = int(env_steps)
         wandb_logger.log(to_jsonable(payload), step=update_steps)
         return {}
 
@@ -534,48 +656,46 @@ def learner(
     server.register_data_store("actor_env", replay_buffer)
     server.start(threaded=True)
 
-    training_starts = cfg.training.training_starts
-    warmup_bar = tqdm(
-        total=int(training_starts),
-        initial=min(int(len(replay_buffer)), int(training_starts)),
-        desc="learner replay warmup",
-        dynamic_ncols=True,
-        leave=True,
-    )
-    warmup_replay_size = min(int(len(replay_buffer)), int(training_starts))
-    try:
-        while len(replay_buffer) < training_starts:
-            current_replay_size = min(int(len(replay_buffer)), int(training_starts))
-            if current_replay_size > warmup_replay_size:
-                warmup_bar.update(current_replay_size - warmup_replay_size)
-                warmup_replay_size = current_replay_size
-            warmup_bar.set_postfix(
-                replay=int(len(replay_buffer)),
-                env_steps=int(env_steps),
-                refresh=False,
+    if cfg.offline.enabled:
+        offline_resolution = resolve_and_validate_prepared_paths(
+            cfg,
+            logger=logger,
+        )
+        if offline_resolution.prepared_paths:
+            offline_prepared_path = offline_resolution.prepared_paths[0]
+        if offline_resolution.manifest_paths:
+            offline_manifest_path = offline_resolution.manifest_paths[0]
+        offline_validation_stats = dict(offline_resolution.validation_stats)
+        offline_replay_buffer = _create_chunk_replay_buffer(
+            cfg=cfg,
+            observation_space=observation_space,
+            image_keys=image_keys,
+            capacity=int(cfg.offline.capacity),
+        )
+        offline_load_stats = load_prepared_offline_replay(
+            replay_buffer=offline_replay_buffer,
+            prepared_paths=tuple()
+            if offline_prepared_path is None
+            else (offline_prepared_path,),
+            logger=logger,
+            max_episodes=cfg.offline.load_max_episodes,
+            max_transitions=cfg.offline.load_max_transitions,
+        )
+        if len(offline_replay_buffer) <= 0:
+            logger.warning(
+                "offline replay prepared but empty; continuing with online-only training"
             )
-            time.sleep(FILL_WAIT_SLEEP_SEC)
-        current_replay_size = min(int(len(replay_buffer)), int(training_starts))
-        if current_replay_size > warmup_replay_size:
-            warmup_bar.update(current_replay_size - warmup_replay_size)
-    finally:
-        warmup_bar.close()
-    logger.info(
-        "replay warmup complete: replay=%s training_starts=%s env_steps=%s",
-        int(len(replay_buffer)),
-        int(training_starts),
-        int(env_steps),
-    )
+            offline_replay_buffer = None
+        else:
+            logger.info(
+                "offline replay ready: prepared_path=%s replay_size=%s ratio=%.3f pretrain_steps=%s",
+                None if offline_prepared_path is None else str(offline_prepared_path),
+                int(len(offline_replay_buffer)),
+                float(cfg.offline.ratio),
+                int(cfg.offline.pretrain_steps),
+            )
 
-    server.publish_network(
-        snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
-    )
-    logger.info(
-        "publish network: step=%s env_steps=%s reason=initial",
-        int(update_steps),
-        int(env_steps),
-    )
-
+    training_starts = cfg.training.training_starts
     checkpoint_every = cfg.training.checkpoint.every_steps
     checkpoint_keep = cfg.training.checkpoint.keep
     checkpoint_dir = Path(cfg.training.checkpoint.dir)
@@ -590,43 +710,205 @@ def learner(
     timer = Timer()
     last_log_time = time.time()
     last_log_update_steps = int(update_steps)
+    offline_pretrain_steps_done = 0
+    initial_network_published = False
+
+    def _sample_and_reshape_batch(
+        *,
+        offline_ratio: float,
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        batch, batch_mix = _sample_training_batch(
+            online_replay_buffer=replay_buffer,
+            offline_replay_buffer=offline_replay_buffer,
+            batch_size=int(cfg.replay.batch_size),
+            offline_ratio=float(offline_ratio),
+        )
+        return _reshape_chunk_batch_for_training(batch), batch_mix
+
+    def _run_training_update(
+        *,
+        offline_ratio: float,
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        nonlocal agent
+        train_batch_mix = {
+            "online_batch_size": int(cfg.replay.batch_size),
+            "offline_batch_size": 0,
+        }
+        for _ in range(max(0, critic_actor_ratio - 1)):
+            with timer.context("sample_replay_buffer"):
+                batch, _ = _sample_and_reshape_batch(offline_ratio=float(offline_ratio))
+            with timer.context("train_critics"):
+                agent, _critics_info = agent.update_critics(batch)
+
+        with timer.context("train"):
+            batch, train_batch_mix = _sample_and_reshape_batch(
+                offline_ratio=float(offline_ratio)
+            )
+            agent, update_info = agent.update_high_utd(
+                batch,
+                utd_ratio=cfg.sac.utd_ratio,
+            )
+        return update_info, train_batch_mix
+
+    def _maybe_queue_async_eval() -> None:
+        nonlocal last_queued_async_eval_episode
+        if (not async_eval.enabled) or async_eval.eval_checkpoint_dir is None:
+            return
+        every_episodes = int(async_eval.every_episodes)
+        if every_episodes <= 0:
+            return
+        while True:
+            with progress_state_lock:
+                next_target_episode = (
+                    int(last_queued_async_eval_episode) + every_episodes
+                )
+                if int(latest_completed_episode_id) < int(next_target_episode):
+                    return
+                target_episode = int(next_target_episode)
+                target_env_step = int(
+                    completed_episode_env_steps.get(target_episode, env_steps)
+                )
+            async_eval_checkpoint_path = save_agent_checkpoint(
+                async_eval.eval_checkpoint_dir,
+                agent,
+                step=int(update_steps),
+                keep=int(async_eval.eval_checkpoint_keep),
+            )
+            append_async_eval_request(
+                async_eval,
+                {
+                    "eval_index": int(async_eval.triggered_count),
+                    "train_episode_id": int(target_episode),
+                    "train_update_step": int(update_steps),
+                    "train_env_step": int(target_env_step),
+                    "checkpoint_step": int(update_steps),
+                    "checkpoint_path": str(async_eval_checkpoint_path),
+                },
+            )
+            with progress_state_lock:
+                last_queued_async_eval_episode = max(
+                    int(last_queued_async_eval_episode),
+                    int(target_episode),
+                )
+                stale_episode_ids = [
+                    episode_id
+                    for episode_id in completed_episode_env_steps
+                    if int(episode_id) <= int(target_episode)
+                ]
+                for stale_episode_id in stale_episode_ids:
+                    completed_episode_env_steps.pop(int(stale_episode_id), None)
+            logger.info(
+                "queued async eval: eval_index=%s episode=%s update_steps=%s env_steps=%s checkpoint=%s",
+                int(max(0, async_eval.triggered_count - 1)),
+                int(target_episode),
+                int(update_steps),
+                int(target_env_step),
+                async_eval_checkpoint_path,
+            )
+
+    if (
+        offline_replay_buffer is not None
+        and int(cfg.offline.pretrain_steps) > 0
+        and int(update_steps) < int(max_update_steps)
+    ):
+        logger.info(
+            "starting offline pretrain: steps=%s offline_replay_size=%s",
+            int(cfg.offline.pretrain_steps),
+            int(len(offline_replay_buffer)),
+        )
+        pretrain_bar = tqdm(
+            total=min(int(cfg.offline.pretrain_steps), int(max_update_steps)),
+            desc="learner offline pretrain",
+            dynamic_ncols=True,
+            leave=True,
+        )
+        last_pretrain_info: dict[str, Any] | None = None
+        try:
+            while (
+                int(update_steps) < int(max_update_steps)
+                and int(offline_pretrain_steps_done) < int(cfg.offline.pretrain_steps)
+            ):
+                last_pretrain_info, _ = _run_training_update(offline_ratio=1.0)
+                update_steps += 1
+                offline_pretrain_steps_done += 1
+                pretrain_bar.update(1)
+        finally:
+            pretrain_bar.close()
+
+        if last_pretrain_info is not None:
+            wandb_logger.log(to_jsonable(last_pretrain_info), step=update_steps)
+        logger.info(
+            "offline pretrain complete: completed=%s update_steps=%s offline_replay_size=%s",
+            int(offline_pretrain_steps_done),
+            int(update_steps),
+            0 if offline_replay_buffer is None else int(len(offline_replay_buffer)),
+        )
+        server.publish_network(
+            snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
+        )
+        initial_network_published = True
+        logger.info(
+            "publish network: step=%s env_steps=%s reason=offline_pretrain_complete",
+            int(update_steps),
+            int(env_steps),
+        )
+
+    if int(update_steps) < int(max_update_steps):
+        warmup_bar = tqdm(
+            total=int(training_starts),
+            initial=min(int(len(replay_buffer)), int(training_starts)),
+            desc="learner replay warmup",
+            dynamic_ncols=True,
+            leave=True,
+        )
+        warmup_replay_size = min(int(len(replay_buffer)), int(training_starts))
+        try:
+            while len(replay_buffer) < training_starts:
+                current_replay_size = min(int(len(replay_buffer)), int(training_starts))
+                if current_replay_size > warmup_replay_size:
+                    warmup_bar.update(current_replay_size - warmup_replay_size)
+                    warmup_replay_size = current_replay_size
+                warmup_bar.set_postfix(
+                    replay=int(len(replay_buffer)),
+                    env_steps=int(env_steps),
+                    refresh=False,
+                )
+                time.sleep(FILL_WAIT_SLEEP_SEC)
+            current_replay_size = min(int(len(replay_buffer)), int(training_starts))
+            if current_replay_size > warmup_replay_size:
+                warmup_bar.update(current_replay_size - warmup_replay_size)
+        finally:
+            warmup_bar.close()
+        logger.info(
+            "replay warmup complete: replay=%s training_starts=%s env_steps=%s",
+            int(len(replay_buffer)),
+            int(training_starts),
+            int(env_steps),
+        )
+
+    if not initial_network_published:
+        server.publish_network(
+            snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
+        )
+        logger.info(
+            "publish network: step=%s env_steps=%s reason=initial",
+            int(update_steps),
+            int(env_steps),
+        )
 
     try:
         while update_steps < max_update_steps:
-            if not update_steps < env_steps:
+            _maybe_queue_async_eval()
+            online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
+            if not online_update_steps < env_steps:
                 time.sleep(LEARNER_IDLE_SLEEP_SEC)
                 continue
 
-            for _ in range(max(0, critic_actor_ratio - 1)):
-                with timer.context("sample_replay_buffer"):
-                    batch = replay_buffer.sample(cfg.replay.batch_size)
-                    batch["actions"] = batch["actions"].reshape(
-                        int(batch["actions"].shape[0]),
-                        -1,
-                    )
-                    batch["action_mask"] = batch["action_mask"].reshape(
-                        int(batch["action_mask"].shape[0]),
-                        -1,
-                    )
-                with timer.context("train_critics"):
-                    agent, _critics_info = agent.update_critics(batch)
-
-            with timer.context("train"):
-                batch = replay_buffer.sample(cfg.replay.batch_size)
-                batch["actions"] = batch["actions"].reshape(
-                    int(batch["actions"].shape[0]),
-                    -1,
-                )
-                batch["action_mask"] = batch["action_mask"].reshape(
-                    int(batch["action_mask"].shape[0]),
-                    -1,
-                )
-                agent, update_info = agent.update_high_utd(
-                    batch,
-                    utd_ratio=cfg.sac.utd_ratio,
-                )
-
+            update_info, batch_mix = _run_training_update(
+                offline_ratio=float(cfg.offline.ratio),
+            )
             update_steps += 1
+            _maybe_queue_async_eval()
 
             if update_steps % steps_per_update == 0:
                 server.publish_network(
@@ -665,6 +947,24 @@ def learner(
                     {"timer": timer_metrics},
                     step=update_steps,
                 )
+                offline_suffix = ""
+                if offline_replay_buffer is not None:
+                    offline_total = max(
+                        1,
+                        int(batch_mix["online_batch_size"])
+                        + int(batch_mix["offline_batch_size"]),
+                    )
+                    offline_ratio_actual = float(batch_mix["offline_batch_size"]) / float(
+                        offline_total
+                    )
+                    offline_suffix = (
+                        " "
+                        f"offline_replay={int(len(offline_replay_buffer))} "
+                        f"offline_ratio_actual={offline_ratio_actual:.3f} "
+                        f"offline_batch={int(batch_mix['offline_batch_size'])}/{offline_total} "
+                        f"online_updates={max(0, int(update_steps - offline_pretrain_steps_done))} "
+                        f"offline_pretrain={int(offline_pretrain_steps_done)}"
+                    )
                 logger.info(
                     _format_learner_heartbeat(
                         update_steps=int(update_steps),
@@ -672,6 +972,7 @@ def learner(
                         replay_size=int(len(replay_buffer)),
                         updates_per_sec=float(updates_per_sec),
                         update_info=dict(update_metrics),
+                        offline_suffix=offline_suffix,
                     )
                 )
 
@@ -689,36 +990,8 @@ def learner(
                     checkpoint_path,
                 )
 
-            if (
-                async_eval.enabled
-                and update_steps % int(async_eval.every_steps) == 0
-                and async_eval.eval_checkpoint_dir is not None
-            ):
-                async_eval_checkpoint_path = save_agent_checkpoint(
-                    async_eval.eval_checkpoint_dir,
-                    agent,
-                    step=int(update_steps),
-                    keep=int(async_eval.eval_checkpoint_keep),
-                )
-                append_async_eval_request(
-                    async_eval,
-                    {
-                        "eval_index": int(async_eval.triggered_count),
-                        "train_update_step": int(update_steps),
-                        "train_env_step": int(env_steps),
-                        "checkpoint_step": int(update_steps),
-                        "checkpoint_path": str(async_eval_checkpoint_path),
-                    },
-                )
-                logger.info(
-                    "queued async eval: eval_index=%s update_steps=%s env_steps=%s checkpoint=%s",
-                    int(max(0, async_eval.triggered_count - 1)),
-                    int(update_steps),
-                    int(env_steps),
-                    async_eval_checkpoint_path,
-                )
-
     finally:
+        _maybe_queue_async_eval()
         async_eval_return_code = None
         if async_eval.enabled:
             append_async_eval_stop(async_eval)
@@ -738,15 +1011,47 @@ def learner(
                     async_eval.worker_log_path,
                 )
         async_eval_counts = summarize_async_eval_results(async_eval.summary_jsonl_path)
+        with progress_state_lock:
+            summary_last_completed_episode_id = int(latest_completed_episode_id)
+            summary_last_queued_episode_id = int(last_queued_async_eval_episode)
         summary.update(
             {
                 "update_steps": int(update_steps),
                 "env_steps": int(env_steps),
                 "replay_size": int(len(replay_buffer)),
+                "offline": {
+                    "enabled": bool(cfg.offline.enabled),
+                    "ratio": float(cfg.offline.ratio),
+                    "prepared_path": (
+                        None
+                        if offline_prepared_path is None
+                        else str(offline_prepared_path)
+                    ),
+                    "manifest_path": (
+                        None
+                        if offline_manifest_path is None
+                        else str(offline_manifest_path)
+                    ),
+                    "validation_stats": (
+                        None
+                        if offline_validation_stats is None
+                        else to_jsonable(offline_validation_stats)
+                    ),
+                    "load_stats": to_jsonable(offline_load_stats),
+                    "replay_size": (
+                        0
+                        if offline_replay_buffer is None
+                        else int(len(offline_replay_buffer))
+                    ),
+                    "pretrain_steps_requested": int(cfg.offline.pretrain_steps),
+                    "pretrain_steps_completed": int(offline_pretrain_steps_done),
+                },
                 "async_eval": {
                     "enabled": bool(async_eval.enabled),
-                    "every_steps": int(async_eval.every_steps),
+                    "every_episodes": int(async_eval.every_episodes),
                     "triggered": int(async_eval.triggered_count),
+                    "last_completed_episode_id": int(summary_last_completed_episode_id),
+                    "last_queued_episode_id": int(summary_last_queued_episode_id),
                     "results_total": int(async_eval_counts["total"]),
                     "results_ok": int(async_eval_counts["ok"]),
                     "results_failed": int(async_eval_counts["failed"]),

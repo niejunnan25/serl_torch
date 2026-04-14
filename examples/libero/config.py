@@ -151,6 +151,26 @@ class ReplayConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OfflinePrepareConfig:
+    raw_dataset_path: str | None
+    output_root: str
+    expert_reference_scale: float
+    clip_residual_to_unit: bool
+
+
+@dataclass(frozen=True, slots=True)
+class OfflineConfig:
+    enabled: bool
+    prepared_path: str | None
+    ratio: float
+    capacity: int
+    load_max_episodes: int | None
+    load_max_transitions: int | None
+    pretrain_steps: int
+    prepare: OfflinePrepareConfig
+
+
+@dataclass(frozen=True, slots=True)
 class MixedPrecisionConfig:
     enabled: bool
     dtype: str
@@ -178,7 +198,7 @@ class AsyncEvalEnvConfig:
 @dataclass(frozen=True, slots=True)
 class AsyncEvalConfig:
     enabled: bool
-    every_steps: int
+    every_episodes: int
     episodes: int
     start_episode_idx: int
     max_env_steps_per_episode: int | None
@@ -242,6 +262,7 @@ class LiberoTrainConfig:
     network: NetworkConfig
     sac: SacConfig
     replay: ReplayConfig
+    offline: OfflineConfig
     training: TrainingConfig
     logging: LoggingConfig
 
@@ -766,6 +787,88 @@ def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
     )
 
 
+def _parse_prepared_path(values: Any) -> str | None:
+    if values is None:
+        return None
+    if isinstance(values, str):
+        return _optional_str(values)
+    resolved_values = [
+        _required_str(value, "offline.prepared_path")
+        for value in values
+    ]
+    if not resolved_values:
+        return None
+    if len(resolved_values) > 1:
+        raise ValueError(
+            "offline.prepared_path accepts a single path; "
+            f"got {len(resolved_values)} entries"
+        )
+    return resolved_values[0]
+
+
+def _parse_offline_prepare_cfg(cfg: DictConfig) -> OfflinePrepareConfig:
+    offline_cfg = cfg.get("offline", {})
+    prepare_cfg = offline_cfg.get("prepare", {})
+    return OfflinePrepareConfig(
+        raw_dataset_path=_optional_str(
+            prepare_cfg.get("raw_dataset_path", None),
+        ),
+        output_root=_required_str(
+            prepare_cfg.get(
+                "output_root",
+                "data/residual/offline_data",
+            ),
+            "offline.prepare.output_root",
+        ),
+        expert_reference_scale=_positive_float(
+            prepare_cfg.get("expert_reference_scale", 1.0),
+            "offline.prepare.expert_reference_scale",
+        ),
+        clip_residual_to_unit=bool(
+            prepare_cfg.get("clip_residual_to_unit", True)
+        ),
+    )
+
+
+def _parse_offline_cfg(cfg: DictConfig) -> OfflineConfig:
+    offline_cfg = cfg.get("offline", {})
+    enabled = bool(offline_cfg.get("enabled", False))
+    ratio = _nonnegative_float(offline_cfg.get("ratio", 0.5), "offline.ratio")
+    if ratio > 1.0:
+        raise ValueError(f"offline.ratio must be <= 1.0, got {ratio}")
+    prepared_path_value = offline_cfg.get("prepared_path", None)
+    if prepared_path_value is None:
+        prepared_path_value = offline_cfg.get("prepared_paths", None)
+    load_max_episodes_value = offline_cfg.get("load_max_episodes", None)
+    if load_max_episodes_value is None:
+        load_max_episodes_value = offline_cfg.get("max_episodes", None)
+    load_max_transitions_value = offline_cfg.get("load_max_transitions", None)
+    if load_max_transitions_value is None:
+        load_max_transitions_value = offline_cfg.get("max_transitions", None)
+    return OfflineConfig(
+        enabled=enabled,
+        prepared_path=_parse_prepared_path(prepared_path_value),
+        ratio=ratio,
+        capacity=_positive_int(
+            offline_cfg.get("capacity", 50000),
+            "offline.capacity",
+        ),
+        load_max_episodes=_optional_positive_int(
+            load_max_episodes_value,
+            "offline.load_max_episodes",
+        ),
+        load_max_transitions=_optional_positive_int(
+            load_max_transitions_value,
+            "offline.load_max_transitions",
+        ),
+        pretrain_steps=_nonnegative_int(
+            offline_cfg.get("pretrain_steps", 0),
+            "offline.pretrain_steps",
+        ),
+        prepare=_parse_offline_prepare_cfg(cfg),
+    )
+
+
 def _parse_mixed_precision_cfg(
     mixed_precision_cfg: Any,
     *,
@@ -783,19 +886,24 @@ def _parse_mixed_precision_cfg(
 def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
     training_cfg = cfg.get("training", {})
     async_eval_cfg = training_cfg.get("async_eval", {})
-    enabled = bool(async_eval_cfg.get("enabled", False))
-    every_steps = _nonnegative_int(
-        async_eval_cfg.get("every_steps", 5000),
-        "training.async_eval.every_steps",
-    )
-    if enabled and every_steps <= 0:
+    if "every_steps" in async_eval_cfg:
         raise ValueError(
-            "training.async_eval.enabled=true requires training.async_eval.every_steps > 0"
+            "training.async_eval.every_steps has been removed; "
+            "use training.async_eval.every_episodes instead"
+        )
+    enabled = bool(async_eval_cfg.get("enabled", False))
+    every_episodes = _nonnegative_int(
+        async_eval_cfg.get("every_episodes", 20),
+        "training.async_eval.every_episodes",
+    )
+    if enabled and every_episodes <= 0:
+        raise ValueError(
+            "training.async_eval.enabled=true requires training.async_eval.every_episodes > 0"
         )
     if not enabled:
         return AsyncEvalConfig(
             enabled=False,
-            every_steps=every_steps,
+            every_episodes=every_episodes,
             episodes=_int_or_default(async_eval_cfg.get("episodes", 10), 10),
             start_episode_idx=_int_or_default(
                 async_eval_cfg.get("start_episode_idx", 0),
@@ -860,7 +968,7 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
     checkpoint_cfg = async_eval_cfg.get("checkpoint", {})
     return AsyncEvalConfig(
         enabled=enabled,
-        every_steps=every_steps,
+        every_episodes=every_episodes,
         episodes=_positive_int(
             async_eval_cfg.get("episodes", 10),
             "training.async_eval.episodes",
@@ -1010,6 +1118,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
     encoder = _parse_encoder_cfg(cfg)
+    offline = _parse_offline_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
         raise ValueError(
@@ -1032,6 +1141,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
         replay=_parse_replay_cfg(cfg),
+        offline=offline,
         training=_parse_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg),
     )
@@ -1128,6 +1238,8 @@ __all__ = [
     "LoggingConfig",
     "MixedPrecisionConfig",
     "NetworkConfig",
+    "OfflineConfig",
+    "OfflinePrepareConfig",
     "ObsConfig",
     "OptimizerConfig",
     "OptimizerType",

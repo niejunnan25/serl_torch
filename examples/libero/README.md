@@ -12,14 +12,16 @@
 
 - LIBERO 环境适配
 - local env 和 remote env server / client
+- residual offline data 准备与加载
 - residual RL 训练入口
 - 独立 residual checkpoint 评估入口
 - 训练期 async eval
 - residual observation schema 和 typed config
 
-当前真正的主入口有四个：
+当前真正的主入口有五个：
 
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
 - [scripts/serve_env.py](scripts/serve_env.py)
 - [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
 - [tools/serve_env.sh](tools/serve_env.sh)
@@ -36,8 +38,12 @@
   typed config 定义与解析
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
   actor / learner 共用训练入口，通过 `runtime.role=actor|learner` 切角色
+- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+  离线数据准备入口，默认也读取 `configs/train_residual.yaml`
 - [scripts/serve_env.py](scripts/serve_env.py)
   LIBERO HTTP RPC env server
+- [offline_data.py](offline_data.py)
+  prepared offline dataset 的生成、manifest 校验和 replay 加载
 - [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
   checkpoint eval 入口
 - [scripts/process_eval_queue.py](scripts/process_eval_queue.py)
@@ -183,6 +189,8 @@ canonical 训练配置是：
 
 - [configs/train_residual.yaml](configs/train_residual.yaml)
 
+当前 `scripts/run_residual_training.py` 和 `scripts/prepare_offline_data.py` 都默认读取这份配置；也就是说，prepare / train 共用同一套 `task`、`policy`、`obs`、`residual` 默认值。
+
 当前默认关键参数：
 
 - `task.suite_name=libero_10`
@@ -195,8 +203,10 @@ canonical 训练配置是：
 - `env.remote.host=127.0.0.1`
 - `env.remote.port=30000`
 - `env.action_dim=7`
-- `residual.alpha=0.35`
+- `residual.alpha=0.1`
 - `residual.chunk_horizon=5`
+- `offline.prepared_path=data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1`
+- `offline.prepare.output_root=data/residual/offline_data`
 - `training.training_starts=1000`
 - `training.steps_per_update=30`
 - `training.critic_actor_ratio=4`
@@ -214,8 +224,9 @@ canonical 训练配置是：
 
 1. LIBERO env server
 2. base policy server
-3. learner
-4. actor
+3. 可选：offline data prepare
+4. learner
+5. actor
 
 如果开训练期 async eval，再额外起一个独立的 eval env server。
 
@@ -260,9 +271,32 @@ LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30010
 
 ## 2. 启动 base policy server
 
-这一步当前不由 `examples/libero/` 提供启动脚本。
+如果你使用 `policy.type=openpi`，当前目录已经提供了两个常用 wrapper：
 
-你需要自己准备一个兼容当前 client 协议的服务，并让它监听：
+- [tools/serve_openpi_policy.sh](tools/serve_openpi_policy.sh)
+  默认启动 `pi0_libero`
+- [tools/serve_openpi_10000_policy.sh](tools/serve_openpi_10000_policy.sh)
+  默认启动 `pi0_10000`
+
+最常见的启动方式：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch
+bash examples/libero/tools/serve_openpi_policy.sh \
+  --gpu-id 0 \
+  --port 30001
+```
+
+如果你更想用 `pi0_10000`，可以换成：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch
+bash examples/libero/tools/serve_openpi_10000_policy.sh \
+  --gpu-id 0 \
+  --port 30001
+```
+
+当然，你也可以自己准备一个兼容当前 client 协议的服务，并让它监听：
 
 - `policy.host`
 - `policy.port`
@@ -277,12 +311,68 @@ LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30010
 policy.type=joyra policy.port=9001
 ```
 
-## 3. 启动 learner
+## 3. 准备 offline data（可选）
+
+如果你想使用 residual offline data，当前 canonical 入口是：
+
+- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+
+它默认也读取：
+
+- [configs/train_residual.yaml](configs/train_residual.yaml)
+
+也就是说，如果你不额外 override，prepare 会直接使用当前训练默认配置里的：
+
+- `task.suite_name`
+- `task.task_id`
+- `policy.host`
+- `policy.port`
+- `residual.alpha`
+- `residual.chunk_horizon`
+- `offline.prepare.output_root`
+
+最常见的准备方式：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+conda run -n serl_torch python scripts/prepare_offline_data.py \
+  offline.enabled=true \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+这一步依赖：
+
+- LIBERO demo 数据可被 `libero_datasets_root` 找到
+- base policy server 已经在 `policy.host:policy.port` 上启动
+
+默认配置下，prepared 数据会生成到：
+
+```text
+data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
+```
+
+prepare 完成后，脚本会在终端打印下一步 learner 命令。
+
+## 4. 启动 learner
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
 conda run -n serl_torch python scripts/run_residual_training.py \
   runtime.role=learner \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+```
+
+如果你要加载 prepared offline data，最常见的 learner 命令是：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+conda run -n serl_torch python scripts/run_residual_training.py \
+  runtime.role=learner \
+  offline.enabled=true \
+  offline.prepared_path=data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1 \
   libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
   encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
@@ -294,7 +384,7 @@ conda run -n serl_torch python scripts/run_residual_training.py \
 hydra.run.dir=/abs/path/to/run_dir
 ```
 
-## 4. 启动 actor
+## 5. 启动 actor
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
@@ -305,7 +395,7 @@ conda run -n serl_torch python scripts/run_residual_training.py \
   encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
 ```
 
-## 5. actor / learner 必须对齐的配置
+## 6. actor / learner 必须对齐的配置
 
 至少下面这些字段需要一致：
 
@@ -323,9 +413,13 @@ conda run -n serl_torch python scripts/run_residual_training.py \
 - `env.remote.host`
 - `env.remote.port`
 
-## 6. 启用训练期 async eval
+## 7. 启用训练期 async eval
 
 当前 async eval 由 learner 自动拉起 worker。
+
+已知的 episode 触发语义风险说明见：
+
+- [docs/async_eval_episode_trigger_risk.md](docs/async_eval_episode_trigger_risk.md)
 
 最小要求：
 
@@ -353,7 +447,7 @@ async eval 相关产物默认会写在当前 Hydra run dir 下，例如：
 - `async_eval_checkpoints/`
 - `async_eval_runs/`
 
-## 7. 跑 checkpoint eval
+## 8. 跑 checkpoint eval
 
 评估和训练 actor 一样，仍然依赖两个外部服务先启动好：
 
