@@ -30,8 +30,6 @@ from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_ag
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
-from serl_launcher.policy.typed_factory import build_policy_client
-from serl_launcher.policy.typed_factory import describe_policy_backend
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.seeding import set_global_seeds
@@ -45,8 +43,6 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.agibot_real.config import AgiBotTrainConfig
 from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.config import parse_train_cfg
-from serl_torch.examples.agibot_real.env.factory import _create_env as create_env
-from serl_torch.examples.agibot_real.env.policy_input import build_agibot_policy_input
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_obs,
 )
@@ -55,9 +51,6 @@ from serl_torch.examples.agibot_real.residual_observation import (
 )
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_sample_obs,
-)
-from serl_torch.examples.agibot_real.residual_observation import (
-    prepare_base_actions_chunk,
 )
 
 FILL_WAIT_SLEEP_SEC = 1.0
@@ -83,9 +76,13 @@ def _run_expert_precheck(
 
 
 def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+    # Keep the learner import path free of robot SDK / ROS dependencies.
+    from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
+    from serl_torch.examples.agibot_real.env.factory import _create_env as create_env
+
     env = create_env(cfg, logger)
-    policy_client = build_policy_client(cfg, logger=logger)
-    logger.info("Chunk policy backend: %s", describe_policy_backend(cfg))
+    base_policy = build_agibot_base_policy(cfg, logger=logger)
+    logger.info("Chunk policy backend: %s", base_policy.describe())
 
     image_keys = cfg.obs.image_keys
     action_dim = cfg.env.action_dim
@@ -179,11 +176,9 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 timer.tick("total")
                 with timer.context("sample_actions"):
                     if prefetched is None:
-                        base_policy_input = build_agibot_policy_input(obs, task_prompt)
-                        base_actions, _ = policy_client.infer(base_policy_input)
-                        base_actions = prepare_base_actions_chunk(
-                            base_actions=base_actions,
-                            chunk_horizon=chunk_horizon,
+                        base_actions, _ = base_policy.infer(
+                            obs,
+                            prompt=task_prompt,
                         )
                         residual_obs = build_chunk_residual_obs(
                             obs=obs,
@@ -232,14 +227,9 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                         break
 
                     with timer.context("build_decision_obs"):
-                        next_base_policy_input = build_agibot_policy_input(
+                        next_base_actions, _ = base_policy.infer(
                             next_obs,
-                            task_prompt,
-                        )
-                        next_base_actions, _ = policy_client.infer(next_base_policy_input)
-                        next_base_actions = prepare_base_actions_chunk(
-                            base_actions=next_base_actions,
-                            chunk_horizon=chunk_horizon,
+                            prompt=task_prompt,
                         )
                         next_residual_obs = build_chunk_residual_obs(
                             obs=next_obs,
@@ -329,10 +319,10 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
             env.close(clear_cache=False)
         except Exception:  # noqa: BLE001
             pass
-        policy_client_close = getattr(policy_client, "close", None)
-        if callable(policy_client_close):
+        base_policy_close = getattr(base_policy, "close", None)
+        if callable(base_policy_close):
             try:
-                policy_client_close()
+                base_policy_close()
             except Exception:  # noqa: BLE001
                 pass
 
@@ -516,7 +506,6 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                     step=int(update_steps),
                     keep=int(checkpoint_keep),
                 )
-
 
     finally:
         summary.update(

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FORWARDER_TAR_NAME="forwarder_x86_v1.7.0.tar.gz"
 LOCAL_FORWARDER_TAR="$ROOT_DIR/vendor/a2d_sdk/$FORWARDER_TAR_NAME"
-LOCAL_FORWARDER_ROOT="$ROOT_DIR/robot_service/forwarder"
+LOCAL_FORWARDER_ROOT="$ROOT_DIR/robot/service/forwarder"
 
 # shellcheck source=examples/agibot_real/tools/common.sh
 source "$ROOT_DIR/tools/common.sh"
@@ -18,7 +18,7 @@ print_help() {
     echo "  1. --from-dir / AGIBOT_FORWARDER_DIR"
     echo "  2. --from-tar / AGIBOT_FORWARDER_TAR"
     echo "  3. --from-url / AGIBOT_FORWARDER_URL"
-    echo "  4. existing robot_service/forwarder"
+    echo "  4. existing robot/service/forwarder"
     echo "  5. local cache $LOCAL_FORWARDER_TAR"
     echo
     echo "If you plan to start robot-service with --no-ros, the forwarder bundle is optional."

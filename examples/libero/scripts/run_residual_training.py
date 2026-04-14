@@ -17,6 +17,7 @@ import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
+from tqdm.auto import tqdm
 
 try:
     import gym
@@ -45,7 +46,15 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.config import LiberoTrainConfig
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import parse_train_cfg
-from serl_torch.examples.libero.env.factory import _create_env as create_env
+from serl_torch.examples.libero.async_eval import AsyncEvalRuntime
+from serl_torch.examples.libero.async_eval import append_async_eval_request
+from serl_torch.examples.libero.async_eval import append_async_eval_stop
+from serl_torch.examples.libero.async_eval import check_async_eval_worker
+from serl_torch.examples.libero.async_eval import load_new_async_eval_results
+from serl_torch.examples.libero.async_eval import start_async_eval_worker
+from serl_torch.examples.libero.async_eval import summarize_async_eval_results
+from serl_torch.examples.libero.async_eval import wait_for_async_eval_worker
+from serl_torch.examples.libero.env.factory import create_env
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.residual_observation import (
     build_chunk_residual_obs,
@@ -62,6 +71,114 @@ from serl_torch.examples.libero.residual_observation import (
 
 FILL_WAIT_SLEEP_SEC = 1.0
 LEARNER_IDLE_SLEEP_SEC = 1.0
+
+
+def _sync_async_eval_results_to_wandb(
+    async_eval: AsyncEvalRuntime,
+    *,
+    wandb_logger: WandBLogger,
+    logger: logging.Logger,
+) -> None:
+    if not async_eval.enabled:
+        return
+    records = load_new_async_eval_results(async_eval)
+    for payload in records:
+        status = str(payload.get("status", "")).strip().lower()
+        train_update_step_raw = payload.get("train_update_step", None)
+        try:
+            if train_update_step_raw is None:
+                continue
+            train_update_step = int(train_update_step_raw)
+        except Exception:
+            continue
+
+        metrics: dict[str, Any] = {
+            "async_eval/status_ok": 1.0 if status == "ok" else 0.0,
+            "async_eval/status_failed": 0.0 if status == "ok" else 1.0,
+        }
+        for payload_key, metric_key in (
+            ("train_env_step", "async_eval/train_env_step"),
+            ("checkpoint_step", "async_eval/checkpoint_step"),
+            ("duration_sec", "async_eval/duration_sec"),
+            ("eval_index", "async_eval/eval_index"),
+        ):
+            value = payload.get(payload_key, None)
+            if isinstance(value, (int, float)):
+                metrics[metric_key] = float(value)
+
+        summary = payload.get("summary", None)
+        if status == "ok" and isinstance(summary, dict):
+            for payload_key, metric_key in (
+                ("success_rate", "async_eval/success_rate"),
+                ("mean_return", "async_eval/mean_return"),
+                ("mean_episode_steps", "async_eval/mean_episode_steps"),
+                ("successes", "async_eval/successes"),
+                ("episodes_completed", "async_eval/episodes_completed"),
+                ("env_steps", "async_eval/eval_env_steps"),
+            ):
+                value = summary.get(payload_key, None)
+                if isinstance(value, (int, float)):
+                    metrics[metric_key] = float(value)
+
+        wandb_logger.log(to_jsonable(metrics), step=train_update_step)
+
+        if status == "ok":
+            logger.info(
+                "async eval done: eval_index=%s update_steps=%s env_steps=%s success_rate=%s",
+                payload.get("eval_index", None),
+                train_update_step,
+                payload.get("train_env_step", None),
+                (
+                    summary.get("success_rate", None)
+                    if isinstance(summary, dict)
+                    else None
+                ),
+            )
+        else:
+            logger.warning(
+                "async eval failed: eval_index=%s update_steps=%s error=%s",
+                payload.get("eval_index", None),
+                train_update_step,
+                payload.get("error", None),
+            )
+
+
+def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
+    value = metrics.get(key, None)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _format_optional_metric(value: float | None, *, digits: int = 3) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.{digits}f}"
+
+
+def _format_learner_heartbeat(
+    *,
+    update_steps: int,
+    env_steps: int,
+    replay_size: int,
+    updates_per_sec: float,
+    update_info: dict[str, Any],
+) -> str:
+    return (
+        "learner heartbeat: "
+        f"update_steps={int(update_steps)} "
+        f"env_steps={int(env_steps)} "
+        f"replay_size={int(replay_size)} "
+        f"updates_per_sec={updates_per_sec:.2f} "
+        f"critic_loss={_format_optional_metric(_maybe_float(update_info, 'critic_loss'))} "
+        f"critic_td_loss={_format_optional_metric(_maybe_float(update_info, 'critic_td_loss'))} "
+        f"actor_loss={_format_optional_metric(_maybe_float(update_info, 'actor_loss'))} "
+        f"temperature={_format_optional_metric(_maybe_float(update_info, 'temperature'))} "
+        f"entropy={_format_optional_metric(_maybe_float(update_info, 'entropy'))} "
+        f"predicted_qs={_format_optional_metric(_maybe_float(update_info, 'predicted_qs'))} "
+        f"target_qs={_format_optional_metric(_maybe_float(update_info, 'target_qs'))} "
+        f"actor_predicted_q={_format_optional_metric(_maybe_float(update_info, 'actor_predicted_q'))}"
+    )
 
 
 def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -131,6 +248,12 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         "episodes": 0,
         "successes": 0,
     }
+    progress_bar = tqdm(
+        total=int(max_env_steps),
+        desc="actor env_steps",
+        dynamic_ncols=True,
+        leave=True,
+    )
 
     try:
         while env_steps < max_env_steps:
@@ -175,6 +298,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     )
 
                 episode_done = False
+                should_log_timer = False
 
                 for action in final_actions:
 
@@ -217,6 +341,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
 
                     last_info = dict(info)
                     env_steps += 1
+                    progress_bar.update(1)
                     episode_steps += 1
                     episode_return += float(reward)
                     episode_success = bool(episode_success or env_done)
@@ -233,14 +358,17 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                         client.update()
 
                     if env_steps % log_period == 0:
-                        client.request(
-                            "send-stats",
-                            {"actor_timer": to_jsonable(timer.get_average_times())},
-                        )
+                        should_log_timer = True
                     if episode_done or env_steps >= max_env_steps:
                         break
 
                 timer.tock("total")
+
+                if should_log_timer:
+                    client.request(
+                        "send-stats",
+                        {"actor_timer": to_jsonable(timer.get_average_times())},
+                    )
 
                 if episode_done:
                     break
@@ -262,6 +390,11 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
             }
 
             client.request("send-stats", episode_stats)
+            progress_bar.set_postfix(
+                episode=int(episode_id),
+                success=int(bool(episode_success)),
+                refresh=False,
+            )
             logger.info(
                 "episode=%s success=%s steps=%s return=%.3f env_steps=%s",
                 int(episode_id),
@@ -286,6 +419,10 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         except Exception:  # noqa: BLE001
             pass
         try:
+            progress_bar.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             env.close(clear_cache=False)
         except Exception:  # noqa: BLE001
             pass
@@ -297,7 +434,12 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 pass
 
 
-def learner(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+def learner(
+    cfg: LiberoTrainConfig,
+    *,
+    run_dir: Path,
+    logger: logging.Logger,
+) -> None:
     image_keys = cfg.obs.image_keys
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
@@ -356,6 +498,11 @@ def learner(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         wandb_output_dir=str(wandb_dir),
         debug=cfg.wandb.debug,
     )
+    async_eval = start_async_eval_worker(
+        cfg,
+        run_dir=run_dir,
+        logger=logger,
+    )
 
     update_steps = 0
     env_steps = 0
@@ -388,18 +535,46 @@ def learner(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     server.start(threaded=True)
 
     training_starts = cfg.training.training_starts
-    while len(replay_buffer) < training_starts:
-        logger.info(
-            "filling replay buffer: %s / %s",
-            int(len(replay_buffer)),
-            int(training_starts),
-        )
-        time.sleep(FILL_WAIT_SLEEP_SEC)
+    warmup_bar = tqdm(
+        total=int(training_starts),
+        initial=min(int(len(replay_buffer)), int(training_starts)),
+        desc="learner replay warmup",
+        dynamic_ncols=True,
+        leave=True,
+    )
+    warmup_replay_size = min(int(len(replay_buffer)), int(training_starts))
+    try:
+        while len(replay_buffer) < training_starts:
+            current_replay_size = min(int(len(replay_buffer)), int(training_starts))
+            if current_replay_size > warmup_replay_size:
+                warmup_bar.update(current_replay_size - warmup_replay_size)
+                warmup_replay_size = current_replay_size
+            warmup_bar.set_postfix(
+                replay=int(len(replay_buffer)),
+                env_steps=int(env_steps),
+                refresh=False,
+            )
+            time.sleep(FILL_WAIT_SLEEP_SEC)
+        current_replay_size = min(int(len(replay_buffer)), int(training_starts))
+        if current_replay_size > warmup_replay_size:
+            warmup_bar.update(current_replay_size - warmup_replay_size)
+    finally:
+        warmup_bar.close()
+    logger.info(
+        "replay warmup complete: replay=%s training_starts=%s env_steps=%s",
+        int(len(replay_buffer)),
+        int(training_starts),
+        int(env_steps),
+    )
 
     server.publish_network(
         snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
     )
-    logger.info("Published initial learner network")
+    logger.info(
+        "publish network: step=%s env_steps=%s reason=initial",
+        int(update_steps),
+        int(env_steps),
+    )
 
     checkpoint_every = cfg.training.checkpoint.every_steps
     checkpoint_keep = cfg.training.checkpoint.keep
@@ -413,6 +588,8 @@ def learner(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     critic_actor_ratio = max(1, cfg.training.critic_actor_ratio)
     steps_per_update = cfg.training.steps_per_update
     timer = Timer()
+    last_log_time = time.time()
+    last_log_update_steps = int(update_steps)
 
     try:
         while update_steps < max_update_steps:
@@ -449,42 +626,156 @@ def learner(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                     utd_ratio=cfg.sac.utd_ratio,
                 )
 
-            if update_steps > 0 and update_steps % steps_per_update == 0:
+            update_steps += 1
+
+            if update_steps % steps_per_update == 0:
                 server.publish_network(
                     snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
                 )
+                logger.info(
+                    "publish network: step=%s env_steps=%s reason=periodic",
+                    int(update_steps),
+                    int(env_steps),
+                )
 
             if update_steps % log_period == 0:
+                check_async_eval_worker(async_eval, logger=logger)
+                _sync_async_eval_results_to_wandb(
+                    async_eval,
+                    wandb_logger=wandb_logger,
+                    logger=logger,
+                )
                 update_metrics = to_jsonable(update_info)
+                now = time.time()
+                elapsed_sec = max(now - last_log_time, 1e-6)
+                updates_since_last_log = max(1, int(update_steps - last_log_update_steps))
+                updates_per_sec = float(updates_since_last_log) / float(elapsed_sec)
+                last_log_time = now
+                last_log_update_steps = int(update_steps)
+                timer_metrics = to_jsonable(timer.get_average_times())
                 wandb_logger.log(update_metrics, step=update_steps)
                 wandb_logger.log(
-                    {"timer": to_jsonable(timer.get_average_times())},
+                    {
+                        "learner/updates_per_sec": float(updates_per_sec),
+                        "learner/replay_size": int(len(replay_buffer)),
+                    },
+                    step=update_steps,
+                )
+                wandb_logger.log(
+                    {"timer": timer_metrics},
                     step=update_steps,
                 )
                 logger.info(
-                    "update_steps=%s env_steps=%s replay=%s info=%s",
-                    int(update_steps),
-                    int(env_steps),
-                    int(len(replay_buffer)),
-                    update_metrics,
+                    _format_learner_heartbeat(
+                        update_steps=int(update_steps),
+                        env_steps=int(env_steps),
+                        replay_size=int(len(replay_buffer)),
+                        updates_per_sec=float(updates_per_sec),
+                        update_info=dict(update_metrics),
+                    )
                 )
 
             if checkpoint_every > 0 and update_steps % checkpoint_every == 0:
-                save_agent_checkpoint(
+                checkpoint_path = save_agent_checkpoint(
                     checkpoint_dir,
                     agent,
                     step=int(update_steps),
                     keep=int(checkpoint_keep),
                 )
+                logger.info(
+                    "checkpoint saved: step=%s env_steps=%s path=%s",
+                    int(update_steps),
+                    int(env_steps),
+                    checkpoint_path,
+                )
 
-            update_steps += 1
+            if (
+                async_eval.enabled
+                and update_steps % int(async_eval.every_steps) == 0
+                and async_eval.eval_checkpoint_dir is not None
+            ):
+                async_eval_checkpoint_path = save_agent_checkpoint(
+                    async_eval.eval_checkpoint_dir,
+                    agent,
+                    step=int(update_steps),
+                    keep=int(async_eval.eval_checkpoint_keep),
+                )
+                append_async_eval_request(
+                    async_eval,
+                    {
+                        "eval_index": int(async_eval.triggered_count),
+                        "train_update_step": int(update_steps),
+                        "train_env_step": int(env_steps),
+                        "checkpoint_step": int(update_steps),
+                        "checkpoint_path": str(async_eval_checkpoint_path),
+                    },
+                )
+                logger.info(
+                    "queued async eval: eval_index=%s update_steps=%s env_steps=%s checkpoint=%s",
+                    int(max(0, async_eval.triggered_count - 1)),
+                    int(update_steps),
+                    int(env_steps),
+                    async_eval_checkpoint_path,
+                )
 
     finally:
+        async_eval_return_code = None
+        if async_eval.enabled:
+            append_async_eval_stop(async_eval)
+            async_eval_return_code = wait_for_async_eval_worker(
+                async_eval,
+                logger=logger,
+            )
+            _sync_async_eval_results_to_wandb(
+                async_eval,
+                wandb_logger=wandb_logger,
+                logger=logger,
+            )
+            if async_eval_return_code not in (None, 0):
+                logger.warning(
+                    "async eval worker exited with returncode=%s; see %s",
+                    async_eval_return_code,
+                    async_eval.worker_log_path,
+                )
+        async_eval_counts = summarize_async_eval_results(async_eval.summary_jsonl_path)
         summary.update(
             {
                 "update_steps": int(update_steps),
                 "env_steps": int(env_steps),
                 "replay_size": int(len(replay_buffer)),
+                "async_eval": {
+                    "enabled": bool(async_eval.enabled),
+                    "every_steps": int(async_eval.every_steps),
+                    "triggered": int(async_eval.triggered_count),
+                    "results_total": int(async_eval_counts["total"]),
+                    "results_ok": int(async_eval_counts["ok"]),
+                    "results_failed": int(async_eval_counts["failed"]),
+                    "queue_path": (
+                        str(async_eval.queue_path)
+                        if async_eval.queue_path is not None
+                        else None
+                    ),
+                    "summary_jsonl_path": (
+                        str(async_eval.summary_jsonl_path)
+                        if async_eval.summary_jsonl_path is not None
+                        else None
+                    ),
+                    "worker_log_path": (
+                        str(async_eval.worker_log_path)
+                        if async_eval.worker_log_path is not None
+                        else None
+                    ),
+                    "worker_return_code": (
+                        None
+                        if async_eval_return_code is None
+                        else int(async_eval_return_code)
+                    ),
+                    "eval_checkpoint_dir": (
+                        str(async_eval.eval_checkpoint_dir)
+                        if async_eval.eval_checkpoint_dir is not None
+                        else None
+                    ),
+                },
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:

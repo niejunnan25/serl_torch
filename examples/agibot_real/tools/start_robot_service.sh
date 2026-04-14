@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOCAL_ENV_SH="$ROOT_DIR/robot_service/env.sh"
-LOCAL_CONF="$ROOT_DIR/robot_service/conf/copilot.pbtxt"
-ROBOT_SERVICE_RUNNER="$ROOT_DIR/scripts/services/start_robot_service.py"
+LOCAL_ENV_SH="$ROOT_DIR/robot/service/env.sh"
+LOCAL_CONF="$ROOT_DIR/robot/service/conf/copilot.pbtxt"
+ROBOT_SERVICE_RUNNER="$ROOT_DIR/scripts/start_robot_service.py"
 
 # shellcheck source=examples/agibot_real/tools/common.sh
 source "$ROOT_DIR/tools/common.sh"

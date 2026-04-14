@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import Any
 from typing import Iterable
 from typing import Literal
@@ -163,6 +164,34 @@ class CheckpointConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AsyncEvalCheckpointConfig:
+    dir: str
+    keep: int
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncEvalEnvConfig:
+    backend: EnvBackend
+    remote: RemoteEnvConfig
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncEvalConfig:
+    enabled: bool
+    every_steps: int
+    episodes: int
+    start_episode_idx: int
+    max_env_steps_per_episode: int | None
+    deterministic: bool
+    poll_interval_sec: float
+    queue_file: str
+    summary_jsonl: str
+    worker_log_file: str
+    checkpoint: AsyncEvalCheckpointConfig
+    env: AsyncEvalEnvConfig
+
+
+@dataclass(frozen=True, slots=True)
 class TrainingConfig:
     training_starts: int
     steps_per_update: int
@@ -172,11 +201,28 @@ class TrainingConfig:
     log_period: int
     mixed_precision: MixedPrecisionConfig
     checkpoint: CheckpointConfig
+    async_eval: AsyncEvalConfig
+
+
+@dataclass(frozen=True, slots=True)
+class EvalTrainingConfig:
+    mixed_precision: MixedPrecisionConfig
+
+
+@dataclass(frozen=True, slots=True)
+class EvalConfig:
+    episodes: int
+    start_episode_idx: int
+    max_env_steps_per_episode: int | None
+    deterministic: bool
+    checkpoint_path: str | None
+    checkpoint_step: int | None
 
 
 @dataclass(frozen=True, slots=True)
 class LoggingConfig:
     summary_file: str
+    episode_log_file: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +246,29 @@ class LiberoTrainConfig:
     logging: LoggingConfig
 
 
-def cfg_to_log_payload(cfg: LiberoTrainConfig) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class LiberoEvalConfig:
+    global_seed: int
+    libero_root: str | None
+    libero_config_dir: str | None
+    libero_datasets_root: str | None
+    task: TaskConfig
+    policy: PolicyConfig
+    env: EnvConfig
+    obs: ObsConfig
+    residual: ResidualConfig
+    encoder: EncoderConfig
+    network: NetworkConfig
+    sac: SacConfig
+    training: EvalTrainingConfig
+    logging: LoggingConfig
+    eval: EvalConfig
+
+
+LiberoRunConfig = LiberoTrainConfig | LiberoEvalConfig
+
+
+def cfg_to_log_payload(cfg: Any) -> dict[str, Any]:
     payload = to_jsonable(asdict(cfg))
     if not isinstance(payload, dict):
         raise TypeError("typed config payload must serialize to a dict")
@@ -288,6 +356,43 @@ def _optional_nonnegative_float(value: Any, field_name: str) -> float | None:
     return _nonnegative_float(value, field_name)
 
 
+def _optional_positive_float(value: Any, field_name: str) -> float | None:
+    if value is None:
+        return None
+    return _positive_float(value, field_name)
+
+
+def _int_or_default(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _optional_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    try:
+        resolved = float(value)
+    except Exception:
+        return float(default)
+    return resolved if math.isfinite(resolved) else float(default)
+
+
+def _str_or_default(value: Any, default: str) -> str:
+    if value is None:
+        return str(default)
+    resolved = str(value)
+    return resolved if resolved else str(default)
+
+
 def _parse_choice(
     value: Any,
     field_name: str,
@@ -317,6 +422,14 @@ def _parse_vector_obs_keys(values: Any) -> tuple[str, ...] | None:
     if not resolved:
         raise ValueError("obs.vector_obs_keys must not be empty when configured")
     return resolved
+
+
+def _parse_task_cfg(cfg: DictConfig) -> TaskConfig:
+    task_cfg = cfg.get("task", {})
+    return TaskConfig(
+        suite_name=_required_str(task_cfg.get("suite_name", None), "task.suite_name"),
+        task_id=_nonnegative_int(task_cfg.get("task_id", None), "task.task_id"),
+    )
 
 
 def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
@@ -376,6 +489,23 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
     )
 
 
+def _parse_remote_env_cfg(remote_cfg: Any, *, field_prefix: str) -> RemoteEnvConfig:
+    return RemoteEnvConfig(
+        host=_required_str(
+            remote_cfg.get("host", "127.0.0.1"),
+            f"{field_prefix}.host",
+        ),
+        port=_positive_int(
+            remote_cfg.get("port", 30000),
+            f"{field_prefix}.port",
+        ),
+        timeout_sec=_positive_float(
+            remote_cfg.get("timeout_sec", 120.0),
+            f"{field_prefix}.timeout_sec",
+        ),
+    )
+
+
 def _parse_env_cfg(cfg: DictConfig) -> EnvConfig:
     env_cfg = cfg.get("env", {})
     backend = _parse_choice(
@@ -397,13 +527,22 @@ def _parse_env_cfg(cfg: DictConfig) -> EnvConfig:
             "env.max_episode_steps",
         ),
         seed=_int_value(env_cfg.get("seed", None), "env.seed"),
-        remote=RemoteEnvConfig(
-            host=_required_str(remote_cfg.get("host", "127.0.0.1"), "env.remote.host"),
-            port=_positive_int(remote_cfg.get("port", 30000), "env.remote.port"),
-            timeout_sec=_positive_float(
-                remote_cfg.get("timeout_sec", 120.0),
-                "env.remote.timeout_sec",
-            ),
+        remote=_parse_remote_env_cfg(remote_cfg, field_prefix="env.remote"),
+    )
+
+
+def _parse_async_eval_env_cfg(async_eval_cfg: Any) -> AsyncEvalEnvConfig:
+    env_cfg = async_eval_cfg.get("env", {})
+    backend = _parse_choice(
+        env_cfg.get("backend", "remote"),
+        "training.async_eval.env.backend",
+        allowed=("local", "remote"),
+    )
+    return AsyncEvalEnvConfig(
+        backend=cast(EnvBackend, backend),
+        remote=_parse_remote_env_cfg(
+            env_cfg.get("remote", {}),
+            field_prefix="training.async_eval.env.remote",
         ),
     )
 
@@ -627,6 +766,144 @@ def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
     )
 
 
+def _parse_mixed_precision_cfg(
+    mixed_precision_cfg: Any,
+    *,
+    field_prefix: str,
+) -> MixedPrecisionConfig:
+    return MixedPrecisionConfig(
+        enabled=bool(mixed_precision_cfg.get("enabled", False)),
+        dtype=_required_str(
+            mixed_precision_cfg.get("dtype", "bfloat16"),
+            f"{field_prefix}.dtype",
+        ),
+    )
+
+
+def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
+    training_cfg = cfg.get("training", {})
+    async_eval_cfg = training_cfg.get("async_eval", {})
+    enabled = bool(async_eval_cfg.get("enabled", False))
+    every_steps = _nonnegative_int(
+        async_eval_cfg.get("every_steps", 5000),
+        "training.async_eval.every_steps",
+    )
+    if enabled and every_steps <= 0:
+        raise ValueError(
+            "training.async_eval.enabled=true requires training.async_eval.every_steps > 0"
+        )
+    if not enabled:
+        return AsyncEvalConfig(
+            enabled=False,
+            every_steps=every_steps,
+            episodes=_int_or_default(async_eval_cfg.get("episodes", 10), 10),
+            start_episode_idx=_int_or_default(
+                async_eval_cfg.get("start_episode_idx", 0),
+                0,
+            ),
+            max_env_steps_per_episode=_optional_int_or_none(
+                async_eval_cfg.get("max_env_steps_per_episode", None)
+            ),
+            deterministic=bool(async_eval_cfg.get("deterministic", True)),
+            poll_interval_sec=_float_or_default(
+                async_eval_cfg.get("poll_interval_sec", 5.0),
+                5.0,
+            ),
+            queue_file=_str_or_default(
+                async_eval_cfg.get("queue_file", "async_eval_queue.jsonl"),
+                "async_eval_queue.jsonl",
+            ),
+            summary_jsonl=_str_or_default(
+                async_eval_cfg.get("summary_jsonl", "async_eval_results.jsonl"),
+                "async_eval_results.jsonl",
+            ),
+            worker_log_file=_str_or_default(
+                async_eval_cfg.get("worker_log_file", "async_eval_worker.log"),
+                "async_eval_worker.log",
+            ),
+            checkpoint=AsyncEvalCheckpointConfig(
+                dir=_str_or_default(
+                    async_eval_cfg.get("checkpoint", {}).get(
+                        "dir", "async_eval_checkpoints"
+                    ),
+                    "async_eval_checkpoints",
+                ),
+                keep=_int_or_default(
+                    async_eval_cfg.get("checkpoint", {}).get("keep", 0),
+                    0,
+                ),
+            ),
+            env=AsyncEvalEnvConfig(
+                backend="remote",
+                remote=RemoteEnvConfig(
+                    host=_str_or_default(
+                        async_eval_cfg.get("env", {}).get("remote", {}).get(
+                            "host", "127.0.0.1"
+                        ),
+                        "127.0.0.1",
+                    ),
+                    port=_int_or_default(
+                        async_eval_cfg.get("env", {}).get("remote", {}).get(
+                            "port", 30010
+                        ),
+                        30010,
+                    ),
+                    timeout_sec=_float_or_default(
+                        async_eval_cfg.get("env", {}).get("remote", {}).get(
+                            "timeout_sec", 180.0
+                        ),
+                        180.0,
+                    ),
+                ),
+            ),
+        )
+    checkpoint_cfg = async_eval_cfg.get("checkpoint", {})
+    return AsyncEvalConfig(
+        enabled=enabled,
+        every_steps=every_steps,
+        episodes=_positive_int(
+            async_eval_cfg.get("episodes", 10),
+            "training.async_eval.episodes",
+        ),
+        start_episode_idx=_nonnegative_int(
+            async_eval_cfg.get("start_episode_idx", 0),
+            "training.async_eval.start_episode_idx",
+        ),
+        max_env_steps_per_episode=_optional_positive_int(
+            async_eval_cfg.get("max_env_steps_per_episode", None),
+            "training.async_eval.max_env_steps_per_episode",
+        ),
+        deterministic=bool(async_eval_cfg.get("deterministic", True)),
+        poll_interval_sec=_positive_float(
+            async_eval_cfg.get("poll_interval_sec", 5.0),
+            "training.async_eval.poll_interval_sec",
+        ),
+        queue_file=_required_str(
+            async_eval_cfg.get("queue_file", "async_eval_queue.jsonl"),
+            "training.async_eval.queue_file",
+        ),
+        summary_jsonl=_required_str(
+            async_eval_cfg.get("summary_jsonl", "async_eval_results.jsonl"),
+            "training.async_eval.summary_jsonl",
+        ),
+        worker_log_file=_required_str(
+            async_eval_cfg.get("worker_log_file", "async_eval_worker.log"),
+            "training.async_eval.worker_log_file",
+        ),
+        checkpoint=AsyncEvalCheckpointConfig(
+            dir=_required_str(
+                checkpoint_cfg.get("dir", "async_eval_checkpoints"),
+                "training.async_eval.checkpoint.dir",
+            ),
+            keep=_nonnegative_int(
+                checkpoint_cfg.get("keep", 0),
+                "training.async_eval.checkpoint.keep",
+            ),
+        ),
+        env=_parse_async_eval_env_cfg(async_eval_cfg),
+    )
+
+
 def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", {})
@@ -656,12 +933,9 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
             training_cfg.get("log_period", 1),
             "training.log_period",
         ),
-        mixed_precision=MixedPrecisionConfig(
-            enabled=bool(mixed_precision_cfg.get("enabled", False)),
-            dtype=_required_str(
-                mixed_precision_cfg.get("dtype", "bfloat16"),
-                "training.mixed_precision.dtype",
-            ),
+        mixed_precision=_parse_mixed_precision_cfg(
+            mixed_precision_cfg,
+            field_prefix="training.mixed_precision",
         ),
         checkpoint=CheckpointConfig(
             every_steps=_nonnegative_int(
@@ -677,24 +951,60 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
                 "training.checkpoint.dir",
             ),
         ),
+        async_eval=_parse_async_eval_cfg(cfg),
     )
 
 
-def _parse_logging_cfg(cfg: DictConfig) -> LoggingConfig:
+def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
+    training_cfg = cfg.get("training", {})
+    return EvalTrainingConfig(
+        mixed_precision=_parse_mixed_precision_cfg(
+            training_cfg.get("mixed_precision", {}),
+            field_prefix="training.mixed_precision",
+        )
+    )
+
+
+def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
+    eval_cfg = cfg.get("eval", {})
+    return EvalConfig(
+        episodes=_positive_int(eval_cfg.get("episodes", 10), "eval.episodes"),
+        start_episode_idx=_nonnegative_int(
+            eval_cfg.get("start_episode_idx", 0),
+            "eval.start_episode_idx",
+        ),
+        max_env_steps_per_episode=_optional_positive_int(
+            eval_cfg.get("max_env_steps_per_episode", None),
+            "eval.max_env_steps_per_episode",
+        ),
+        deterministic=bool(eval_cfg.get("deterministic", True)),
+        checkpoint_path=_optional_str(eval_cfg.get("checkpoint_path", None)),
+        checkpoint_step=_optional_positive_int(
+            eval_cfg.get("checkpoint_step", None),
+            "eval.checkpoint_step",
+        ),
+    )
+
+
+def _parse_logging_cfg(
+    cfg: DictConfig,
+    *,
+    default_episode_log_file: str | None = None,
+) -> LoggingConfig:
     logging_cfg = cfg.get("logging", {})
     return LoggingConfig(
         summary_file=_required_str(
             logging_cfg.get("summary_file", "summary.json"),
             "logging.summary_file",
-        )
+        ),
+        episode_log_file=_optional_str(
+            logging_cfg.get("episode_log_file", default_episode_log_file)
+        ),
     )
 
 
 def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
-    task = TaskConfig(
-        suite_name=_required_str(cfg.task.suite_name, "task.suite_name"),
-        task_id=_nonnegative_int(cfg.task.task_id, "task.task_id"),
-    )
+    task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
     runtime = _parse_runtime_cfg(cfg)
     obs = _parse_obs_cfg(cfg)
@@ -727,11 +1037,93 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     )
 
 
+def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:
+    task = _parse_task_cfg(cfg)
+    env = _parse_env_cfg(cfg)
+    obs = _parse_obs_cfg(cfg)
+    residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    encoder = _parse_encoder_cfg(cfg)
+
+    if encoder.use_proprio and obs.vector_obs_keys is None:
+        raise ValueError(
+            "encoder.use_proprio=true requires obs.vector_obs_keys to be configured"
+        )
+
+    return LiberoEvalConfig(
+        global_seed=_int_value(cfg.get("global_seed", 0), "global_seed"),
+        libero_root=_optional_str(cfg.get("libero_root", None)),
+        libero_config_dir=_optional_str(cfg.get("libero_config_dir", None)),
+        libero_datasets_root=_optional_str(cfg.get("libero_datasets_root", None)),
+        task=task,
+        policy=_parse_policy_cfg(cfg),
+        env=env,
+        obs=obs,
+        residual=residual,
+        encoder=encoder,
+        network=_parse_network_cfg(cfg),
+        sac=_parse_sac_cfg(cfg),
+        training=_parse_eval_training_cfg(cfg),
+        logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
+        eval=_parse_eval_cfg_block(cfg),
+    )
+
+
+def train_cfg_to_eval_cfg(
+    train_cfg: LiberoTrainConfig,
+    *,
+    eval_cfg: EvalConfig,
+    env_override: AsyncEvalEnvConfig | None = None,
+    logging: LoggingConfig | None = None,
+) -> LiberoEvalConfig:
+    eval_env = (
+        train_cfg.env
+        if env_override is None
+        else replace(
+            train_cfg.env,
+            backend=env_override.backend,
+            remote=env_override.remote,
+        )
+    )
+    eval_logging = logging
+    if eval_logging is None:
+        eval_logging = LoggingConfig(
+            summary_file="summary.json",
+            episode_log_file="episode_logs.jsonl",
+        )
+    elif eval_logging.episode_log_file is None:
+        eval_logging = replace(eval_logging, episode_log_file="episode_logs.jsonl")
+
+    return LiberoEvalConfig(
+        global_seed=train_cfg.global_seed,
+        libero_root=train_cfg.libero_root,
+        libero_config_dir=train_cfg.libero_config_dir,
+        libero_datasets_root=train_cfg.libero_datasets_root,
+        task=train_cfg.task,
+        policy=train_cfg.policy,
+        env=eval_env,
+        obs=train_cfg.obs,
+        residual=train_cfg.residual,
+        encoder=train_cfg.encoder,
+        network=train_cfg.network,
+        sac=train_cfg.sac,
+        training=EvalTrainingConfig(mixed_precision=train_cfg.training.mixed_precision),
+        logging=eval_logging,
+        eval=eval_cfg,
+    )
+
+
 __all__ = [
+    "AsyncEvalCheckpointConfig",
+    "AsyncEvalConfig",
+    "AsyncEvalEnvConfig",
     "CheckpointConfig",
     "EncoderConfig",
     "EnvBackend",
     "EnvConfig",
+    "EvalConfig",
+    "EvalTrainingConfig",
+    "LiberoEvalConfig",
+    "LiberoRunConfig",
     "LiberoTrainConfig",
     "LoggingConfig",
     "MixedPrecisionConfig",
@@ -752,5 +1144,7 @@ __all__ = [
     "TrainingConfig",
     "WandbConfig",
     "cfg_to_log_payload",
+    "parse_eval_cfg",
     "parse_train_cfg",
+    "train_cfg_to_eval_cfg",
 ]
