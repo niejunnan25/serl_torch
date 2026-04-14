@@ -3,7 +3,6 @@ from __future__ import annotations
 """Process queued LIBERO async-eval requests."""
 
 import argparse
-import json
 import logging
 import sys
 import time
@@ -21,6 +20,9 @@ if str(SERL_LAUNCHER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 from serl_launcher.utils.jsonl import append_jsonl
+from serl_launcher.async_eval import format_async_eval_run_dir_name
+from serl_launcher.async_eval import load_async_eval_queue
+from serl_launcher.async_eval import load_completed_async_eval_indices
 from serl_torch.examples.libero.config import EvalConfig
 from serl_torch.examples.libero.config import LiberoEvalConfig
 from serl_torch.examples.libero.config import LiberoTrainConfig
@@ -31,55 +33,6 @@ from serl_torch.examples.libero.eval_runner import run_eval
 
 
 LOGGER = logging.getLogger("libero_async_eval_worker")
-
-
-def _load_completed_eval_indices(summary_jsonl: Path) -> set[int]:
-    completed: set[int] = set()
-    if not summary_jsonl.exists():
-        return completed
-    with open(summary_jsonl, "r", encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            eval_index_raw = payload.get("eval_index", None)
-            try:
-                if eval_index_raw is not None:
-                    completed.add(int(eval_index_raw))
-            except Exception:
-                continue
-    return completed
-
-
-def _load_queue(queue_file: Path) -> tuple[list[dict[str, Any]], bool]:
-    records: list[dict[str, Any]] = []
-    stop_requested = False
-    if not queue_file.exists():
-        return records, stop_requested
-    with open(queue_file, "r", encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            record_type = str(payload.get("type", "eval")).strip().lower()
-            if record_type == "stop":
-                stop_requested = True
-                continue
-            if record_type == "eval":
-                records.append(payload)
-    return records, stop_requested
 
 
 def _build_eval_cfg(
@@ -121,12 +74,11 @@ def _process_one_request(
     train_update_step = int(request["train_update_step"])
     train_env_step = int(request["train_env_step"])
     checkpoint_path = str(request["checkpoint_path"])
-    eval_dir_name = f"eval_{eval_index:06d}_step_{checkpoint_step:09d}"
-    if train_episode_id is not None:
-        eval_dir_name = (
-            f"eval_{eval_index:06d}_episode_{int(train_episode_id):06d}"
-            f"_step_{checkpoint_step:09d}"
-        )
+    eval_dir_name = format_async_eval_run_dir_name(
+        eval_index=int(eval_index),
+        checkpoint_step=int(checkpoint_step),
+        train_episode_id=train_episode_id,
+    )
     eval_run_dir = (train_run_dir / "async_eval_runs" / eval_dir_name).resolve()
     eval_run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -211,8 +163,8 @@ def main() -> None:
     )
 
     while True:
-        completed_eval_indices = _load_completed_eval_indices(summary_jsonl)
-        queue_records, stop_requested = _load_queue(queue_file)
+        completed_eval_indices = load_completed_async_eval_indices(summary_jsonl)
+        queue_records, stop_requested = load_async_eval_queue(queue_file)
         pending_records = []
         for record in queue_records:
             eval_index_raw = record.get("eval_index", None)

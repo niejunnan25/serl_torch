@@ -2,49 +2,23 @@ from __future__ import annotations
 
 """Local async-eval helpers for the LIBERO reference training loop."""
 
-import json
 import logging
-import subprocess
 import sys
-import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any
 
-from serl_launcher.utils.jsonl import append_jsonl
+from serl_launcher.async_eval import append_async_eval_request
+from serl_launcher.async_eval import append_async_eval_stop
+from serl_launcher.async_eval import AsyncEvalRuntime
+from serl_launcher.async_eval import check_async_eval_worker
+from serl_launcher.async_eval import count_jsonl_lines
+from serl_launcher.async_eval import launch_async_eval_worker_process
+from serl_launcher.async_eval import load_new_async_eval_results
+from serl_launcher.async_eval import resolve_async_eval_path
+from serl_launcher.async_eval import summarize_async_eval_results
+from serl_launcher.async_eval import wait_for_async_eval_worker
 
 from serl_torch.examples.libero.config import AsyncEvalConfig
 from serl_torch.examples.libero.config import LiberoTrainConfig
-
-
-@dataclass
-class AsyncEvalRuntime:
-    enabled: bool = False
-    every_episodes: int = 0
-    queue_path: Path | None = None
-    summary_jsonl_path: Path | None = None
-    worker_log_path: Path | None = None
-    worker_proc: subprocess.Popen | None = None
-    worker_log_fp: IO[str] | None = None
-    eval_checkpoint_dir: Path | None = None
-    eval_checkpoint_keep: int = 0
-    processed_summary_lines: int = 0
-    triggered_count: int = 0
-    worker_dead_reported: bool = False
-
-
-def _resolve_path(path_value: Any, *, run_dir: Path) -> Path:
-    path = Path(str(path_value))
-    if not path.is_absolute():
-        path = run_dir / path
-    return path.resolve()
-
-
-def _count_jsonl_lines(path: Path | None) -> int:
-    if path is None or (not path.exists()):
-        return 0
-    with open(path, "r", encoding="utf-8") as fp:
-        return sum(1 for _ in fp)
 
 
 def _validate_async_eval_env(
@@ -94,19 +68,19 @@ def start_async_eval_worker(
             f"got {poll_interval_sec}"
         )
 
-    queue_path = _resolve_path(
+    queue_path = resolve_async_eval_path(
         async_eval_cfg.queue_file,
         run_dir=run_dir,
     )
-    summary_jsonl_path = _resolve_path(
+    summary_jsonl_path = resolve_async_eval_path(
         async_eval_cfg.summary_jsonl,
         run_dir=run_dir,
     )
-    worker_log_path = _resolve_path(
+    worker_log_path = resolve_async_eval_path(
         async_eval_cfg.worker_log_file,
         run_dir=run_dir,
     )
-    eval_checkpoint_dir = _resolve_path(
+    eval_checkpoint_dir = resolve_async_eval_path(
         async_eval_cfg.checkpoint.dir,
         run_dir=run_dir,
     )
@@ -146,11 +120,9 @@ def start_async_eval_worker(
         str(poll_interval_sec),
     ]
 
-    worker_log_fp = open(worker_log_path, "a", encoding="utf-8")
-    worker_proc = subprocess.Popen(
-        cmd,
-        stdout=worker_log_fp,
-        stderr=subprocess.STDOUT,
+    worker_proc, worker_log_fp = launch_async_eval_worker_process(
+        cmd=cmd,
+        worker_log_path=worker_log_path,
     )
     logger.info(
         "Async eval worker started: pid=%s queue=%s summary=%s log=%s",
@@ -169,133 +141,5 @@ def start_async_eval_worker(
         worker_log_fp=worker_log_fp,
         eval_checkpoint_dir=eval_checkpoint_dir,
         eval_checkpoint_keep=int(eval_checkpoint_keep),
-        processed_summary_lines=_count_jsonl_lines(summary_jsonl_path),
+        processed_summary_lines=count_jsonl_lines(summary_jsonl_path),
     )
-
-
-def check_async_eval_worker(async_eval: AsyncEvalRuntime, *, logger: logging.Logger) -> None:
-    if (not async_eval.enabled) or async_eval.worker_proc is None:
-        return
-    if async_eval.worker_dead_reported:
-        return
-    return_code = async_eval.worker_proc.poll()
-    if return_code is None:
-        return
-    async_eval.worker_dead_reported = True
-    logger.warning(
-        "Async eval worker exited early with returncode=%s; see %s",
-        return_code,
-        async_eval.worker_log_path,
-    )
-
-
-def append_async_eval_request(
-    async_eval: AsyncEvalRuntime,
-    payload: dict[str, Any],
-) -> None:
-    if (not async_eval.enabled) or async_eval.queue_path is None:
-        return
-    record = dict(payload)
-    record["type"] = "eval"
-    record.setdefault(
-        "timestamp",
-        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-    )
-    append_jsonl(async_eval.queue_path, record)
-    async_eval.triggered_count += 1
-
-
-def append_async_eval_stop(async_eval: AsyncEvalRuntime) -> None:
-    if (not async_eval.enabled) or async_eval.queue_path is None:
-        return
-    append_jsonl(
-        async_eval.queue_path,
-        {
-            "type": "stop",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-        },
-    )
-
-
-def load_new_async_eval_results(async_eval: AsyncEvalRuntime) -> list[dict[str, Any]]:
-    summary_jsonl_path = async_eval.summary_jsonl_path
-    if summary_jsonl_path is None or (not summary_jsonl_path.exists()):
-        return []
-    with open(summary_jsonl_path, "r", encoding="utf-8") as fp:
-        lines = fp.readlines()
-    processed_lines = int(async_eval.processed_summary_lines)
-    if processed_lines < 0 or processed_lines > len(lines):
-        processed_lines = 0
-
-    records: list[dict[str, Any]] = []
-    for line in lines[processed_lines:]:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            records.append(payload)
-    async_eval.processed_summary_lines = int(len(lines))
-    return records
-
-
-def wait_for_async_eval_worker(
-    async_eval: AsyncEvalRuntime,
-    *,
-    logger: logging.Logger,
-    poll_interval_sec: float = 5.0,
-) -> int | None:
-    if (not async_eval.enabled) or async_eval.worker_proc is None:
-        return None
-
-    worker_proc = async_eval.worker_proc
-    last_log_time = 0.0
-    logger.info("Waiting for async eval worker to drain queued evaluations")
-    try:
-        while True:
-            return_code = worker_proc.poll()
-            if return_code is not None:
-                return return_code
-            now = time.time()
-            if now - last_log_time >= 30.0:
-                logger.info(
-                    "Async eval worker still running; queue=%s summary=%s",
-                    async_eval.queue_path,
-                    async_eval.summary_jsonl_path,
-                )
-                last_log_time = now
-            time.sleep(max(0.1, float(poll_interval_sec)))
-    finally:
-        if async_eval.worker_log_fp is not None:
-            async_eval.worker_log_fp.close()
-            async_eval.worker_log_fp = None
-
-
-def summarize_async_eval_results(
-    summary_jsonl_path: Path | None,
-) -> dict[str, int]:
-    if summary_jsonl_path is None or (not summary_jsonl_path.exists()):
-        return {"ok": 0, "failed": 0, "total": 0}
-
-    counts = {"ok": 0, "failed": 0, "total": 0}
-    with open(summary_jsonl_path, "r", encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            counts["total"] += 1
-            status = str(payload.get("status", "")).strip().lower()
-            if status == "ok":
-                counts["ok"] += 1
-            else:
-                counts["failed"] += 1
-    return counts

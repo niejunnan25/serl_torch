@@ -17,7 +17,6 @@ from agentlace.trainer import TrainerConfig
 from agentlace.trainer import TrainerServer
 import hydra
 import numpy as np
-import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from tqdm.auto import tqdm
@@ -32,6 +31,8 @@ from serl_launcher.agents.continuous.drq_typed_config import (
 )
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
+from serl_launcher.async_eval import append_async_eval_checkpoint_index
+from serl_launcher.async_eval import save_async_eval_checkpoint_payload
 from serl_launcher.common.training_observability import configure_eval_wandb_metrics
 from serl_launcher.common.training_observability import configure_learner_wandb_metrics
 from serl_launcher.common.training_observability import configure_rollout_wandb_metrics
@@ -82,7 +83,6 @@ from serl_torch.examples.libero.residual_observation import (
 
 FILL_WAIT_SLEEP_SEC = 1.0
 LEARNER_IDLE_SLEEP_SEC = 1.0
-ASYNC_EVAL_CHECKPOINT_INDEX_FILE = "async_eval_checkpoint_index.jsonl"
 ACTOR_TIMER_LOG_FILE = "actor_timers.jsonl"
 LEARNER_TIMER_LOG_FILE = "learner_timers.jsonl"
 
@@ -145,40 +145,6 @@ def _sync_async_eval_results_to_wandb(
                 train_update_step,
                 payload.get("error", None),
             )
-
-
-def _save_async_eval_checkpoint(
-    checkpoint_dir: str | Path,
-    agent: Any,
-    *,
-    episode_id: int,
-    step: int,
-) -> Path:
-    checkpoint_dir_path = Path(checkpoint_dir)
-    checkpoint_dir_path.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir_path / f"episode_{int(episode_id):06d}.pt"
-    payload = snapshot_agent_checkpoint_payload(agent, step=int(step))
-    torch.save(payload, checkpoint_path)
-    return checkpoint_path
-
-
-def _append_async_eval_checkpoint_index(
-    checkpoint_dir: str | Path,
-    *,
-    episode_id: int,
-    checkpoint_step: int,
-    checkpoint_path: str | Path,
-) -> None:
-    checkpoint_dir_path = Path(checkpoint_dir)
-    checkpoint_dir_path.mkdir(parents=True, exist_ok=True)
-    index_path = checkpoint_dir_path / ASYNC_EVAL_CHECKPOINT_INDEX_FILE
-    record = {
-        "train_episode_id": int(episode_id),
-        "checkpoint_step": int(checkpoint_step),
-        "checkpoint_path": str(Path(checkpoint_path).name),
-    }
-    append_jsonl(index_path, record)
-
 
 def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
     value = metrics.get(key, None)
@@ -832,13 +798,16 @@ def learner(
                 target_env_step = int(
                     completed_episode_env_steps.get(target_episode, env_steps)
                 )
-            async_eval_checkpoint_path = _save_async_eval_checkpoint(
-                async_eval.eval_checkpoint_dir,
+            async_eval_checkpoint_payload = snapshot_agent_checkpoint_payload(
                 agent,
-                episode_id=int(target_episode),
                 step=int(update_steps),
             )
-            _append_async_eval_checkpoint_index(
+            async_eval_checkpoint_path = save_async_eval_checkpoint_payload(
+                async_eval.eval_checkpoint_dir,
+                async_eval_checkpoint_payload,
+                episode_id=int(target_episode),
+            )
+            append_async_eval_checkpoint_index(
                 async_eval.eval_checkpoint_dir,
                 episode_id=int(target_episode),
                 checkpoint_step=int(update_steps),

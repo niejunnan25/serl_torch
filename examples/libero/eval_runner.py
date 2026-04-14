@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from serl_launcher.async_eval import resolve_async_eval_checkpoint_from_index
 from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
@@ -39,9 +40,6 @@ from serl_torch.examples.libero.residual_observation import (
     prepare_base_actions_chunk,
 )
 
-ASYNC_EVAL_CHECKPOINT_INDEX_FILE = "async_eval_checkpoint_index.jsonl"
-
-
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
     if value is None:
         return None
@@ -63,73 +61,6 @@ def _positive_int(value: Any, field_name: str) -> int:
     if resolved <= 0:
         raise ValueError(f"{field_name} must be positive, got {resolved}")
     return resolved
-
-
-def _checkpoint_step_from_path(path: Path) -> int | None:
-    stem = path.stem
-    if "_" not in stem:
-        return None
-    try:
-        return int(stem.rsplit("_", maxsplit=1)[-1])
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _resolve_async_eval_checkpoint_from_index(
-    checkpoint_dir: Path,
-    *,
-    checkpoint_step: int | None,
-) -> Path | None:
-    index_path = checkpoint_dir / ASYNC_EVAL_CHECKPOINT_INDEX_FILE
-    if not index_path.exists():
-        return None
-
-    matches: list[tuple[int, int, Path]] = []
-    with open(index_path, "r", encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-
-            checkpoint_step_raw = payload.get("checkpoint_step", None)
-            checkpoint_path_raw = payload.get("checkpoint_path", None)
-            if checkpoint_step_raw is None or checkpoint_path_raw is None:
-                continue
-            try:
-                record_checkpoint_step = int(checkpoint_step_raw)
-            except Exception:
-                continue
-
-            checkpoint_file = Path(str(checkpoint_path_raw)).expanduser()
-            if not checkpoint_file.is_absolute():
-                checkpoint_file = checkpoint_dir / checkpoint_file
-            checkpoint_file = checkpoint_file.resolve()
-            if not checkpoint_file.exists():
-                continue
-
-            train_episode_id_raw = payload.get("train_episode_id", None)
-            try:
-                train_episode_id = (
-                    -1 if train_episode_id_raw is None else int(train_episode_id_raw)
-                )
-            except Exception:
-                train_episode_id = -1
-
-            if checkpoint_step is None or record_checkpoint_step == int(checkpoint_step):
-                matches.append(
-                    (record_checkpoint_step, train_episode_id, checkpoint_file)
-                )
-
-    if not matches:
-        return None
-    return max(matches, key=lambda item: (item[0], item[1], item[2].name))[2]
-
 
 def _resolve_checkpoint_input(
     checkpoint_path_raw: Any,
@@ -156,7 +87,7 @@ def _resolve_checkpoint_input(
     )
     resolved_checkpoint_path = None
     if checkpoint_input_path.is_dir():
-        resolved_checkpoint_path = _resolve_async_eval_checkpoint_from_index(
+        resolved_checkpoint_path = resolve_async_eval_checkpoint_from_index(
             checkpoint_input_path,
             checkpoint_step=checkpoint_step,
         )
