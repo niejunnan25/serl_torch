@@ -447,6 +447,88 @@ async eval 相关产物默认会写在当前 Hydra run dir 下，例如：
 - `async_eval_checkpoints/`
 - `async_eval_runs/`
 
+### `libero_spatial task4` 完整启动示例
+
+如果你要直接运行：
+
+- `configs/train_residual_libero_spatial_task4.yaml`
+
+可以按下面这 5 个终端分别启动。这个例子使用：
+
+- `train env`: `127.0.0.1:30100`
+- `policy`: `127.0.0.1:30101`
+- `async eval env`: `127.0.0.1:30110`
+- `learner`: `GPU 5`
+- `actor + policy`: `GPU 6`
+
+1. `pi0_10000` policy server
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate openpi-modified
+export CUDA_VISIBLE_DEVICES=6
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
+export PYTHONPATH=/vla/users/niejunnan/codebase/openpi/src:${PYTHONPATH}
+cd /vla/users/niejunnan/codebase/openpi
+uv run scripts/serve_policy.py \
+  --port 30101 \
+  policy:checkpoint \
+  --policy.config=pi0_libero_baseline_10_bs32_150000 \
+  --policy.dir=/vla/users/niejunnan/assets/openpi-assets/serl_torch_ckpt/pi0_10000
+```
+
+2. 训练 env server
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate /vla/users/niejunnan/envs/libero
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+python scripts/serve_env.py --host 127.0.0.1 --port 30100
+```
+
+3. async eval env server
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate /vla/users/niejunnan/envs/libero
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+python scripts/serve_env.py --host 127.0.0.1 --port 30110
+```
+
+4. learner
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate serl_torch
+export CUDA_VISIBLE_DEVICES=5
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+python scripts/run_residual_training.py \
+  --config-name train_residual_libero_spatial_task4 \
+  runtime.role=learner \
+  policy.port=30101 \
+  env.remote.port=30100 \
+  training.async_eval.env.remote.port=30110 \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+5. actor
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate serl_torch
+export CUDA_VISIBLE_DEVICES=6
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+python scripts/run_residual_training.py \
+  --config-name train_residual_libero_spatial_task4 \
+  runtime.role=actor \
+  policy.port=30101 \
+  env.remote.port=30100 \
+  training.async_eval.env.remote.port=30110 \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
 ## 8. 跑 checkpoint eval
 
 评估和训练 actor 一样，仍然依赖两个外部服务先启动好：

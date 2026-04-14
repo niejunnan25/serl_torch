@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Reference-style LIBERO residual DRQ training script."""
 
+from collections import deque
 import json
 import logging
 import sys
@@ -16,6 +17,7 @@ from agentlace.trainer import TrainerConfig
 from agentlace.trainer import TrainerServer
 import hydra
 import numpy as np
+import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from tqdm.auto import tqdm
@@ -74,6 +76,7 @@ from serl_torch.examples.libero.residual_observation import (
 
 FILL_WAIT_SLEEP_SEC = 1.0
 LEARNER_IDLE_SLEEP_SEC = 1.0
+ASYNC_EVAL_CHECKPOINT_INDEX_FILE = "async_eval_checkpoint_index.jsonl"
 
 
 def _sync_async_eval_results_to_wandb(
@@ -101,6 +104,7 @@ def _sync_async_eval_results_to_wandb(
         }
         for payload_key, metric_key in (
             ("train_episode_id", "async_eval/train_episode_id"),
+            ("train_update_step", "async_eval/train_update_step"),
             ("train_env_step", "async_eval/train_env_step"),
             ("checkpoint_step", "async_eval/checkpoint_step"),
             ("duration_sec", "async_eval/duration_sec"),
@@ -124,7 +128,11 @@ def _sync_async_eval_results_to_wandb(
                 if isinstance(value, (int, float)):
                     metrics[metric_key] = float(value)
 
-        wandb_logger.log(to_jsonable(metrics), step=train_update_step)
+        # Async eval finishes long after its checkpoint was created, so logging it
+        # back to the historical train_update_step causes W&B monotonic-step
+        # warnings. We log it at the current W&B history position and let
+        # async_eval/train_episode_id provide the meaningful x-axis instead.
+        wandb_logger.log(to_jsonable(metrics))
 
         if status == "ok":
             logger.info(
@@ -147,6 +155,66 @@ def _sync_async_eval_results_to_wandb(
                 train_update_step,
                 payload.get("error", None),
             )
+
+
+def _configure_async_eval_wandb_metrics(*, wandb_logger: WandBLogger) -> None:
+    run = getattr(wandb_logger, "run", None)
+    define_metric = getattr(run, "define_metric", None)
+    if define_metric is None:
+        return
+
+    episode_axis = "async_eval/train_episode_id"
+    define_metric(episode_axis)
+    for metric_name in (
+        "async_eval/status_ok",
+        "async_eval/status_failed",
+        "async_eval/train_update_step",
+        "async_eval/train_env_step",
+        "async_eval/checkpoint_step",
+        "async_eval/duration_sec",
+        "async_eval/eval_index",
+        "async_eval/success_rate",
+        "async_eval/mean_return",
+        "async_eval/mean_episode_steps",
+        "async_eval/successes",
+        "async_eval/episodes_completed",
+        "async_eval/eval_env_steps",
+    ):
+        define_metric(metric_name, step_metric=episode_axis)
+
+
+def _save_async_eval_checkpoint(
+    checkpoint_dir: str | Path,
+    agent: Any,
+    *,
+    episode_id: int,
+    step: int,
+) -> Path:
+    checkpoint_dir_path = Path(checkpoint_dir)
+    checkpoint_dir_path.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = checkpoint_dir_path / f"episode_{int(episode_id):06d}.pt"
+    payload = snapshot_agent_checkpoint_payload(agent, step=int(step))
+    torch.save(payload, checkpoint_path)
+    return checkpoint_path
+
+
+def _append_async_eval_checkpoint_index(
+    checkpoint_dir: str | Path,
+    *,
+    episode_id: int,
+    checkpoint_step: int,
+    checkpoint_path: str | Path,
+) -> None:
+    checkpoint_dir_path = Path(checkpoint_dir)
+    checkpoint_dir_path.mkdir(parents=True, exist_ok=True)
+    index_path = checkpoint_dir_path / ASYNC_EVAL_CHECKPOINT_INDEX_FILE
+    record = {
+        "train_episode_id": int(episode_id),
+        "checkpoint_step": int(checkpoint_step),
+        "checkpoint_path": str(Path(checkpoint_path).name),
+    }
+    with open(index_path, "a", encoding="utf-8") as fp:
+        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
@@ -343,6 +411,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     env_steps = 0
     episode_id = 0
     success_count = 0
+    recent_episode_successes: deque[int] = deque(maxlen=20)
     summary: dict[str, Any] = {
         "role": "actor",
         "mode": "residual",
@@ -477,6 +546,10 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
 
             client.update()
             success_count += int(episode_success)
+            recent_episode_successes.append(int(episode_success))
+            recent_success_rate_20 = float(sum(recent_episode_successes)) / float(
+                max(1, len(recent_episode_successes))
+            )
             episode_stats = {
                 "train": to_jsonable(last_info),
                 "env_steps": int(env_steps),
@@ -484,10 +557,10 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     "episode_id": int(episode_id),
                     "episode_steps": int(episode_steps),
                     "episode_return": float(episode_return),
-                    "seed": int(reset_seed),
                     "init_episode_idx": int(init_episode_idx),
                     "success": bool(episode_success),
                     "running_success_rate": float(success_count / max(1, episode_id)),
+                    "recent_success_rate_20": float(recent_success_rate_20),
                 },
             }
 
@@ -602,6 +675,7 @@ def learner(
         wandb_output_dir=str(wandb_dir),
         debug=cfg.wandb.debug,
     )
+    _configure_async_eval_wandb_metrics(wandb_logger=wandb_logger)
     async_eval = start_async_eval_worker(
         cfg,
         run_dir=run_dir,
@@ -768,11 +842,17 @@ def learner(
                 target_env_step = int(
                     completed_episode_env_steps.get(target_episode, env_steps)
                 )
-            async_eval_checkpoint_path = save_agent_checkpoint(
+            async_eval_checkpoint_path = _save_async_eval_checkpoint(
                 async_eval.eval_checkpoint_dir,
                 agent,
+                episode_id=int(target_episode),
                 step=int(update_steps),
-                keep=int(async_eval.eval_checkpoint_keep),
+            )
+            _append_async_eval_checkpoint_index(
+                async_eval.eval_checkpoint_dir,
+                episode_id=int(target_episode),
+                checkpoint_step=int(update_steps),
+                checkpoint_path=async_eval_checkpoint_path,
             )
             append_async_eval_request(
                 async_eval,

@@ -123,11 +123,13 @@ def _process_one_request(
     train_update_step = int(request["train_update_step"])
     train_env_step = int(request["train_env_step"])
     checkpoint_path = str(request["checkpoint_path"])
-    eval_run_dir = (
-        train_run_dir
-        / "async_eval_runs"
-        / f"eval_{eval_index:06d}_step_{checkpoint_step:09d}"
-    ).resolve()
+    eval_dir_name = f"eval_{eval_index:06d}_step_{checkpoint_step:09d}"
+    if train_episode_id is not None:
+        eval_dir_name = (
+            f"eval_{eval_index:06d}_episode_{int(train_episode_id):06d}"
+            f"_step_{checkpoint_step:09d}"
+        )
+    eval_run_dir = (train_run_dir / "async_eval_runs" / eval_dir_name).resolve()
     eval_run_dir.mkdir(parents=True, exist_ok=True)
 
     started_at = time.time()

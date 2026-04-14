@@ -76,7 +76,7 @@ sac:
   std_max: 5.0
   discount: 0.99
   soft_target_update_rate: 0.005
-  temperature_init: 1.0
+  temperature_init: 0.01
   backup_entropy: true
   critic_ensemble_size: 2
   critic_subsample_size: 2
