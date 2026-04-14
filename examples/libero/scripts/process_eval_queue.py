@@ -206,7 +206,7 @@ def main() -> None:
 
     train_cfg = parse_train_cfg(OmegaConf.load(train_cfg_path))
     LOGGER.info(
-        "Async eval worker started: train_run_dir=%s queue=%s summary=%s",
+        "Eval worker started: train_run_dir=%s queue=%s summary=%s",
         train_run_dir,
         queue_file,
         summary_jsonl,
@@ -235,7 +235,7 @@ def main() -> None:
             continue
 
         if stop_requested:
-            LOGGER.info("Async eval worker received stop signal and queue is drained")
+            LOGGER.info("Eval worker received stop signal and queue is drained")
             break
 
         time.sleep(poll_interval_sec)

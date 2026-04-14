@@ -77,6 +77,8 @@ from serl_torch.examples.libero.residual_observation import (
 FILL_WAIT_SLEEP_SEC = 1.0
 LEARNER_IDLE_SLEEP_SEC = 1.0
 ASYNC_EVAL_CHECKPOINT_INDEX_FILE = "async_eval_checkpoint_index.jsonl"
+ACTOR_TIMER_LOG_FILE = "actor_timers.jsonl"
+LEARNER_TIMER_LOG_FILE = "learner_timers.jsonl"
 
 
 def _sync_async_eval_results_to_wandb(
@@ -90,53 +92,35 @@ def _sync_async_eval_results_to_wandb(
     records = load_new_async_eval_results(async_eval)
     for payload in records:
         status = str(payload.get("status", "")).strip().lower()
-        train_update_step_raw = payload.get("train_update_step", None)
-        try:
-            if train_update_step_raw is None:
-                continue
-            train_update_step = int(train_update_step_raw)
-        except Exception:
+        train_update_step = payload.get("train_update_step", None)
+        train_episode_id = payload.get("train_episode_id", None)
+        if not isinstance(train_episode_id, (int, float)):
             continue
 
         metrics: dict[str, Any] = {
-            "async_eval/status_ok": 1.0 if status == "ok" else 0.0,
-            "async_eval/status_failed": 0.0 if status == "ok" else 1.0,
+            "eval/train_episode_id": float(train_episode_id),
+            "eval/status_failed": 0.0 if status == "ok" else 1.0,
         }
-        for payload_key, metric_key in (
-            ("train_episode_id", "async_eval/train_episode_id"),
-            ("train_update_step", "async_eval/train_update_step"),
-            ("train_env_step", "async_eval/train_env_step"),
-            ("checkpoint_step", "async_eval/checkpoint_step"),
-            ("duration_sec", "async_eval/duration_sec"),
-            ("eval_index", "async_eval/eval_index"),
-        ):
-            value = payload.get(payload_key, None)
-            if isinstance(value, (int, float)):
-                metrics[metric_key] = float(value)
 
         summary = payload.get("summary", None)
         if status == "ok" and isinstance(summary, dict):
             for payload_key, metric_key in (
-                ("success_rate", "async_eval/success_rate"),
-                ("mean_return", "async_eval/mean_return"),
-                ("mean_episode_steps", "async_eval/mean_episode_steps"),
-                ("successes", "async_eval/successes"),
-                ("episodes_completed", "async_eval/episodes_completed"),
-                ("env_steps", "async_eval/eval_env_steps"),
+                ("success_rate", "eval/success_rate"),
+                ("mean_return", "eval/mean_return"),
             ):
                 value = summary.get(payload_key, None)
                 if isinstance(value, (int, float)):
                     metrics[metric_key] = float(value)
 
-        # Async eval finishes long after its checkpoint was created, so logging it
+        # Eval finishes long after its checkpoint was created, so logging it
         # back to the historical train_update_step causes W&B monotonic-step
         # warnings. We log it at the current W&B history position and let
-        # async_eval/train_episode_id provide the meaningful x-axis instead.
+        # eval/train_episode_id provide the meaningful x-axis instead.
         wandb_logger.log(to_jsonable(metrics))
 
         if status == "ok":
             logger.info(
-                "async eval done: eval_index=%s episode=%s update_steps=%s env_steps=%s success_rate=%s",
+                "eval done: eval_index=%s episode=%s update_steps=%s env_steps=%s success_rate=%s",
                 payload.get("eval_index", None),
                 payload.get("train_episode_id", None),
                 train_update_step,
@@ -149,7 +133,7 @@ def _sync_async_eval_results_to_wandb(
             )
         else:
             logger.warning(
-                "async eval failed: eval_index=%s episode=%s update_steps=%s error=%s",
+                "eval failed: eval_index=%s episode=%s update_steps=%s error=%s",
                 payload.get("eval_index", None),
                 payload.get("train_episode_id", None),
                 train_update_step,
@@ -163,22 +147,12 @@ def _configure_async_eval_wandb_metrics(*, wandb_logger: WandBLogger) -> None:
     if define_metric is None:
         return
 
-    episode_axis = "async_eval/train_episode_id"
+    episode_axis = "eval/train_episode_id"
     define_metric(episode_axis)
     for metric_name in (
-        "async_eval/status_ok",
-        "async_eval/status_failed",
-        "async_eval/train_update_step",
-        "async_eval/train_env_step",
-        "async_eval/checkpoint_step",
-        "async_eval/duration_sec",
-        "async_eval/eval_index",
-        "async_eval/success_rate",
-        "async_eval/mean_return",
-        "async_eval/mean_episode_steps",
-        "async_eval/successes",
-        "async_eval/episodes_completed",
-        "async_eval/eval_env_steps",
+        "eval/status_failed",
+        "eval/success_rate",
+        "eval/mean_return",
     ):
         define_metric(metric_name, step_metric=episode_axis)
 
@@ -222,6 +196,13 @@ def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _append_jsonl_record(path: str | Path, record: dict[str, Any]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fp:
+        fp.write(json.dumps(to_jsonable(record), ensure_ascii=False) + "\n")
 
 
 def _format_optional_metric(value: float | None, *, digits: int = 3) -> str:
@@ -412,12 +393,18 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     episode_id = 0
     success_count = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
+    actor_timer_log_path = run_dir / ACTOR_TIMER_LOG_FILE
+    actor_episode_log_path = run_dir / str(
+        cfg.logging.episode_log_file or "episode_logs.jsonl"
+    )
     summary: dict[str, Any] = {
         "role": "actor",
         "mode": "residual",
         "env_steps": 0,
         "episodes": 0,
         "successes": 0,
+        "timer_log_path": str(actor_timer_log_path),
+        "episode_log_path": str(actor_episode_log_path),
     }
     progress_bar = tqdm(
         total=int(max_env_steps),
@@ -536,9 +523,15 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 timer.tock("total")
 
                 if should_log_timer:
-                    client.request(
-                        "send-stats",
-                        {"actor_timer": to_jsonable(timer.get_average_times())},
+                    _append_jsonl_record(
+                        actor_timer_log_path,
+                        {
+                            "source": "actor",
+                            "env_steps": int(env_steps),
+                            "episode_id": int(episode_id),
+                            "episode_steps": int(episode_steps),
+                            "timer": timer.get_average_times(),
+                        },
                     )
 
                 if episode_done:
@@ -564,6 +557,13 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 },
             }
 
+            _append_jsonl_record(
+                actor_episode_log_path,
+                {
+                    "source": "actor_episode",
+                    **episode_stats,
+                },
+            )
             client.request("send-stats", episode_stats)
             progress_bar.set_postfix(
                 episode=int(episode_id),
@@ -687,6 +687,7 @@ def learner(
     latest_completed_episode_id = 0
     completed_episode_env_steps: dict[int, int] = {}
     last_queued_async_eval_episode = 0
+    learner_timer_log_path = run_dir / LEARNER_TIMER_LOG_FILE
     progress_state_lock = Lock()
     summary: dict[str, Any] = {
         "role": "learner",
@@ -694,6 +695,7 @@ def learner(
         "update_steps": 0,
         "env_steps": 0,
         "replay_size": 0,
+        "timer_log_path": str(learner_timer_log_path),
     }
 
     def stats_callback(request_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -716,7 +718,11 @@ def learner(
                         int(episode_id),
                     )
                     completed_episode_env_steps[int(episode_id)] = int(env_steps)
-        wandb_logger.log(to_jsonable(payload), step=update_steps)
+        payload_for_wandb = dict(payload)
+        payload_for_wandb.pop("actor_timer", None)
+        payload_for_wandb.pop("train", None)
+        if payload_for_wandb:
+            wandb_logger.log(to_jsonable(payload_for_wandb), step=update_steps)
         return {}
 
     server = TrainerServer(
@@ -878,7 +884,7 @@ def learner(
                 for stale_episode_id in stale_episode_ids:
                     completed_episode_env_steps.pop(int(stale_episode_id), None)
             logger.info(
-                "queued async eval: eval_index=%s episode=%s update_steps=%s env_steps=%s checkpoint=%s",
+                "queued eval: eval_index=%s episode=%s update_steps=%s env_steps=%s checkpoint=%s",
                 int(max(0, async_eval.triggered_count - 1)),
                 int(target_episode),
                 int(update_steps),
@@ -1023,9 +1029,16 @@ def learner(
                     },
                     step=update_steps,
                 )
-                wandb_logger.log(
-                    {"timer": timer_metrics},
-                    step=update_steps,
+                _append_jsonl_record(
+                    learner_timer_log_path,
+                    {
+                        "source": "learner",
+                        "update_steps": int(update_steps),
+                        "env_steps": int(env_steps),
+                        "replay_size": int(len(replay_buffer)),
+                        "updates_per_sec": float(updates_per_sec),
+                        "timer": timer_metrics,
+                    },
                 )
                 offline_suffix = ""
                 if offline_replay_buffer is not None:
@@ -1086,7 +1099,7 @@ def learner(
             )
             if async_eval_return_code not in (None, 0):
                 logger.warning(
-                    "async eval worker exited with returncode=%s; see %s",
+                    "eval worker exited with returncode=%s; see %s",
                     async_eval_return_code,
                     async_eval.worker_log_path,
                 )
@@ -1126,7 +1139,7 @@ def learner(
                     "pretrain_steps_requested": int(cfg.offline.pretrain_steps),
                     "pretrain_steps_completed": int(offline_pretrain_steps_done),
                 },
-                "async_eval": {
+                "eval": {
                     "enabled": bool(async_eval.enabled),
                     "every_episodes": int(async_eval.every_episodes),
                     "triggered": int(async_eval.triggered_count),

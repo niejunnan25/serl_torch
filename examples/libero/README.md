@@ -15,7 +15,7 @@
 - residual offline data 准备与加载
 - residual RL 训练入口
 - 独立 residual checkpoint 评估入口
-- 训练期 async eval
+- 训练期 eval
 - residual observation schema 和 typed config
 
 当前真正的主入口有五个：
@@ -26,7 +26,7 @@
 - [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
 - [tools/serve_env.sh](tools/serve_env.sh)
 
-`scripts/process_eval_queue.py` 是 async eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
+`scripts/process_eval_queue.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
 
 ## 目录结构
 
@@ -47,11 +47,11 @@
 - [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
   checkpoint eval 入口
 - [scripts/process_eval_queue.py](scripts/process_eval_queue.py)
-  async eval worker
+  训练期 eval worker
 - [eval_runner.py](eval_runner.py)
   评估主循环
 - [async_eval.py](async_eval.py)
-  训练期 async eval runtime
+  训练期 eval runtime
 - [env/](env/)
   本地 env、remote env、观测解析、LIBERO 路径 bootstrap
 - [residual_observation.py](residual_observation.py)
@@ -413,9 +413,9 @@ conda run -n serl_torch python scripts/run_residual_training.py \
 - `env.remote.host`
 - `env.remote.port`
 
-## 7. 启用训练期 async eval
+## 7. 启用训练期 eval
 
-当前 async eval 由 learner 自动拉起 worker。
+当前训练期 eval 由 learner 自动拉起 worker，内部仍然通过 async worker 实现。
 
 已知的 episode 触发语义风险说明见：
 
@@ -439,7 +439,7 @@ conda run -n serl_torch python scripts/run_residual_training.py \
   training.async_eval.env.remote.port=30010
 ```
 
-async eval 相关产物默认会写在当前 Hydra run dir 下，例如：
+训练期 eval 相关产物默认会写在当前 Hydra run dir 下，例如：
 
 - `async_eval_queue.jsonl`
 - `async_eval_results.jsonl`
@@ -457,7 +457,7 @@ async eval 相关产物默认会写在当前 Hydra run dir 下，例如：
 
 - `train env`: `127.0.0.1:30100`
 - `policy`: `127.0.0.1:30101`
-- `async eval env`: `127.0.0.1:30110`
+- `eval env`: `127.0.0.1:30110`
 - `learner`: `GPU 5`
 - `actor + policy`: `GPU 6`
 
@@ -486,7 +486,7 @@ cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
 python scripts/serve_env.py --host 127.0.0.1 --port 30100
 ```
 
-3. async eval env server
+3. eval env server
 
 ```bash
 source /vla/miniconda3/etc/profile.d/conda.sh
