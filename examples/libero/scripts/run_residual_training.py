@@ -32,12 +32,15 @@ from serl_launcher.agents.continuous.drq_typed_config import (
 )
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
+from serl_launcher.common.observability import define_metric_group
+from serl_launcher.common.observability import extract_numeric_metrics
 from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.policy.typed_factory import build_policy_client
 from serl_launcher.policy.typed_factory import describe_policy_backend
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
+from serl_launcher.utils.jsonl import append_jsonl
 from serl_launcher.utils.seeding import set_global_seeds
 from serl_launcher.utils.serialization import to_jsonable
 from serl_launcher.utils.timer_utils import Timer
@@ -143,18 +146,34 @@ def _sync_async_eval_results_to_wandb(
 
 def _configure_async_eval_wandb_metrics(*, wandb_logger: WandBLogger) -> None:
     run = getattr(wandb_logger, "run", None)
-    define_metric = getattr(run, "define_metric", None)
-    if define_metric is None:
+    if run is None:
         return
 
-    episode_axis = "eval/train_episode_id"
-    define_metric(episode_axis)
-    for metric_name in (
-        "eval/status_failed",
-        "eval/success_rate",
-        "eval/mean_return",
-    ):
-        define_metric(metric_name, step_metric=episode_axis)
+    define_metric_group(
+        run,
+        axis_metric="eval/train_episode_id",
+        metric_names=(
+            "eval/status_failed",
+            "eval/success_rate",
+            "eval/mean_return",
+        ),
+    )
+
+
+def _configure_actor_wandb_metrics(*, wandb_logger: WandBLogger) -> None:
+    run = getattr(wandb_logger, "run", None)
+    if run is None:
+        return
+
+    define_metric_group(
+        run,
+        axis_metric="actor_episode/episode_id",
+        metric_names=(
+            "actor_episode/episode_return",
+            "actor_episode/cumulative_success_rate",
+            "actor_episode/recent_success_rate_20",
+        ),
+    )
 
 
 def _save_async_eval_checkpoint(
@@ -187,8 +206,7 @@ def _append_async_eval_checkpoint_index(
         "checkpoint_step": int(checkpoint_step),
         "checkpoint_path": str(Path(checkpoint_path).name),
     }
-    with open(index_path, "a", encoding="utf-8") as fp:
-        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+    append_jsonl(index_path, record)
 
 
 def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
@@ -198,11 +216,36 @@ def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
     return None
 
 
-def _append_jsonl_record(path: str | Path, record: dict[str, Any]) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as fp:
-        fp.write(json.dumps(to_jsonable(record), ensure_ascii=False) + "\n")
+def _extract_actor_wandb_metrics(payload: dict[str, Any]) -> dict[str, float]:
+    actor_episode = payload.get("actor_episode", None)
+    if not isinstance(actor_episode, dict):
+        return {}
+    return extract_numeric_metrics(
+        actor_episode,
+        (
+            ("episode_id", "actor_episode/episode_id"),
+            ("episode_return", "actor_episode/episode_return"),
+            ("cumulative_success_rate", "actor_episode/cumulative_success_rate"),
+            ("recent_success_rate_20", "actor_episode/recent_success_rate_20"),
+        ),
+    )
+
+
+def _extract_learner_wandb_metrics(update_info: dict[str, Any]) -> dict[str, float]:
+    return extract_numeric_metrics(
+        update_info,
+        (
+            ("critic_loss", "learner_loss/critic"),
+            ("critic_td_loss", "learner_loss/critic_td"),
+            ("actor_loss", "learner_loss/actor"),
+            ("predicted_qs", "learner_q/predicted_mean"),
+            ("target_qs", "learner_q/target_mean"),
+            ("actor_predicted_q", "learner_q/actor_predicted_mean"),
+            ("predicted_q_gap", "learner_q/predicted_gap"),
+            ("temperature", "learner_entropy/temperature"),
+            ("entropy", "learner_entropy/entropy"),
+        ),
+    )
 
 
 def _format_optional_metric(value: float | None, *, digits: int = 3) -> str:
@@ -523,7 +566,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 timer.tock("total")
 
                 if should_log_timer:
-                    _append_jsonl_record(
+                    append_jsonl(
                         actor_timer_log_path,
                         {
                             "source": "actor",
@@ -552,12 +595,14 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     "episode_return": float(episode_return),
                     "init_episode_idx": int(init_episode_idx),
                     "success": bool(episode_success),
-                    "running_success_rate": float(success_count / max(1, episode_id)),
+                    "cumulative_success_rate": float(
+                        success_count / max(1, episode_id)
+                    ),
                     "recent_success_rate_20": float(recent_success_rate_20),
                 },
             }
 
-            _append_jsonl_record(
+            append_jsonl(
                 actor_episode_log_path,
                 {
                     "source": "actor_episode",
@@ -675,6 +720,7 @@ def learner(
         wandb_output_dir=str(wandb_dir),
         debug=cfg.wandb.debug,
     )
+    _configure_actor_wandb_metrics(wandb_logger=wandb_logger)
     _configure_async_eval_wandb_metrics(wandb_logger=wandb_logger)
     async_eval = start_async_eval_worker(
         cfg,
@@ -718,11 +764,9 @@ def learner(
                         int(episode_id),
                     )
                     completed_episode_env_steps[int(episode_id)] = int(env_steps)
-        payload_for_wandb = dict(payload)
-        payload_for_wandb.pop("actor_timer", None)
-        payload_for_wandb.pop("train", None)
-        if payload_for_wandb:
-            wandb_logger.log(to_jsonable(payload_for_wandb), step=update_steps)
+        actor_metrics = _extract_actor_wandb_metrics(payload)
+        if actor_metrics:
+            wandb_logger.log(to_jsonable(actor_metrics))
         return {}
 
     server = TrainerServer(
@@ -922,7 +966,9 @@ def learner(
             pretrain_bar.close()
 
         if last_pretrain_info is not None:
-            wandb_logger.log(to_jsonable(last_pretrain_info), step=update_steps)
+            pretrain_metrics = _extract_learner_wandb_metrics(last_pretrain_info)
+            if pretrain_metrics:
+                wandb_logger.log(to_jsonable(pretrain_metrics), step=update_steps)
         logger.info(
             "offline pretrain complete: completed=%s update_steps=%s offline_replay_size=%s",
             int(offline_pretrain_steps_done),
@@ -1021,15 +1067,10 @@ def learner(
                 last_log_time = now
                 last_log_update_steps = int(update_steps)
                 timer_metrics = to_jsonable(timer.get_average_times())
-                wandb_logger.log(update_metrics, step=update_steps)
-                wandb_logger.log(
-                    {
-                        "learner/updates_per_sec": float(updates_per_sec),
-                        "learner/replay_size": int(len(replay_buffer)),
-                    },
-                    step=update_steps,
-                )
-                _append_jsonl_record(
+                learner_metrics = _extract_learner_wandb_metrics(update_metrics)
+                if learner_metrics:
+                    wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
+                append_jsonl(
                     learner_timer_log_path,
                     {
                         "source": "learner",
