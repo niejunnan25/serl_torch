@@ -4,7 +4,7 @@
 
 当前 LIBERO 训练期 async eval 的触发方式是：
 
-- actor 在每个训练 episode 结束后，上报 `actor_episode.episode_id`
+- actor 在每个训练 episode 结束后，上报 `rollout.episode_id`
 - learner 维护最新的已完成 episode 计数
 - 当 `latest_completed_episode_id` 跨过 `training.async_eval.every_episodes` 的整数倍时
 - learner 保存一份 checkpoint，并把 async eval 请求写进队列

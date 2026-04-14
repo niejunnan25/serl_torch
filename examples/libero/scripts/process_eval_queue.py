@@ -16,7 +16,11 @@ from omegaconf import OmegaConf
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
+SERL_LAUNCHER_ROOT = REPO_PARENT / "serl_torch" / "serl_launcher"
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
+from serl_launcher.utils.jsonl import append_jsonl
 from serl_torch.examples.libero.config import EvalConfig
 from serl_torch.examples.libero.config import LiberoEvalConfig
 from serl_torch.examples.libero.config import LiberoTrainConfig
@@ -27,12 +31,6 @@ from serl_torch.examples.libero.eval_runner import run_eval
 
 
 LOGGER = logging.getLogger("libero_async_eval_worker")
-
-
-def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as fp:
-        fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _load_completed_eval_indices(summary_jsonl: Path) -> set[int]:
@@ -173,7 +171,7 @@ def _process_one_request(
     if summary is not None:
         record["summary"] = summary
     record.update(error_payload)
-    _append_jsonl(summary_jsonl, record)
+    append_jsonl(summary_jsonl, record)
     LOGGER.info(
         "Processed eval_index=%s episode=%s checkpoint_step=%s status=%s duration=%.2fs",
         eval_index,

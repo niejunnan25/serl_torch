@@ -32,8 +32,11 @@ from serl_launcher.agents.continuous.drq_typed_config import (
 )
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
-from serl_launcher.common.observability import define_metric_group
-from serl_launcher.common.observability import extract_numeric_metrics
+from serl_launcher.common.training_observability import configure_eval_wandb_metrics
+from serl_launcher.common.training_observability import configure_learner_wandb_metrics
+from serl_launcher.common.training_observability import configure_rollout_wandb_metrics
+from serl_launcher.common.training_observability import extract_learner_wandb_metrics
+from serl_launcher.common.training_observability import extract_rollout_wandb_metrics
 from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.policy.typed_factory import build_policy_client
@@ -144,38 +147,6 @@ def _sync_async_eval_results_to_wandb(
             )
 
 
-def _configure_async_eval_wandb_metrics(*, wandb_logger: WandBLogger) -> None:
-    run = getattr(wandb_logger, "run", None)
-    if run is None:
-        return
-
-    define_metric_group(
-        run,
-        axis_metric="eval/train_episode_id",
-        metric_names=(
-            "eval/status_failed",
-            "eval/success_rate",
-            "eval/mean_return",
-        ),
-    )
-
-
-def _configure_actor_wandb_metrics(*, wandb_logger: WandBLogger) -> None:
-    run = getattr(wandb_logger, "run", None)
-    if run is None:
-        return
-
-    define_metric_group(
-        run,
-        axis_metric="actor_episode/episode_id",
-        metric_names=(
-            "actor_episode/episode_return",
-            "actor_episode/cumulative_success_rate",
-            "actor_episode/recent_success_rate_20",
-        ),
-    )
-
-
 def _save_async_eval_checkpoint(
     checkpoint_dir: str | Path,
     agent: Any,
@@ -214,38 +185,6 @@ def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
-
-
-def _extract_actor_wandb_metrics(payload: dict[str, Any]) -> dict[str, float]:
-    actor_episode = payload.get("actor_episode", None)
-    if not isinstance(actor_episode, dict):
-        return {}
-    return extract_numeric_metrics(
-        actor_episode,
-        (
-            ("episode_id", "actor_episode/episode_id"),
-            ("episode_return", "actor_episode/episode_return"),
-            ("cumulative_success_rate", "actor_episode/cumulative_success_rate"),
-            ("recent_success_rate_20", "actor_episode/recent_success_rate_20"),
-        ),
-    )
-
-
-def _extract_learner_wandb_metrics(update_info: dict[str, Any]) -> dict[str, float]:
-    return extract_numeric_metrics(
-        update_info,
-        (
-            ("critic_loss", "learner_loss/critic"),
-            ("critic_td_loss", "learner_loss/critic_td"),
-            ("actor_loss", "learner_loss/actor"),
-            ("predicted_qs", "learner_q/predicted_mean"),
-            ("target_qs", "learner_q/target_mean"),
-            ("actor_predicted_q", "learner_q/actor_predicted_mean"),
-            ("predicted_q_gap", "learner_q/predicted_gap"),
-            ("temperature", "learner_entropy/temperature"),
-            ("entropy", "learner_entropy/entropy"),
-        ),
-    )
 
 
 def _format_optional_metric(value: float | None, *, digits: int = 3) -> str:
@@ -437,7 +376,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     success_count = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
     actor_timer_log_path = run_dir / ACTOR_TIMER_LOG_FILE
-    actor_episode_log_path = run_dir / str(
+    rollout_log_path = run_dir / str(
         cfg.logging.episode_log_file or "episode_logs.jsonl"
     )
     summary: dict[str, Any] = {
@@ -447,7 +386,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         "episodes": 0,
         "successes": 0,
         "timer_log_path": str(actor_timer_log_path),
-        "episode_log_path": str(actor_episode_log_path),
+        "episode_log_path": str(rollout_log_path),
     }
     progress_bar = tqdm(
         total=int(max_env_steps),
@@ -589,7 +528,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
             episode_stats = {
                 "train": to_jsonable(last_info),
                 "env_steps": int(env_steps),
-                "actor_episode": {
+                "rollout": {
                     "episode_id": int(episode_id),
                     "episode_steps": int(episode_steps),
                     "episode_return": float(episode_return),
@@ -603,9 +542,9 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
             }
 
             append_jsonl(
-                actor_episode_log_path,
+                rollout_log_path,
                 {
-                    "source": "actor_episode",
+                    "source": "rollout",
                     **episode_stats,
                 },
             )
@@ -720,8 +659,9 @@ def learner(
         wandb_output_dir=str(wandb_dir),
         debug=cfg.wandb.debug,
     )
-    _configure_actor_wandb_metrics(wandb_logger=wandb_logger)
-    _configure_async_eval_wandb_metrics(wandb_logger=wandb_logger)
+    configure_rollout_wandb_metrics(wandb_logger=wandb_logger)
+    configure_eval_wandb_metrics(wandb_logger=wandb_logger)
+    configure_learner_wandb_metrics(wandb_logger=wandb_logger)
     async_eval = start_async_eval_worker(
         cfg,
         run_dir=run_dir,
@@ -752,10 +692,10 @@ def learner(
         with progress_state_lock:
             if "env_steps" in payload:
                 env_steps = max(int(env_steps), int(payload["env_steps"]))
-            actor_episode = payload.get("actor_episode", None)
-            if isinstance(actor_episode, dict):
+            rollout = payload.get("rollout", None)
+            if isinstance(rollout, dict):
                 try:
-                    episode_id = int(actor_episode.get("episode_id", 0))
+                    episode_id = int(rollout.get("episode_id", 0))
                 except Exception:
                     episode_id = 0
                 if episode_id > 0:
@@ -764,9 +704,9 @@ def learner(
                         int(episode_id),
                     )
                     completed_episode_env_steps[int(episode_id)] = int(env_steps)
-        actor_metrics = _extract_actor_wandb_metrics(payload)
-        if actor_metrics:
-            wandb_logger.log(to_jsonable(actor_metrics))
+        rollout_metrics = extract_rollout_wandb_metrics(payload)
+        if rollout_metrics:
+            wandb_logger.log(to_jsonable(rollout_metrics))
         return {}
 
     server = TrainerServer(
@@ -966,7 +906,7 @@ def learner(
             pretrain_bar.close()
 
         if last_pretrain_info is not None:
-            pretrain_metrics = _extract_learner_wandb_metrics(last_pretrain_info)
+            pretrain_metrics = extract_learner_wandb_metrics(last_pretrain_info)
             if pretrain_metrics:
                 wandb_logger.log(to_jsonable(pretrain_metrics), step=update_steps)
         logger.info(
@@ -1067,7 +1007,7 @@ def learner(
                 last_log_time = now
                 last_log_update_steps = int(update_steps)
                 timer_metrics = to_jsonable(timer.get_average_times())
-                learner_metrics = _extract_learner_wandb_metrics(update_metrics)
+                learner_metrics = extract_learner_wandb_metrics(update_metrics)
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
                 append_jsonl(

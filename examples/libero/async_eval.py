@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
+from serl_launcher.utils.jsonl import append_jsonl
+
 from serl_torch.examples.libero.config import AsyncEvalConfig
 from serl_torch.examples.libero.config import LiberoTrainConfig
 
@@ -36,12 +38,6 @@ def _resolve_path(path_value: Any, *, run_dir: Path) -> Path:
     if not path.is_absolute():
         path = run_dir / path
     return path.resolve()
-
-
-def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as fp:
-        fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _count_jsonl_lines(path: Path | None) -> int:
@@ -205,14 +201,14 @@ def append_async_eval_request(
         "timestamp",
         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
     )
-    _append_jsonl(async_eval.queue_path, record)
+    append_jsonl(async_eval.queue_path, record)
     async_eval.triggered_count += 1
 
 
 def append_async_eval_stop(async_eval: AsyncEvalRuntime) -> None:
     if (not async_eval.enabled) or async_eval.queue_path is None:
         return
-    _append_jsonl(
+    append_jsonl(
         async_eval.queue_path,
         {
             "type": "stop",
