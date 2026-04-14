@@ -10,8 +10,8 @@ task:
 runtime:
   role: actor
   trainer_host: 127.0.0.1
-  trainer_port: 5698
-  broadcast_port: 5699
+  trainer_port: 5798
+  broadcast_port: 5799
   data_store_queue_size: 2000
 
 wandb:
