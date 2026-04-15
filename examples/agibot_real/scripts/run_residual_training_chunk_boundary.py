@@ -66,7 +66,7 @@ from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.step_window_replay_buffer import (
     MemoryEfficientStepWindowReplayBuffer,
 )
-from serl_launcher.residual.chunk_replay import reshape_chunk_batch_for_training
+from serl_launcher.residual.chunk_window_replay import reshape_chunk_batch_for_training
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl

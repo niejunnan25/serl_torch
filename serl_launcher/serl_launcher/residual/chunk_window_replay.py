@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Chunked replay helpers for residual training pipelines."""
+"""Chunk-window replay helpers for residual training pipelines."""
 
 from typing import Any
 

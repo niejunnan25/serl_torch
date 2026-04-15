@@ -44,8 +44,8 @@ from serl_launcher.common.training_payloads import parse_rollout_stats_payload
 from serl_launcher.common.training_reporting import format_learner_heartbeat
 from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
-from serl_launcher.residual.chunk_replay import create_chunk_replay_buffer
-from serl_launcher.residual.chunk_replay import sample_mixed_training_batch
+from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
+from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl

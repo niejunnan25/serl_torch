@@ -10,9 +10,9 @@ except ModuleNotFoundError:
     import gymnasium as gym
 
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
-from serl_launcher.residual.chunk_replay import create_chunk_replay_buffer
-from serl_launcher.residual.chunk_replay import reshape_chunk_batch_for_training
-from serl_launcher.residual.chunk_replay import sample_mixed_training_batch
+from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
+from serl_launcher.residual.chunk_window_replay import reshape_chunk_batch_for_training
+from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
 
 
 class _FakeReplayBuffer:
