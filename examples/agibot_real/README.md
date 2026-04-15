@@ -87,6 +87,8 @@
   standalone eval runner
 - [scripts/start_robot_service.py](scripts/start_robot_service.py)
   repo-local robot-service Python launcher
+- [scripts/reset_robot.py](scripts/reset_robot.py)
+  一次性机器人归位脚本，直接复用当前 reset hook
 - [tools/run_actor.sh](tools/run_actor.sh)
   actor shell wrapper
 - [tools/run_learner.sh](tools/run_learner.sh)
@@ -244,6 +246,34 @@ canonical 配置是：
 3. 启动 robot-service
 4. 启动 learner
 5. 在机器人终端启动 actor
+
+如果你只是想先把机器人归位，不想启动整条训练链路，可以直接运行：
+
+```bash
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
+python examples/agibot_real/scripts/reset_robot.py
+```
+
+默认行为等价于：
+
+- `--task-name agibot_real_default`
+- `--prompt "Pick up the object with the right hand and place it at the target location."`
+- `--hz 20.0`
+
+也支持显式指定任务名：
+
+```bash
+python examples/agibot_real/scripts/reset_robot.py --task-name office_setting
+python examples/agibot_real/scripts/reset_robot.py --task-name pour_water --hz 10
+```
+
+这个脚本只做“机器人姿态归位”：
+
+- 发送 head command
+- 发送 waist command
+- 发送 16D joint reset command
+
+它不会自动 reset 场景物体，也不会替代完整训练链路里的 robot-service / actor / learner。
 
 ## 1. 启动 base-policy server
 
