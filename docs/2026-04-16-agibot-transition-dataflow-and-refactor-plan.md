@@ -1068,7 +1068,85 @@ while training:
         break
 ```
 
-### 14.7 推荐的落地顺序
+### 14.7 异步方案里的关键实现决策
+
+#### A. 去掉 `prefetched`
+
+当前同步主线里有个优化：
+
+- chunk 结束后 backfill 最后一个 `post-step obs`
+- 下一轮 chunk 起点直接复用这份 `base_actions / residual_obs`
+
+但异步以后，如果还想复用它，就意味着：
+
+- actor 下一段 chunk 开始前，要等待 worker 先把上一段最后一个 backfill 算完
+
+这会直接破坏异步化的意义。
+
+所以异步方案里更合理的做法是：
+
+- actor 到每个 chunk 边界后，永远自己基于当前 `obs` 做一次新的 `base_policy.infer`
+- worker 只负责 replay 用的 backfill
+- 不再尝试把 worker 的 backfill 结果喂回 actor 规划链路
+
+这是一个很重要的实现决策。
+
+#### B. episode 边界必须等待 commit
+
+这是最关键的稳定性规则。
+
+推荐做法：
+
+- chunk 内不等 worker
+- 但 episode 边界必须等
+
+也就是：
+
+- 平时 actor 可以异步推进
+- 但在 `success/fail/reset/truncated` 后，要先等当前 episode 的 raw chunks 都被 worker 处理完
+- 然后再发 `send-stats`
+
+这样 learner 看到的：
+
+- episode stats
+- replay 内容
+
+至少在 episode 边界上是对齐的。
+
+#### C. queue 和并发约束
+
+最小可行方案建议：
+
+- `raw_chunk_queue.put(..., block=True)`，不要 silently drop chunk
+- 单 worker
+- 严格 FIFO
+
+不要一开始就做：
+
+- 多 worker
+- 多消费者
+- 覆盖老 chunk
+
+因为当前有 `pending_last_transition`，多 worker 会把顺序语义搞坏。
+
+#### D. 真正提速的前提
+
+仅仅把 backfill 挪到线程里，不一定就自动大幅提速。
+
+提速真正成立，至少要满足一个条件：
+
+- actor 和 worker 的推理不会互相卡死
+- worker 最终支持 batch infer
+- queue 大小适中，例如 `2` 或 `4`
+
+如果 actor 和 worker 共用同一个远端 JoyRA/OpenPI server，而服务端又是串行处理，那么：
+
+- actor 下一段 chunk 的规划
+- worker 上一段 chunk 的 15 次 backfill
+
+仍然会在服务端互相争抢。
+
+### 14.8 推荐的落地顺序
 
 如果明确要走异步 worker，我建议还是分成两步，而不是直接一步到位。
 
@@ -1097,7 +1175,7 @@ while training:
 
 风险更小。
 
-### 14.8 当前推荐结论
+### 14.9 当前推荐结论
 
 完全异步 `TransitionWorker` 方案不是“备选中的次优解”，而是：
 
