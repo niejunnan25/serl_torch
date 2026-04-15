@@ -267,6 +267,8 @@ pretrained_models/microsoft--resnet-18
   `examples/agibot_real/configs/train_residual.yaml`
 - actor / learner entrypoint:
   `examples/agibot_real/scripts/run_residual_training.py`
+- one-shot robot reset:
+  `examples/agibot_real/scripts/reset_robot.py`
 - actor wrapper:
   `examples/agibot_real/tools/run_actor.sh`
 - learner wrapper:
@@ -279,6 +281,7 @@ pretrained_models/microsoft--resnet-18
 - `env.backend=local`
 - `env.action_dim=14`
 - `task.control_mode=camera_position`
+- 提供单独的机器人归位脚本
 - 当前只文档化训练主线
 - canonical eval 入口还没有补齐
 
