@@ -12,6 +12,7 @@ def define_metric_group(
     *,
     axis_metric: str,
     metric_names: Sequence[str],
+    hide_axis_metric: bool = False,
 ) -> None:
     """Register a metric axis and bind a set of metrics to that axis."""
 
@@ -19,7 +20,13 @@ def define_metric_group(
     if define_metric is None:
         return
 
-    define_metric(axis_metric)
+    if bool(hide_axis_metric):
+        try:
+            define_metric(axis_metric, hidden=True)
+        except TypeError:
+            define_metric(axis_metric)
+    else:
+        define_metric(axis_metric)
     for metric_name in metric_names:
         define_metric(metric_name, step_metric=axis_metric)
 

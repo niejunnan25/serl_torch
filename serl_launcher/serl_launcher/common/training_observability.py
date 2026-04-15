@@ -30,26 +30,26 @@ DEFAULT_ROLLOUT_METRIC_MAPPING = (
 )
 
 DEFAULT_LEARNER_METRICS = (
-    "learner_loss/critic",
-    "learner_loss/critic_td",
-    "learner_loss/actor",
-    "learner_q/predicted_mean",
-    "learner_q/target_mean",
-    "learner_q/actor_predicted_mean",
-    "learner_q/predicted_gap",
-    "learner_entropy/temperature",
-    "learner_entropy/entropy",
+    "learner/loss_critic",
+    "learner/loss_critic_td",
+    "learner/loss_actor",
+    "learner/q_predicted_mean",
+    "learner/q_target_mean",
+    "learner/q_actor_predicted_mean",
+    "learner/q_predicted_gap",
+    "learner/temperature",
+    "learner/entropy",
 )
 DEFAULT_LEARNER_METRIC_MAPPING = (
-    ("critic_loss", "learner_loss/critic"),
-    ("critic_td_loss", "learner_loss/critic_td"),
-    ("actor_loss", "learner_loss/actor"),
-    ("predicted_qs", "learner_q/predicted_mean"),
-    ("target_qs", "learner_q/target_mean"),
-    ("actor_predicted_q", "learner_q/actor_predicted_mean"),
-    ("predicted_q_gap", "learner_q/predicted_gap"),
-    ("temperature", "learner_entropy/temperature"),
-    ("entropy", "learner_entropy/entropy"),
+    ("critic_loss", "learner/loss_critic"),
+    ("critic_td_loss", "learner/loss_critic_td"),
+    ("actor_loss", "learner/loss_actor"),
+    ("predicted_qs", "learner/q_predicted_mean"),
+    ("target_qs", "learner/q_target_mean"),
+    ("actor_predicted_q", "learner/q_actor_predicted_mean"),
+    ("predicted_q_gap", "learner/q_predicted_gap"),
+    ("temperature", "learner/temperature"),
+    ("entropy", "learner/entropy"),
 )
 
 
@@ -80,6 +80,7 @@ def configure_rollout_wandb_metrics(
         wandb_logger=wandb_logger,
         axis_metric=axis_metric,
         metric_names=metric_names,
+        hide_axis_metric=True,
     )
 
 
@@ -129,6 +130,7 @@ def _configure_wandb_metric_group(
     wandb_logger: Any,
     axis_metric: str,
     metric_names: Sequence[str],
+    hide_axis_metric: bool = False,
 ) -> None:
     run = getattr(wandb_logger, "run", None)
     if run is None:
@@ -137,4 +139,5 @@ def _configure_wandb_metric_group(
         run,
         axis_metric=axis_metric,
         metric_names=metric_names,
+        hide_axis_metric=hide_axis_metric,
     )
