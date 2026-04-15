@@ -1,6 +1,25 @@
 from __future__ import annotations
 
-"""LIBERO-style AgiBot residual DRQ training script."""
+"""Chunk-boundary AgiBot residual DRQ training script.
+
+This variant differs from ``run_residual_training.py`` in one important way:
+
+- actor executes an entire action chunk via ``env.step_chunk(...)``
+- replay stores one transition per executed chunk boundary
+- no step-level backfill is performed for intermediate states within a chunk
+
+Known limitation:
+
+- the current learner loop is driven by replay insert count, but the default
+  config still allows ``training.max_update_steps`` to exceed the theoretical
+  maximum number of chunk transitions in a full actor run
+- with the current default ``chunk_horizon=15``, ``max_env_steps=300000``, and
+  ``max_episodes=2000`` / ``max_episode_steps=150``, the actor can produce at
+  most about 20k chunk transitions
+- if ``max_update_steps`` is left significantly larger than that, the learner
+  can sit idle after the actor exits, waiting for replay growth that will never
+  happen
+"""
 
 from collections import deque
 import json
@@ -11,6 +30,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from agentlace.data.data_store import DataStoreBase
 from agentlace.data.data_store import QueuedDataStore
 from agentlace.trainer import TrainerClient
 from agentlace.trainer import TrainerConfig
@@ -43,15 +63,21 @@ from serl_launcher.common.training_payloads import build_rollout_stats_payload
 from serl_launcher.common.training_payloads import parse_rollout_stats_payload
 from serl_launcher.common.training_reporting import format_learner_heartbeat
 from serl_launcher.common.wandb import WandBLogger
-from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
-from serl_launcher.residual.chunk_replay import create_chunk_replay_buffer
-from serl_launcher.residual.chunk_replay import sample_mixed_training_batch
+from serl_launcher.data.step_window_replay_buffer import (
+    MemoryEfficientStepWindowReplayBuffer,
+)
+from serl_launcher.residual.chunk_replay import reshape_chunk_batch_for_training
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl
 from serl_launcher.utils.seeding import set_global_seeds
 from serl_launcher.utils.serialization import to_jsonable
 from serl_launcher.utils.timer_utils import Timer
+
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
@@ -62,12 +88,6 @@ from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.config import parse_train_cfg
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
 from serl_torch.examples.agibot_real.env.factory import create_env
-from serl_torch.examples.agibot_real.offline_data import (
-    load_prepared_offline_replay,
-)
-from serl_torch.examples.agibot_real.offline_data import (
-    resolve_and_validate_prepared_paths,
-)
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_obs,
 )
@@ -79,14 +99,195 @@ from serl_torch.examples.agibot_real.residual_observation import (
 )
 
 
+class ChunkBoundaryReplayBufferDataStore(
+    MemoryEfficientStepWindowReplayBuffer,
+    DataStoreBase,
+):
+    """Replay for one macro transition per executed chunk boundary.
+
+    We still reuse the step-window replay implementation so that sampling returns
+    the same batch structure as the current residual learner expects. The
+    difference is that each inserted "step" is already a whole executed chunk,
+    and we store an explicit flat ``action_mask`` to handle partial terminal
+    chunks safely.
+    """
+
+    def __init__(
+        self,
+        *,
+        observation_space: gym.spaces.Dict,
+        chunk_action_dim: int,
+        discount: float,
+        capacity: int,
+        image_keys: tuple[str, ...],
+    ) -> None:
+        MemoryEfficientStepWindowReplayBuffer.__init__(
+            self,
+            observation_space=observation_space,
+            action_space=gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(int(chunk_action_dim),),
+                dtype=np.float32,
+            ),
+            capacity=int(capacity),
+            window_size=1,
+            discount=float(discount),
+            sample_stride=1,
+            require_full_window=False,
+            pixel_keys=tuple(image_keys),
+        )
+        DataStoreBase.__init__(self, int(capacity))
+        self._lock = Lock()
+        self._chunk_action_masks = np.zeros(
+            (int(capacity), int(chunk_action_dim)),
+            dtype=np.float32,
+        )
+
+    def insert(self, data: dict[str, Any]) -> None:
+        if "action_mask" not in data:
+            raise KeyError("chunk boundary replay insert requires 'action_mask'")
+        action_mask = np.asarray(data["action_mask"], dtype=np.float32).reshape(-1)
+        expected_dim = int(self._step_action_shape[0])
+        if int(action_mask.shape[0]) != expected_dim:
+            raise ValueError(
+                "chunk boundary action_mask dim mismatch: "
+                f"{action_mask.shape[0]} != {expected_dim}"
+            )
+
+        step_record = dict(data)
+        step_record.pop("action_mask")
+
+        with self._lock:
+            insert_index = int(self._insert_index)
+            MemoryEfficientStepWindowReplayBuffer.insert(self, step_record)
+            self._chunk_action_masks[insert_index] = action_mask
+
+    def _build_transition(self, start_step_id: int) -> dict[str, Any]:
+        transition = MemoryEfficientStepWindowReplayBuffer._build_transition(
+            self,
+            start_step_id,
+        )
+        start_idx = self._buffer_index(start_step_id)
+        transition["action_mask"] = np.expand_dims(
+            np.array(self._chunk_action_masks[start_idx], copy=True),
+            axis=0,
+        )
+        return transition
+
+    def sample(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        with self._lock:
+            return MemoryEfficientStepWindowReplayBuffer.sample(
+                self,
+                *args,
+                **kwargs,
+            )
+
+    def latest_data_id(self) -> int:
+        return int(self._insert_count)
+
+    def get_latest_data(self, from_id: int) -> None:
+        raise NotImplementedError
+
+
+def create_chunk_boundary_replay_buffer(
+    *,
+    observation_space: gym.spaces.Dict,
+    chunk_action_dim: int,
+    discount: float,
+    image_keys: tuple[str, ...],
+    capacity: int,
+) -> ChunkBoundaryReplayBufferDataStore:
+    return ChunkBoundaryReplayBufferDataStore(
+        observation_space=observation_space,
+        chunk_action_dim=int(chunk_action_dim),
+        discount=float(discount),
+        image_keys=image_keys,
+        capacity=int(capacity),
+    )
+
+
+def _compute_discounted_chunk_reward(
+    rewards: list[float],
+    *,
+    discount: float,
+) -> float:
+    discounted_return = 0.0
+    for offset, reward in enumerate(rewards):
+        discounted_return += (float(discount) ** int(offset)) * float(reward)
+    return float(discounted_return)
+
+
+def _pad_chunk_action_and_mask(
+    *,
+    executed_actions: np.ndarray,
+    chunk_horizon: int,
+    action_dim: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    actions = np.asarray(executed_actions, dtype=np.float32)
+    if actions.ndim != 2:
+        raise ValueError(f"Expected 2-D executed_actions, got {actions.shape}")
+    if int(actions.shape[1]) != int(action_dim):
+        raise ValueError(
+            f"Unexpected action_dim for executed_actions: {actions.shape[1]} != {action_dim}"
+        )
+    padded_actions = np.zeros(
+        (int(chunk_horizon), int(action_dim)),
+        dtype=np.float32,
+    )
+    padded_mask = np.zeros_like(padded_actions, dtype=np.float32)
+    executed_steps = int(actions.shape[0])
+    padded_actions[:executed_steps] = actions
+    padded_mask[:executed_steps] = 1.0
+    return padded_actions.reshape(-1), padded_mask.reshape(-1)
+
+
+def _crossed_interval(
+    *,
+    previous_count: int,
+    current_count: int,
+    period: int,
+) -> bool:
+    if int(period) <= 0:
+        return False
+    return int(previous_count // period) < int(current_count // period)
+
+
+def _build_terminal_next_residual_obs(
+    *,
+    obs: dict[str, Any],
+    chunk_horizon: int,
+    action_dim: int,
+    image_keys: tuple[str, ...],
+    residual_alpha: float,
+) -> dict[str, np.ndarray]:
+    terminal_base_actions = np.zeros(
+        (int(chunk_horizon), int(action_dim)),
+        dtype=np.float32,
+    )
+    return build_chunk_residual_obs(
+        obs=obs,
+        base_actions=terminal_base_actions,
+        image_keys=image_keys,
+        residual_alpha=residual_alpha,
+    )
+
+
 def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+    if cfg.offline.enabled:
+        raise ValueError(
+            "Chunk-boundary training script does not support offline replay mixing yet. "
+            "Disable offline.enabled for this variant."
+        )
+
     env = create_env(cfg, logger)
     base_policy = build_agibot_base_policy(cfg, logger=logger)
     logger.info("Chunk policy backend: %s", base_policy.describe())
 
     image_keys = cfg.obs.image_keys
-    action_dim = cfg.env.action_dim
-    chunk_horizon = cfg.residual.chunk_horizon
+    action_dim = int(cfg.env.action_dim)
+    chunk_horizon = int(cfg.residual.chunk_horizon)
+    discount = float(cfg.sac.discount)
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
     residual_alpha = residual_action_spec.alpha
 
@@ -127,10 +328,10 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     client.recv_network_callback(update_actor)
 
     timer = Timer()
-    steps_per_update = cfg.training.steps_per_update
-    log_period = cfg.training.log_period
-    max_env_steps = cfg.training.max_env_steps
-    max_episodes = cfg.training.max_episodes
+    steps_per_update = int(cfg.training.steps_per_update)
+    log_period = int(cfg.training.log_period)
+    max_env_steps = int(cfg.training.max_env_steps)
+    max_episodes = int(cfg.training.max_episodes)
 
     env_steps = 0
     episode_id = 0
@@ -141,7 +342,7 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
 
     summary: dict[str, Any] = {
         "role": "actor",
-        "mode": "residual",
+        "mode": "residual_chunk_boundary",
         "env_steps": 0,
         "episodes": 0,
         "successes": 0,
@@ -149,70 +350,40 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         "episode_log_path": str(rollout_log_path),
     }
 
-    progress_bar = tqdm(total=int(max_env_steps), desc="actor env_steps", dynamic_ncols=True, leave=True)
+    progress_bar = tqdm(
+        total=int(max_env_steps),
+        desc="actor env_steps",
+        dynamic_ncols=True,
+        leave=True,
+    )
 
-    def _backfill_post_step_residual_obs(
-        *,
-        observations: list[dict[str, Any]],
-        task_prompt: str,
-    ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
-        base_action_chunks: list[np.ndarray] = []
-        residual_observations: list[dict[str, np.ndarray]] = []
-        for post_step_obs in observations:
-            next_base_actions, _ = base_policy.infer(post_step_obs, prompt=task_prompt)
-            next_residual_obs = build_chunk_residual_obs(
-                obs=post_step_obs,
-                base_actions=next_base_actions,
-                image_keys=image_keys,
-                residual_alpha=residual_alpha,
-            )
-            base_action_chunks.append(next_base_actions)
-            residual_observations.append(next_residual_obs)
-        return base_action_chunks, residual_observations
+    logger.info(
+        "chunk-boundary actor active: replay inserts one transition per chunk boundary "
+        "(chunk_horizon=%s); intermediate step transitions are not stored",
+        int(chunk_horizon),
+    )
 
     try:
         while env_steps < max_env_steps and episode_id < max_episodes:
             episode_id += 1
             obs = env.reset()
-
             task_prompt = str(env.task_description)
-
-            prefetched = None
-            pending_last_transition: dict[str, Any] | None = None
+            prefetched: dict[str, Any] | None = None
             episode_return = 0.0
             episode_steps = 0
+            episode_chunk_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
 
-            def _flush_pending_last_transition() -> None:
-                nonlocal pending_last_transition
-                if pending_last_transition is None:
-                    return
-                data_store.insert(pending_last_transition)
-                pending_last_transition = None
-
-            def _finalize_pending_last_transition(
-                *,
-                terminal_reward: float,
-                boundary_flag: bool,
-            ) -> None:
-                nonlocal pending_last_transition
-                if pending_last_transition is None:
-                    return
-                pending_last_transition["rewards"] = float(
-                    pending_last_transition["rewards"]
-                ) + float(terminal_reward)
-                pending_last_transition["dones"] = bool(boundary_flag)
-                pending_last_transition["masks"] = 0.0
-                data_store.insert(pending_last_transition)
-                pending_last_transition = None
-
             while env_steps < max_env_steps:
+                remaining_env_budget = int(max_env_steps - env_steps)
+                if remaining_env_budget <= 0:
+                    break
+
                 timer.tick("total")
                 with timer.context("sample_actions"):
                     if prefetched is None:
                         base_actions, _ = base_policy.infer(obs, prompt=task_prompt)
-
                         residual_obs = build_chunk_residual_obs(
                             obs=obs,
                             base_actions=base_actions,
@@ -220,142 +391,147 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                             residual_alpha=residual_alpha,
                         )
                     else:
-                        base_actions = prefetched["base_actions"]
-                        residual_obs = prefetched["residual_obs"]
+                        base_actions = np.asarray(
+                            prefetched["base_actions"],
+                            dtype=np.float32,
+                        )
+                        residual_obs = dict(prefetched["residual_obs"])
                         prefetched = None
+                    residual_actions = agent.sample_action(
+                        residual_obs,
+                        deterministic=False,
+                    )
+                    final_actions = residual_action_spec.compose_chunk(
+                        base_action_chunk=base_actions,
+                        residual_action=residual_actions,
+                    )
 
-                    residual_actions = agent.sample_action(residual_obs, deterministic=False)
-
-                    final_actions = residual_action_spec.compose_chunk(base_action_chunk=base_actions, residual_action=residual_actions)
-
-                episode_done = False
-                should_log_timer = False
-                remaining_env_steps = max(0, int(max_env_steps - env_steps))
-                if remaining_env_steps <= 0:
-                    timer.tock("total")
+                execute_horizon = min(int(chunk_horizon), int(remaining_env_budget))
+                planned_actions = np.asarray(
+                    final_actions[:execute_horizon],
+                    dtype=np.float32,
+                )
+                if int(planned_actions.shape[0]) <= 0:
                     break
 
-                action_chunk = np.asarray(final_actions, dtype=np.float32)[:remaining_env_steps]
+                with timer.context("step_env_chunk"):
+                    chunk_result = env.step_chunk(planned_actions)
 
-                with timer.context("step_env"):
-                    chunk_result = env.step_chunk(action_chunk)
-
-                chunk_observations = list(chunk_result["observations"])
-                chunk_rewards = [float(v) for v in chunk_result["rewards"]]
-                chunk_dones = [bool(v) for v in chunk_result["dones"]]
-                chunk_infos = [dict(v) for v in chunk_result["infos"]]
-
+                infos = [dict(info) for info in chunk_result["infos"]]
+                observations = [dict(item) for item in chunk_result["observations"]]
+                rewards = [float(v) for v in chunk_result["rewards"]]
+                dones = [bool(v) for v in chunk_result["dones"]]
                 executed_steps = 0
-                for info in chunk_infos:
-                    if not bool(info.get("controller_action_executed", True)):
+                for info in infos:
+                    if bool(info.get("controller_action_executed", True)):
+                        executed_steps += 1
+                    else:
                         break
-                    executed_steps += 1
 
-                last_info = dict(chunk_result["info"])
-                obs = dict(chunk_result["obs"])
+                should_log_timer = False
+                previous_env_steps = int(env_steps)
 
                 if executed_steps <= 0:
                     done_flag = bool(chunk_result["done"] or chunk_result["truncated"])
                     if not done_flag:
                         raise RuntimeError(
-                            "step_chunk returned no executed actions without a terminal outcome"
+                            "chunk execution produced no executed action and no terminal outcome"
                         )
-                    _finalize_pending_last_transition(
-                        terminal_reward=float(chunk_result["reward_sum"]),
-                        boundary_flag=bool(
-                            chunk_result["done"] or chunk_result["truncated"]
-                        ),
-                    )
-                    episode_return += float(chunk_result["reward_sum"])
+                    last_info = dict(infos[-1]) if infos else {}
+                    episode_return += float(sum(rewards))
                     episode_success = bool(
-                        episode_success or chunk_result["info"].get("success", False)
+                        episode_success or last_info.get("success", False)
                     )
-                    prefetched = None
-                    episode_done = True
+                    obs = dict(chunk_result["obs"])
                     timer.tock("total")
-                    if should_log_timer:
-                        append_jsonl(
-                            actor_timer_log_path,
-                            {
-                                "source": "actor",
-                                "env_steps": int(env_steps),
-                                "episode_id": int(episode_id),
-                                "episode_steps": int(episode_steps),
-                                "timer": timer.get_average_times(),
-                            },
-                        )
                     break
 
-                executed_actions = np.asarray(action_chunk[:executed_steps], dtype=np.float32)
-                executed_observations = chunk_observations[:executed_steps]
-                executed_rewards = chunk_rewards[:executed_steps]
-                executed_dones = chunk_dones[:executed_steps]
-                executed_infos = chunk_infos[:executed_steps]
+                executed_rewards = rewards[:executed_steps]
+                executed_dones = dones[:executed_steps]
+                executed_infos = infos[:executed_steps]
+                boundary_obs = dict(observations[executed_steps - 1])
+                last_info = dict(executed_infos[-1])
+                done_flag = bool(
+                    executed_dones[-1] or bool(chunk_result["truncated"])
+                )
 
-                with timer.context("build_decision_obs"):
-                    backfilled_base_actions, backfilled_residual_obs = (
-                        _backfill_post_step_residual_obs(
-                            observations=executed_observations,
-                            task_prompt=task_prompt,
+                if done_flag:
+                    with timer.context("build_terminal_boundary_obs"):
+                        next_residual_obs = _build_terminal_next_residual_obs(
+                            obs=boundary_obs,
+                            chunk_horizon=int(chunk_horizon),
+                            action_dim=int(action_dim),
+                            image_keys=image_keys,
+                            residual_alpha=residual_alpha,
                         )
-                    )
-
-                current_residual_obs = residual_obs
-                chunk_transitions: list[dict[str, Any]] = []
-                for step_idx in range(executed_steps):
-                    step_done = bool(executed_dones[step_idx])
-                    step_truncated = bool(
-                        step_idx == (executed_steps - 1) and chunk_result["truncated"]
-                    )
-                    done_flag = bool(step_done or step_truncated)
-                    next_residual_obs = backfilled_residual_obs[step_idx]
-                    step_info = executed_infos[step_idx]
-
-                    transition = {
-                        "episode_id": int(episode_id),
-                        "episode_step": int(episode_steps),
-                        "observations": current_residual_obs,
-                        "actions": np.asarray(
-                            executed_actions[step_idx], dtype=np.float32
-                        ).reshape(-1),
-                        "next_observations": next_residual_obs,
-                        "rewards": float(executed_rewards[step_idx]),
-                        "masks": float(0.0 if done_flag else 1.0),
-                        "dones": done_flag,
-                    }
-                    chunk_transitions.append(transition)
-
-                    env_steps += 1
-                    progress_bar.update(1)
-                    episode_steps += 1
-                    episode_return += float(executed_rewards[step_idx])
-                    episode_success = bool(
-                        episode_success or step_info.get("success", False)
-                    )
-                    current_residual_obs = next_residual_obs
-                    last_info = dict(step_info)
-
-                    if env_steps % steps_per_update == 0:
-                        client.update()
-                    if env_steps % log_period == 0:
-                        should_log_timer = True
-
-                _flush_pending_last_transition()
-                prefetched = None
-                if bool(chunk_result["done"] or chunk_result["truncated"]):
-                    for transition in chunk_transitions:
-                        data_store.insert(transition)
-                    last_info = dict(chunk_result["info"])
+                    prefetched = None
                 else:
-                    for transition in chunk_transitions[:-1]:
-                        data_store.insert(transition)
-                    pending_last_transition = chunk_transitions[-1]
+                    with timer.context("build_boundary_obs"):
+                        next_base_actions, _ = base_policy.infer(
+                            boundary_obs,
+                            prompt=task_prompt,
+                        )
+                        next_residual_obs = build_chunk_residual_obs(
+                            obs=boundary_obs,
+                            base_actions=next_base_actions,
+                            image_keys=image_keys,
+                            residual_alpha=residual_alpha,
+                        )
                     prefetched = {
-                        "base_actions": backfilled_base_actions[-1],
-                        "residual_obs": backfilled_residual_obs[-1],
+                        "base_actions": np.asarray(next_base_actions, dtype=np.float32),
+                        "residual_obs": dict(next_residual_obs),
                     }
-                if bool(chunk_result["done"] or chunk_result["truncated"]) or env_steps >= max_env_steps:
-                    episode_done = True
+                next_residual_obs = dict(next_residual_obs)
+                chunk_actions, chunk_action_mask = _pad_chunk_action_and_mask(
+                    executed_actions=np.asarray(
+                        planned_actions[:executed_steps],
+                        dtype=np.float32,
+                    ),
+                    chunk_horizon=int(chunk_horizon),
+                    action_dim=int(action_dim),
+                )
+                chunk_reward = _compute_discounted_chunk_reward(
+                    executed_rewards,
+                    discount=float(discount),
+                )
+                chunk_mask = 0.0 if done_flag else float(
+                    float(discount) ** max(0, int(executed_steps) - 1)
+                )
+                transition = {
+                    "episode_id": int(episode_id),
+                    "episode_step": int(episode_chunk_steps),
+                    "observations": residual_obs,
+                    "actions": chunk_actions,
+                    "action_mask": chunk_action_mask,
+                    "next_observations": next_residual_obs,
+                    "rewards": float(chunk_reward),
+                    "masks": float(chunk_mask),
+                    "dones": bool(done_flag),
+                }
+                data_store.insert(transition)
+
+                env_steps += int(executed_steps)
+                progress_bar.update(int(executed_steps))
+                episode_steps += int(executed_steps)
+                episode_chunk_steps += 1
+                episode_return += float(sum(executed_rewards))
+                episode_success = bool(
+                    episode_success or last_info.get("success", False)
+                )
+                obs = dict(boundary_obs)
+
+                if _crossed_interval(
+                    previous_count=int(previous_env_steps),
+                    current_count=int(env_steps),
+                    period=int(steps_per_update),
+                ):
+                    client.update()
+                if _crossed_interval(
+                    previous_count=int(previous_env_steps),
+                    current_count=int(env_steps),
+                    period=int(log_period),
+                ):
+                    should_log_timer = True
 
                 timer.tock("total")
 
@@ -367,14 +543,14 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                             "env_steps": int(env_steps),
                             "episode_id": int(episode_id),
                             "episode_steps": int(episode_steps),
+                            "episode_chunk_steps": int(episode_chunk_steps),
                             "timer": timer.get_average_times(),
                         },
                     )
 
-                if episode_done:
+                if done_flag or env_steps >= max_env_steps:
                     break
 
-            _flush_pending_last_transition()
             client.update()
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
@@ -401,19 +577,22 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 {
                     "source": "rollout",
                     **episode_stats,
+                    "episode_chunk_steps": int(episode_chunk_steps),
                 },
             )
             client.request("send-stats", episode_stats)
             progress_bar.set_postfix(
                 episode=int(episode_id),
                 success=int(bool(episode_success)),
+                chunks=int(episode_chunk_steps),
                 refresh=False,
             )
             logger.info(
-                "episode=%s success=%s steps=%s return=%.3f env_steps=%s",
+                "episode=%s success=%s env_steps=%s chunk_transitions=%s return=%.3f total_env_steps=%s",
                 int(episode_id),
                 bool(episode_success),
                 int(episode_steps),
+                int(episode_chunk_steps),
                 float(episode_return),
                 int(env_steps),
             )
@@ -447,9 +626,15 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
 
 
 def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+    if cfg.offline.enabled:
+        raise ValueError(
+            "Chunk-boundary training script does not support offline replay mixing yet. "
+            "Disable offline.enabled for this variant."
+        )
+
     image_keys = cfg.obs.image_keys
-    action_dim = cfg.env.action_dim
-    chunk_horizon = cfg.residual.chunk_horizon
+    action_dim = int(cfg.env.action_dim)
+    chunk_horizon = int(cfg.residual.chunk_horizon)
     residual_action_spec = ResidualActionSpec.from_cfg(
         cfg,
         action_dim=action_dim,
@@ -471,25 +656,13 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         sample_obs=sample_obs,
         image_keys=image_keys,
     )
-    replay_buffer = create_chunk_replay_buffer(
+    replay_buffer = create_chunk_boundary_replay_buffer(
         observation_space=observation_space,
-        action_dim=int(cfg.env.action_dim),
-        chunk_horizon=int(cfg.residual.chunk_horizon),
+        chunk_action_dim=int(residual_action_spec.chunk_critic_action_dim),
         discount=float(cfg.sac.discount),
         image_keys=image_keys,
         capacity=int(cfg.replay.capacity),
     )
-    offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None = None
-    offline_prepared_path: Path | None = None
-    offline_manifest_path: Path | None = None
-    offline_validation_stats: dict[str, Any] | None = None
-    offline_load_stats: dict[str, Any] = {
-        "files_total": 0,
-        "files_loaded": 0,
-        "episodes_loaded": 0,
-        "inserted": 0,
-        "errors": 0,
-    }
 
     wandb_cfg = WandBLogger.get_default_config()
     run_name = cfg.wandb.exp_name
@@ -520,7 +693,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     progress_state_lock = Lock()
     summary: dict[str, Any] = {
         "role": "learner",
-        "mode": "residual",
+        "mode": "residual_chunk_boundary",
         "update_steps": 0,
         "env_steps": 0,
         "replay_size": 0,
@@ -561,148 +734,59 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     server.register_data_store("actor_env", replay_buffer)
     server.start(threaded=True)
 
-    if cfg.offline.enabled:
-        offline_resolution = resolve_and_validate_prepared_paths(
-            cfg,
-            logger=logger,
-        )
-        if offline_resolution.prepared_paths:
-            offline_prepared_path = offline_resolution.prepared_paths[0]
-        if offline_resolution.manifest_paths:
-            offline_manifest_path = offline_resolution.manifest_paths[0]
-        offline_validation_stats = dict(offline_resolution.validation_stats)
-        offline_replay_buffer = create_chunk_replay_buffer(
-            observation_space=observation_space,
-            action_dim=int(cfg.env.action_dim),
-            chunk_horizon=int(cfg.residual.chunk_horizon),
-            discount=float(cfg.sac.discount),
-            image_keys=image_keys,
-            capacity=int(cfg.offline.capacity),
-        )
-        offline_load_stats = load_prepared_offline_replay(
-            replay_buffer=offline_replay_buffer,
-            prepared_paths=tuple()
-            if offline_prepared_path is None
-            else (offline_prepared_path,),
-            logger=logger,
-            max_episodes=cfg.offline.load_max_episodes,
-            max_transitions=cfg.offline.load_max_transitions,
-        )
-        if len(offline_replay_buffer) <= 0:
-            logger.warning(
-                "offline replay prepared but empty; continuing with online-only training"
-            )
-            offline_replay_buffer = None
-        else:
-            logger.info(
-                "offline replay ready: prepared_path=%s replay_size=%s ratio=%.3f pretrain_steps=%s",
-                None if offline_prepared_path is None else str(offline_prepared_path),
-                int(len(offline_replay_buffer)),
-                float(cfg.offline.ratio),
-                int(cfg.offline.pretrain_steps),
-            )
+    logger.info(
+        "chunk-boundary learner active: replay_size / training_starts now count chunk "
+        "transitions rather than env steps (chunk_horizon=%s)",
+        int(chunk_horizon),
+    )
 
-    training_starts = cfg.training.training_starts
-    checkpoint_every = cfg.training.checkpoint.every_steps
-    checkpoint_keep = cfg.training.checkpoint.keep
+    training_starts = int(cfg.training.training_starts)
+    if training_starts > 0 and chunk_horizon > 1:
+        logger.warning(
+            "chunk-boundary variant interprets training.training_starts as chunk transitions; "
+            "current config training_starts=%s with chunk_horizon=%s implies roughly %s "
+            "executed env steps before learner warmup completes",
+            int(training_starts),
+            int(chunk_horizon),
+            int(training_starts * chunk_horizon),
+        )
+    checkpoint_every = int(cfg.training.checkpoint.every_steps)
+    checkpoint_keep = int(cfg.training.checkpoint.keep)
     checkpoint_dir = Path(cfg.training.checkpoint.dir)
     if not checkpoint_dir.is_absolute():
         checkpoint_dir = run_dir / checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    log_period = cfg.training.log_period
-    max_update_steps = cfg.training.max_update_steps
-    critic_actor_ratio = max(1, cfg.training.critic_actor_ratio)
-    steps_per_update = cfg.training.steps_per_update
+    log_period = int(cfg.training.log_period)
+    max_update_steps = int(cfg.training.max_update_steps)
+    critic_actor_ratio = max(1, int(cfg.training.critic_actor_ratio))
+    steps_per_update = int(cfg.training.steps_per_update)
     replay_warmup_poll_interval_sec = 1.0
     idle_poll_interval_sec = 1.0
     timer = Timer()
     last_log_time = time.time()
     last_log_update_steps = int(update_steps)
-    offline_pretrain_steps_done = 0
     initial_network_published = False
 
-    def _run_training_update(
-        *,
-        offline_ratio: float,
-    ) -> tuple[dict[str, Any], dict[str, int]]:
+    def _sample_training_batch() -> dict[str, Any]:
+        batch = replay_buffer.sample(int(cfg.replay.batch_size))
+        return reshape_chunk_batch_for_training(batch)
+
+    def _run_training_update() -> dict[str, Any]:
         nonlocal agent
-        train_batch_mix = {
-            "online_batch_size": int(cfg.replay.batch_size),
-            "offline_batch_size": 0,
-        }
         for _ in range(max(0, critic_actor_ratio - 1)):
             with timer.context("sample_replay_buffer"):
-                batch, _ = sample_mixed_training_batch(
-                    online_replay_buffer=replay_buffer,
-                    offline_replay_buffer=offline_replay_buffer,
-                    batch_size=int(cfg.replay.batch_size),
-                    offline_ratio=float(offline_ratio),
-                )
+                batch = _sample_training_batch()
             with timer.context("train_critics"):
                 agent, _ = agent.update_critics(batch)
 
         with timer.context("train"):
-            batch, train_batch_mix = sample_mixed_training_batch(
-                online_replay_buffer=replay_buffer,
-                offline_replay_buffer=offline_replay_buffer,
-                batch_size=int(cfg.replay.batch_size),
-                offline_ratio=float(offline_ratio),
-            )
+            batch = _sample_training_batch()
             agent, update_info = agent.update_high_utd(
                 batch,
                 utd_ratio=cfg.sac.utd_ratio,
             )
-        return update_info, train_batch_mix
-
-    if (
-        offline_replay_buffer is not None
-        and int(cfg.offline.pretrain_steps) > 0
-        and int(update_steps) < int(max_update_steps)
-    ):
-        logger.info(
-            "starting offline pretrain: steps=%s offline_replay_size=%s",
-            int(cfg.offline.pretrain_steps),
-            int(len(offline_replay_buffer)),
-        )
-        pretrain_bar = tqdm(
-            total=min(int(cfg.offline.pretrain_steps), int(max_update_steps)),
-            desc="learner offline pretrain",
-            dynamic_ncols=True,
-            leave=True,
-        )
-        last_pretrain_info: dict[str, Any] | None = None
-        try:
-            while (
-                int(update_steps) < int(max_update_steps)
-                and int(offline_pretrain_steps_done) < int(cfg.offline.pretrain_steps)
-            ):
-                last_pretrain_info, _ = _run_training_update(offline_ratio=1.0)
-                update_steps += 1
-                offline_pretrain_steps_done += 1
-                pretrain_bar.update(1)
-        finally:
-            pretrain_bar.close()
-
-        if last_pretrain_info is not None:
-            pretrain_metrics = extract_learner_wandb_metrics(last_pretrain_info)
-            if pretrain_metrics:
-                wandb_logger.log(to_jsonable(pretrain_metrics), step=update_steps)
-        logger.info(
-            "offline pretrain complete: completed=%s update_steps=%s offline_replay_size=%s",
-            int(offline_pretrain_steps_done),
-            int(update_steps),
-            0 if offline_replay_buffer is None else int(len(offline_replay_buffer)),
-        )
-        server.publish_network(
-            snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
-        )
-        initial_network_published = True
-        logger.info(
-            "publish network: step=%s env_steps=%s reason=offline_pretrain_complete",
-            int(update_steps),
-            int(env_steps),
-        )
+        return update_info
 
     if int(update_steps) < int(max_update_steps) and int(training_starts) > 0:
         warmup_bar = tqdm(
@@ -746,17 +830,16 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             int(update_steps),
             int(env_steps),
         )
+        initial_network_published = True
 
     try:
         while update_steps < max_update_steps:
-            online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
-            if not online_update_steps < env_steps:
+            replay_insert_count = int(replay_buffer.latest_data_id())
+            if int(update_steps) >= int(replay_insert_count):
                 time.sleep(idle_poll_interval_sec)
                 continue
 
-            update_info, batch_mix = _run_training_update(
-                offline_ratio=float(cfg.offline.ratio),
-            )
+            update_info = _run_training_update()
             update_steps += 1
 
             if update_steps % steps_per_update == 0:
@@ -792,24 +875,6 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         "timer": timer_metrics,
                     },
                 )
-                offline_suffix = ""
-                if offline_replay_buffer is not None:
-                    offline_total = max(
-                        1,
-                        int(batch_mix["online_batch_size"])
-                        + int(batch_mix["offline_batch_size"]),
-                    )
-                    offline_ratio_actual = float(batch_mix["offline_batch_size"]) / float(
-                        offline_total
-                    )
-                    offline_suffix = (
-                        " "
-                        f"offline_replay={int(len(offline_replay_buffer))} "
-                        f"offline_ratio_actual={offline_ratio_actual:.3f} "
-                        f"offline_batch={int(batch_mix['offline_batch_size'])}/{offline_total} "
-                        f"online_updates={max(0, int(update_steps - offline_pretrain_steps_done))} "
-                        f"offline_pretrain={int(offline_pretrain_steps_done)}"
-                    )
                 logger.info(
                     format_learner_heartbeat(
                         update_steps=int(update_steps),
@@ -817,7 +882,6 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         replay_size=int(len(replay_buffer)),
                         updates_per_sec=float(updates_per_sec),
                         update_info=dict(update_metrics),
-                        offline_suffix=offline_suffix,
                     )
                 )
 
@@ -844,33 +908,6 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                 "env_steps": int(env_steps),
                 "replay_size": int(len(replay_buffer)),
                 "last_completed_episode_id": int(summary_last_completed_episode_id),
-                "offline": {
-                    "enabled": bool(cfg.offline.enabled),
-                    "ratio": float(cfg.offline.ratio),
-                    "prepared_path": (
-                        None
-                        if offline_prepared_path is None
-                        else str(offline_prepared_path)
-                    ),
-                    "manifest_path": (
-                        None
-                        if offline_manifest_path is None
-                        else str(offline_manifest_path)
-                    ),
-                    "validation_stats": (
-                        None
-                        if offline_validation_stats is None
-                        else to_jsonable(offline_validation_stats)
-                    ),
-                    "load_stats": to_jsonable(offline_load_stats),
-                    "replay_size": (
-                        0
-                        if offline_replay_buffer is None
-                        else int(len(offline_replay_buffer))
-                    ),
-                    "pretrain_steps_requested": int(cfg.offline.pretrain_steps),
-                    "pretrain_steps_completed": int(offline_pretrain_steps_done),
-                },
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
@@ -889,7 +926,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
 @hydra.main(
     version_base=None,
     config_path="../configs",
-    config_name="train_residual",
+    config_name="train_residual_chunk_boundary",
 )
 def main(cfg: DictConfig) -> None:
     typed_cfg = parse_train_cfg(cfg)
@@ -900,7 +937,7 @@ def main(cfg: DictConfig) -> None:
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s %(message)s",
     )
-    logger = logging.getLogger("agibot_residual")
+    logger = logging.getLogger("agibot_residual_chunk_boundary")
     logger.info("Hydra run dir: %s", run_dir)
     logger.info("Config:\n%s", json.dumps(cfg_to_log_payload(typed_cfg), indent=2))
 

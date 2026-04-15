@@ -38,6 +38,8 @@
   [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
 - standalone checkpoint eval：
   [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+- 真机启动文档：
+  [docs/real_robot_startup_guide.md](docs/real_robot_startup_guide.md)
 
 这里仍然不支持 `async eval`，也不支持和 actor rollout 并发评估。真机推荐流程仍然是先训练/rollout，再单独加载 checkpoint 做 eval。
 
@@ -79,6 +81,8 @@
   临时参考版 offline prepare 入口
 - [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
   单独 checkpoint eval 入口
+- [docs/real_robot_startup_guide.md](docs/real_robot_startup_guide.md)
+  真机 bring-up / 训练 / 评估启动文档
 - [eval_runner.py](eval_runner.py)
   standalone eval runner
 - [scripts/start_robot_service.py](scripts/start_robot_service.py)
@@ -126,7 +130,7 @@
 最小安装通常至少包括：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
 conda activate serl_torch
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
@@ -137,13 +141,16 @@ pip install -e ./serl_launcher
 如果你使用 `policy.type=openpi`，训练环境还需要能导入：
 
 ```bash
-pip install -e /path/to/openpi/packages/openpi-client
+pip install -e ./third_party/openpi-client
 ```
+
+这只安装 vendored 的 client 包。  
+如果你还要在本机启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并设置 `OPENPI_ROOT`。
 
 如果不是 editable install，可以补：
 
 ```bash
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
 ```
 
 ## Actor 和 robot-service 的 shell 环境
@@ -212,7 +219,7 @@ canonical 配置是：
 - `task.max_episode_steps=150`
 - `controller.enabled=true`
 - `residual.alpha=0.2`
-- `residual.chunk_horizon=50`
+- `residual.chunk_horizon=15`
 - `training.training_starts=1000`
 - `training.steps_per_update=30`
 - `training.critic_actor_ratio=4`

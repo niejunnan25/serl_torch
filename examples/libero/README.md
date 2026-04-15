@@ -135,13 +135,16 @@ pip install -e ./serl_launcher
 如果你使用 `policy.type=openpi`，还需要：
 
 ```bash
-pip install -e /path/to/openpi/packages/openpi-client
+pip install -e ./third_party/openpi-client
 ```
+
+这只安装 vendored 的 client 包。  
+如果你还要启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并设置 `OPENPI_ROOT`。
 
 如果不是 editable install，可以补：
 
 ```bash
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
 ```
 
 ## LIBERO 路径怎么解析

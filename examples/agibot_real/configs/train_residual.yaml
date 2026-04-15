@@ -63,7 +63,7 @@ residual:
   action_mask: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
-  chunk_horizon: 50
+  chunk_horizon: 15
 
 encoder:
   type: resnet

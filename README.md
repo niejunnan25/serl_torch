@@ -64,8 +64,38 @@
 最常见的 Python 环境是 `serl_torch`。
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
 conda activate serl_torch
+pip install -r serl_launcher/requirements.txt
+pip install -e ./serl_launcher
+```
+
+这里两条命令的分工不同：
+
+- `pip install -r serl_launcher/requirements.txt`
+  安装当前主线运行时真正需要的第三方依赖，例如 `gym`、`numpy`、`wandb`、`omegaconf`
+- `pip install -e ./serl_launcher`
+  把本地源码目录 `serl_launcher/` 注册成当前环境里的一个 editable Python package
+
+`-e` 是 editable install。它不是把源码复制进环境，而是让 Python 直接引用你工作区里的源码。这样你修改：
+
+- `serl_launcher/serl_launcher/agents/...`
+- `serl_launcher/serl_launcher/data/...`
+- `serl_launcher/serl_launcher/policy/...`
+
+下次重新启动进程时就会直接生效，不需要重新安装一遍包。
+
+当前仓库里 `setup.py` 和 `requirements.txt` 同时存在，是因为它们解决的是两个不同问题：
+
+- `setup.py`
+  负责声明“这是一个可以被 pip 安装的本地 Python 包”，让 `import serl_launcher.*` 成立
+- `requirements.txt`
+  负责声明“当前主线运行环境需要哪些第三方依赖”
+
+对这个仓库来说，`setup.py` 更像最小打包元数据，`requirements.txt` 才是当前主线环境清单。  
+所以新机器安装时，建议始终按这个顺序：
+
+```bash
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
 ```
@@ -82,21 +112,80 @@ pip install -e .
 如果你使用 `policy.type=openpi`，还需要让训练环境能导入 `openpi-client`：
 
 ```bash
-pip install -e /path/to/openpi/packages/openpi-client
+pip install -e ./third_party/openpi-client
 ```
+
+这里 vendored 的只是 `openpi-client`。它解决的是训练环境里的：
+
+- `import openpi_client...`
+
+但如果你还要启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并正确设置 `OPENPI_ROOT`。
 
 如果你不是用 editable install，也可以手工补 `PYTHONPATH`：
 
 ```bash
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
 ```
+
+但对当前仓库，不建议长期依赖手工 `PYTHONPATH`。`pip install -e ./serl_launcher` 更稳，也更符合 Python 包的正常组织方式。
+
+## 关于 `requirements.txt` 和 `setup.py`
+
+你会在这个仓库里同时看到：
+
+- `serl_launcher/requirements.txt`
+- `serl_launcher/setup.py`
+
+这是比较常见但有点混合的组织方式。
+
+当前它的实际语义是：
+
+- `requirements.txt`
+  面向“开发/运行当前主线的人”，描述一台机器要装哪些依赖才能跑 `examples/agibot_real` 和 `examples/libero`
+- `setup.py`
+  面向“Python 打包工具”，描述 `serl_launcher` 这个本地包本身
+
+之所以两个都保留，是因为如果只有 `requirements.txt`：
+
+- 你能装第三方依赖
+- 但 `import serl_launcher...` 仍然不一定成立
+
+如果只有 `setup.py`：
+
+- 你能把 `serl_launcher` 这个本地包装进环境
+- 但当前主线真正依赖的很多三方库不一定会跟着一起装全
+
+所以现在这套组织是：
+
+- 用 `requirements.txt` 保证运行环境
+- 用 `setup.py` 保证本地包可安装
+
+这套方式能工作，但不是最整洁的终态。
+
+如果后面要进一步整理，我建议方向是：
+
+1. 保留一个最小 `setup.py` 或迁到 `pyproject.toml`
+2. 把当前主线依赖继续收敛到一份清晰的运行环境清单
+3. 明确区分：
+   - 核心运行依赖
+   - 可选 backend 依赖，例如 `openpi-client`
+   - 开发工具依赖
+
+更干净的终态通常是：
+
+- `pyproject.toml`
+  放包元数据和基础依赖
+- `requirements.txt`
+  只保留环境锁定或额外的开发/部署依赖
+
+但在当前仓库阶段，继续保留“`requirements.txt` + `setup.py` + editable install”是合理的，因为它最直接，也不会打断现有工作流。
 
 ## 视觉权重
 
 如果本机没有缓存 HuggingFace ResNet 权重，可以先下载：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
 python scripts/download_resnet.py --models microsoft/resnet-18
 ```
 
