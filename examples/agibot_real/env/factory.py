@@ -8,15 +8,17 @@ from typing import Any
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
+from ..config import AgiBotEvalConfig
+from ..config import AgiBotRunConfig
 from ..config import AgiBotTrainConfig
 from .task_env import AgiBotTaskEnv
 
 
 def _build_common_kwargs(
-    cfg: DictConfig | AgiBotTrainConfig,
+    cfg: DictConfig | AgiBotRunConfig,
     logger: logging.Logger,
 ) -> dict[str, Any]:
-    if isinstance(cfg, AgiBotTrainConfig):
+    if isinstance(cfg, (AgiBotTrainConfig, AgiBotEvalConfig)):
         return {
             "task_name": str(cfg.task.name),
             "prompt": str(cfg.task.prompt),
@@ -32,7 +34,6 @@ def _build_common_kwargs(
             "controller": asdict(cfg.controller),
             "reset_hook": cfg.task.reset_hook,
             "success_hook": cfg.task.success_hook,
-            "expert_precheck_hook": cfg.task.expert_precheck_hook,
             "logger": logger,
         }
 
@@ -56,22 +57,40 @@ def _build_common_kwargs(
         "controller": OmegaConf.to_container(controller_cfg, resolve=True),
         "reset_hook": task_cfg.get("reset_hook", None),
         "success_hook": task_cfg.get("success_hook", None),
-        "expert_precheck_hook": task_cfg.get("expert_precheck_hook", None),
         "logger": logger,
     }
 
 
-def _resolve_env_backend(cfg: DictConfig | AgiBotTrainConfig) -> str:
-    if isinstance(cfg, AgiBotTrainConfig):
+def _resolve_env_backend(cfg: DictConfig | AgiBotRunConfig) -> str:
+    if isinstance(cfg, (AgiBotTrainConfig, AgiBotEvalConfig)):
         return str(cfg.env.backend).strip().lower()
     return str(cfg.get("env", {}).get("backend", "local")).strip().lower()
 
 
-def _create_env(cfg: DictConfig | AgiBotTrainConfig, logger: logging.Logger):
+def _resolve_controller_enabled(cfg: DictConfig | AgiBotRunConfig) -> bool:
+    if isinstance(cfg, (AgiBotTrainConfig, AgiBotEvalConfig)):
+        return bool(cfg.controller.enabled)
+    return bool(cfg.get("controller", {}).get("enabled", False))
+
+
+def create_env(cfg: DictConfig | AgiBotRunConfig, logger: logging.Logger):
     env_backend = _resolve_env_backend(cfg)
     if env_backend != "local":
         raise ValueError(
             "AgiBot real env is local-only; remote support has been removed, "
             f"got env.backend={env_backend!r}"
         )
+    if not _resolve_controller_enabled(cfg):
+        raise ValueError(
+            "AgiBot canonical train/eval flow requires controller.enabled=true"
+        )
     return AgiBotTaskEnv(**_build_common_kwargs(cfg, logger))
+
+
+def _create_env(cfg: DictConfig | AgiBotRunConfig, logger: logging.Logger):
+    """Backwards-compatible alias for older call sites."""
+
+    return create_env(cfg, logger)
+
+
+__all__ = ["create_env"]

@@ -33,7 +33,6 @@ class TaskConfig:
     max_episode_steps: int | None
     reset_hook: str | None
     success_hook: str | None
-    expert_precheck_hook: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +173,26 @@ class ReplayConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OfflinePrepareConfig:
+    raw_dataset_path: str | None
+    output_root: str
+    expert_reference_scale: float
+    clip_residual_to_unit: bool
+
+
+@dataclass(frozen=True, slots=True)
+class OfflineConfig:
+    enabled: bool
+    prepared_path: str | None
+    ratio: float
+    capacity: int
+    load_max_episodes: int | None
+    load_max_transitions: int | None
+    pretrain_steps: int
+    prepare: OfflinePrepareConfig
+
+
+@dataclass(frozen=True, slots=True)
 class MixedPrecisionConfig:
     enabled: bool
     dtype: str
@@ -195,14 +214,28 @@ class TrainingConfig:
     max_update_steps: int
     max_episodes: int
     log_period: int
-    expert_check: bool
     mixed_precision: MixedPrecisionConfig
     checkpoint: CheckpointConfig
 
 
 @dataclass(frozen=True, slots=True)
+class EvalTrainingConfig:
+    mixed_precision: MixedPrecisionConfig
+
+
+@dataclass(frozen=True, slots=True)
+class EvalConfig:
+    episodes: int
+    max_env_steps_per_episode: int | None
+    deterministic: bool
+    checkpoint_path: str | None
+    checkpoint_step: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class LoggingConfig:
     summary_file: str
+    episode_log_file: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,11 +254,33 @@ class AgiBotTrainConfig:
     network: NetworkConfig
     sac: SacConfig
     replay: ReplayConfig
+    offline: OfflineConfig
     training: TrainingConfig
     logging: LoggingConfig
 
 
-def cfg_to_log_payload(cfg: AgiBotTrainConfig) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class AgiBotEvalConfig:
+    global_seed: int
+    task: TaskConfig
+    policy: PolicyConfig
+    robot: RobotConfig
+    controller: ControllerConfig
+    env: EnvConfig
+    obs: ObsConfig
+    residual: ResidualConfig
+    encoder: EncoderConfig
+    network: NetworkConfig
+    sac: SacConfig
+    training: EvalTrainingConfig
+    logging: LoggingConfig
+    eval: EvalConfig
+
+
+AgiBotRunConfig = AgiBotTrainConfig | AgiBotEvalConfig
+
+
+def cfg_to_log_payload(cfg: Any) -> dict[str, Any]:
     payload = to_jsonable(asdict(cfg))
     if not isinstance(payload, dict):
         raise TypeError("typed config payload must serialize to a dict")
@@ -275,6 +330,12 @@ def _optional_positive_int(value: Any, field_name: str) -> int | None:
     return _positive_int(value, field_name)
 
 
+def _optional_nonnegative_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _nonnegative_int(value, field_name)
+
+
 def _float_value(value: Any, field_name: str) -> float:
     try:
         resolved = float(value)
@@ -307,12 +368,6 @@ def _optional_float(value: Any, field_name: str) -> float | None:
     return _float_value(value, field_name)
 
 
-def _optional_nonnegative_int(value: Any, field_name: str) -> int | None:
-    if value is None:
-        return None
-    return _nonnegative_int(value, field_name)
-
-
 def _optional_positive_float(value: Any, field_name: str) -> float | None:
     if value is None:
         return None
@@ -323,6 +378,26 @@ def _optional_nonnegative_float(value: Any, field_name: str) -> float | None:
     if value is None:
         return None
     return _nonnegative_float(value, field_name)
+
+
+def _parse_prepared_path(values: Any) -> str | None:
+    if values is None:
+        return None
+    if isinstance(values, (list, tuple)):
+        resolved_values = [
+            _required_str(value, "offline.prepared_path")
+            for value in values
+            if _optional_str(value) is not None
+        ]
+        if not resolved_values:
+            return None
+        if len(resolved_values) > 1:
+            raise ValueError(
+                "offline.prepared_path accepts a single path; "
+                f"got {resolved_values!r}"
+            )
+        return resolved_values[0]
+    return _required_str(values, "offline.prepared_path")
 
 
 def _parse_choice(
@@ -404,9 +479,6 @@ def _parse_task_cfg(cfg: DictConfig) -> TaskConfig:
         ),
         reset_hook=_optional_str(task_cfg.get("reset_hook", None)),
         success_hook=_optional_str(task_cfg.get("success_hook", None)),
-        expert_precheck_hook=_optional_str(
-            task_cfg.get("expert_precheck_hook", None)
-        ),
     )
 
 
@@ -519,6 +591,17 @@ def _parse_controller_cfg(cfg: DictConfig) -> ControllerConfig:
             help=_required_str(keys_cfg.get("help", "h"), "controller.keys.help"),
         ),
     )
+
+
+def _validate_canonical_controller_cfg(
+    controller: ControllerConfig,
+    *,
+    context: str,
+) -> None:
+    if not bool(controller.enabled):
+        raise ValueError(
+            f"AgiBot canonical {context} flow requires controller.enabled=true"
+        )
 
 
 def _parse_env_cfg(cfg: DictConfig) -> EnvConfig:
@@ -765,6 +848,63 @@ def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
     )
 
 
+def _parse_offline_prepare_cfg(cfg: DictConfig) -> OfflinePrepareConfig:
+    offline_cfg = cfg.get("offline", {})
+    prepare_cfg = offline_cfg.get("prepare", {})
+    return OfflinePrepareConfig(
+        raw_dataset_path=_optional_str(prepare_cfg.get("raw_dataset_path", None)),
+        output_root=_required_str(
+            prepare_cfg.get("output_root", "data/residual/offline_data"),
+            "offline.prepare.output_root",
+        ),
+        expert_reference_scale=_positive_float(
+            prepare_cfg.get("expert_reference_scale", 1.0),
+            "offline.prepare.expert_reference_scale",
+        ),
+        clip_residual_to_unit=bool(
+            prepare_cfg.get("clip_residual_to_unit", True)
+        ),
+    )
+
+
+def _parse_offline_cfg(cfg: DictConfig) -> OfflineConfig:
+    offline_cfg = cfg.get("offline", {})
+    ratio = _nonnegative_float(offline_cfg.get("ratio", 0.5), "offline.ratio")
+    if ratio > 1.0:
+        raise ValueError(f"offline.ratio must be <= 1.0, got {ratio}")
+    prepared_path_value = offline_cfg.get("prepared_path", None)
+    if prepared_path_value is None:
+        prepared_path_value = offline_cfg.get("prepared_paths", None)
+    load_max_episodes_value = offline_cfg.get("load_max_episodes", None)
+    if load_max_episodes_value is None:
+        load_max_episodes_value = offline_cfg.get("max_episodes", None)
+    load_max_transitions_value = offline_cfg.get("load_max_transitions", None)
+    if load_max_transitions_value is None:
+        load_max_transitions_value = offline_cfg.get("max_transitions", None)
+    return OfflineConfig(
+        enabled=bool(offline_cfg.get("enabled", False)),
+        prepared_path=_parse_prepared_path(prepared_path_value),
+        ratio=ratio,
+        capacity=_positive_int(
+            offline_cfg.get("capacity", 50000),
+            "offline.capacity",
+        ),
+        load_max_episodes=_optional_nonnegative_int(
+            load_max_episodes_value,
+            "offline.load_max_episodes",
+        ),
+        load_max_transitions=_optional_nonnegative_int(
+            load_max_transitions_value,
+            "offline.load_max_transitions",
+        ),
+        pretrain_steps=_nonnegative_int(
+            offline_cfg.get("pretrain_steps", 0),
+            "offline.pretrain_steps",
+        ),
+        prepare=_parse_offline_prepare_cfg(cfg),
+    )
+
+
 def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", {})
@@ -798,7 +938,6 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
             training_cfg.get("log_period", 1),
             "training.log_period",
         ),
-        expert_check=bool(training_cfg.get("expert_check", False)),
         mixed_precision=MixedPrecisionConfig(
             enabled=bool(mixed_precision_cfg.get("enabled", False)),
             dtype=_required_str(
@@ -823,13 +962,56 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
     )
 
 
-def _parse_logging_cfg(cfg: DictConfig) -> LoggingConfig:
+def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
+    training_cfg = cfg.get("training", {})
+    mixed_precision_cfg = training_cfg.get("mixed_precision", {})
+    return EvalTrainingConfig(
+        mixed_precision=MixedPrecisionConfig(
+            enabled=bool(mixed_precision_cfg.get("enabled", False)),
+            dtype=_required_str(
+                mixed_precision_cfg.get("dtype", "bfloat16"),
+                "training.mixed_precision.dtype",
+            ),
+        )
+    )
+
+
+def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
+    eval_cfg = cfg.get("eval", {})
+    if eval_cfg.get("start_episode_idx", None) is not None:
+        raise ValueError(
+            "eval.start_episode_idx has been removed; "
+            "AgiBot eval now resets every episode to the same initial pose"
+        )
+    return EvalConfig(
+        episodes=_positive_int(eval_cfg.get("episodes", 10), "eval.episodes"),
+        max_env_steps_per_episode=_optional_positive_int(
+            eval_cfg.get("max_env_steps_per_episode", None),
+            "eval.max_env_steps_per_episode",
+        ),
+        deterministic=bool(eval_cfg.get("deterministic", True)),
+        checkpoint_path=_optional_str(eval_cfg.get("checkpoint_path", None)),
+        checkpoint_step=_optional_positive_int(
+            eval_cfg.get("checkpoint_step", None),
+            "eval.checkpoint_step",
+        ),
+    )
+
+
+def _parse_logging_cfg(
+    cfg: DictConfig,
+    *,
+    default_episode_log_file: str | None = None,
+) -> LoggingConfig:
     logging_cfg = cfg.get("logging", {})
     return LoggingConfig(
         summary_file=_required_str(
             logging_cfg.get("summary_file", "summary.json"),
             "logging.summary_file",
-        )
+        ),
+        episode_log_file=_optional_str(
+            logging_cfg.get("episode_log_file", default_episode_log_file)
+        ),
     )
 
 
@@ -837,6 +1019,8 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
     runtime = _parse_runtime_cfg(cfg)
+    controller = _parse_controller_cfg(cfg)
+    _validate_canonical_controller_cfg(controller, context="train")
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
     encoder = _parse_encoder_cfg(cfg)
@@ -853,7 +1037,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         wandb=_parse_wandb_cfg(cfg, task=task),
         policy=_parse_policy_cfg(cfg),
         robot=_parse_robot_cfg(cfg),
-        controller=_parse_controller_cfg(cfg),
+        controller=controller,
         env=env,
         obs=obs,
         residual=residual,
@@ -861,13 +1045,46 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
         replay=_parse_replay_cfg(cfg),
+        offline=_parse_offline_cfg(cfg),
         training=_parse_training_cfg(cfg),
-        logging=_parse_logging_cfg(cfg),
+        logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
     )
 
 
-def resolve_agibot_cfg_image_keys(cfg: DictConfig | AgiBotTrainConfig) -> tuple[str, ...]:
-    if isinstance(cfg, AgiBotTrainConfig):
+def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
+    task = _parse_task_cfg(cfg)
+    env = _parse_env_cfg(cfg)
+    controller = _parse_controller_cfg(cfg)
+    _validate_canonical_controller_cfg(controller, context="eval")
+    obs = _parse_obs_cfg(cfg)
+    residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    encoder = _parse_encoder_cfg(cfg)
+
+    if encoder.use_proprio and obs.vector_obs_keys is None:
+        raise ValueError(
+            "encoder.use_proprio=true requires obs.vector_obs_keys to be configured"
+        )
+
+    return AgiBotEvalConfig(
+        global_seed=_int_value(cfg.get("global_seed", cfg.get("seed", 0)), "global_seed"),
+        task=task,
+        policy=_parse_policy_cfg(cfg),
+        robot=_parse_robot_cfg(cfg),
+        controller=controller,
+        env=env,
+        obs=obs,
+        residual=residual,
+        encoder=encoder,
+        network=_parse_network_cfg(cfg),
+        sac=_parse_sac_cfg(cfg),
+        training=_parse_eval_training_cfg(cfg),
+        logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
+        eval=_parse_eval_cfg_block(cfg),
+    )
+
+
+def resolve_agibot_cfg_image_keys(cfg: DictConfig | AgiBotRunConfig) -> tuple[str, ...]:
+    if isinstance(cfg, (AgiBotTrainConfig, AgiBotEvalConfig)):
         return tuple(cfg.obs.image_keys)
 
     obs_cfg = cfg.get("obs", None)
@@ -882,8 +1099,8 @@ def resolve_agibot_cfg_image_keys(cfg: DictConfig | AgiBotTrainConfig) -> tuple[
     return resolve_agibot_image_keys(str(k) for k in source)
 
 
-def resolve_agibot_cfg_task_key(cfg: DictConfig | AgiBotTrainConfig) -> str:
-    if isinstance(cfg, AgiBotTrainConfig):
+def resolve_agibot_cfg_task_key(cfg: DictConfig | AgiBotRunConfig) -> str:
+    if isinstance(cfg, (AgiBotTrainConfig, AgiBotEvalConfig)):
         return str(cfg.task.task_key)
     task_cfg = cfg.get("task", {})
     explicit_task_key = task_cfg.get("task_key", None)
@@ -895,6 +1112,8 @@ def resolve_agibot_cfg_task_key(cfg: DictConfig | AgiBotTrainConfig) -> str:
 
 
 __all__ = [
+    "AgiBotEvalConfig",
+    "AgiBotRunConfig",
     "AgiBotTrainConfig",
     "CheckpointConfig",
     "ControllerConfig",
@@ -902,10 +1121,14 @@ __all__ = [
     "EncoderConfig",
     "EnvBackend",
     "EnvConfig",
+    "EvalConfig",
+    "EvalTrainingConfig",
     "LoggingConfig",
     "MixedPrecisionConfig",
     "NetworkConfig",
     "ObsConfig",
+    "OfflineConfig",
+    "OfflinePrepareConfig",
     "OptimizerConfig",
     "OptimizerType",
     "PolicyBackend",
@@ -921,6 +1144,7 @@ __all__ = [
     "TrainingConfig",
     "WandbConfig",
     "cfg_to_log_payload",
+    "parse_eval_cfg",
     "parse_train_cfg",
     "resolve_agibot_cfg_image_keys",
     "resolve_agibot_cfg_task_key",

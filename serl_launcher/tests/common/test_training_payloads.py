@@ -40,6 +40,23 @@ class TrainingPayloadsTest(unittest.TestCase):
         self.assertEqual(parsed["rollout"]["episode_steps"], 31)
         self.assertTrue(parsed["rollout"]["success"])
         self.assertEqual(parsed["env_info"]["reward_trace"], [1.0, 2.0])
+        self.assertEqual(parsed["rollout"]["init_episode_idx"], 2)
+
+    def test_parse_rollout_payload_without_init_episode_idx(self) -> None:
+        rollout = build_rollout_payload(
+            episode_id=3,
+            episode_steps=11,
+            episode_return=1.25,
+            success=False,
+            cumulative_success_rate=0.2,
+            recent_success_rate_20=0.3,
+        )
+        payload = build_rollout_stats_payload(env_steps=12, rollout=rollout)
+
+        parsed = parse_rollout_stats_payload(payload)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertNotIn("init_episode_idx", parsed["rollout"])
 
     def test_parse_invalid_rollout_payload_returns_none(self) -> None:
         payload = {

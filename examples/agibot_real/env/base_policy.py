@@ -70,7 +70,13 @@ def _canonicalize_action_chunk(
 
 @dataclass(slots=True)
 class AgiBotBasePolicy:
-    """Backend adapter that always exposes canonical AgiBot 14D action chunks."""
+    """Backend adapter that always exposes canonical AgiBot 14D action chunks.
+
+    当前这层逻辑仍然保留在 example 内部，而不是迁到 shared policy factory。
+    原因是 AgiBot 真实机器人目前需要在这里把 OpenPI/JoyRA 的输入输出
+    统一到同一个 canonical 14D dual-arm action chunk 约定，属于 example-
+    local 语义，不适合在第一轮对齐里直接抽成共享基础设施。
+    """
 
     _client: Any
     _backend_type: str

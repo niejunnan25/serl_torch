@@ -9,14 +9,17 @@ from typing import TypedDict
 from serl_launcher.utils.serialization import to_jsonable
 
 
-class RolloutPayload(TypedDict):
+class _RequiredRolloutPayload(TypedDict):
     episode_id: int
     episode_steps: int
     episode_return: float
-    init_episode_idx: int
     success: bool
     cumulative_success_rate: float
     recent_success_rate_20: float
+
+
+class RolloutPayload(_RequiredRolloutPayload, total=False):
+    init_episode_idx: int
 
 
 class RolloutStatsPayload(TypedDict):
@@ -30,22 +33,24 @@ def build_rollout_payload(
     episode_id: int,
     episode_steps: int,
     episode_return: float,
-    init_episode_idx: int,
+    init_episode_idx: int | None = None,
     success: bool,
     cumulative_success_rate: float,
     recent_success_rate_20: float,
 ) -> RolloutPayload:
     """Build a normalized rollout summary payload."""
 
-    return {
+    payload: RolloutPayload = {
         "episode_id": int(episode_id),
         "episode_steps": int(episode_steps),
         "episode_return": float(episode_return),
-        "init_episode_idx": int(init_episode_idx),
         "success": bool(success),
         "cumulative_success_rate": float(cumulative_success_rate),
         "recent_success_rate_20": float(recent_success_rate_20),
     }
+    if init_episode_idx is not None:
+        payload["init_episode_idx"] = int(init_episode_idx)
+    return payload
 
 
 def build_rollout_stats_payload(
@@ -110,22 +115,23 @@ def _parse_rollout_payload(payload: Mapping[str, Any]) -> RolloutPayload | None:
         episode_id is None
         or episode_steps is None
         or episode_return is None
-        or init_episode_idx is None
         or success is None
         or cumulative_success_rate is None
         or recent_success_rate_20 is None
     ):
         return None
 
-    return {
+    rollout: RolloutPayload = {
         "episode_id": int(episode_id),
         "episode_steps": int(episode_steps),
         "episode_return": float(episode_return),
-        "init_episode_idx": int(init_episode_idx),
         "success": bool(success),
         "cumulative_success_rate": float(cumulative_success_rate),
         "recent_success_rate_20": float(recent_success_rate_20),
     }
+    if init_episode_idx is not None:
+        rollout["init_episode_idx"] = int(init_episode_idx)
+    return rollout
 
 
 def _maybe_int(value: Any) -> int | None:

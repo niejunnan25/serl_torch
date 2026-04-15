@@ -12,19 +12,6 @@ task:
   reset_hook: serl_torch.examples.agibot_real.robot.reset_hooks:reset_to_task_initial_pose
   success_hook: null
 
-runtime:
-  role: actor
-  trainer_host: 127.0.0.1
-  trainer_port: 5488
-  broadcast_port: 5489
-  data_store_queue_size: 2000
-
-wandb:
-  project: agibot_real
-  exp_name: ${task.name}_residual
-  group: residual
-  debug: false
-
 policy:
   type: openpi
   host: 127.0.0.1
@@ -109,42 +96,17 @@ sac:
     cosine_decay_steps: null
     grad_clip_norm: 1.0
 
-replay:
-  capacity: 250000
-  batch_size: 128
-
-offline:
-  enabled: false
-  prepared_path: null
-  ratio: 0.5
-  capacity: 50000
-  load_max_episodes: null
-  load_max_transitions: null
-  pretrain_steps: 0
-
-  prepare:
-    # Temporary LIBERO-inspired reference input format. Replace this once the
-    # real AgiBot offline data source is defined.
-    raw_dataset_path: null
-    output_root: data/residual/offline_data
-    expert_reference_scale: 1.0
-    clip_residual_to_unit: true
-
 training:
-  training_starts: 1000
-  steps_per_update: 30
-  critic_actor_ratio: 4
-  max_env_steps: 300000
-  max_update_steps: 300000
-  max_episodes: 2000
-  log_period: 100
   mixed_precision:
     enabled: false
     dtype: bfloat16
-  checkpoint:
-    every_steps: 2500
-    keep: 0
-    dir: checkpoints
+
+eval:
+  episodes: 10
+  max_env_steps_per_episode: null
+  deterministic: true
+  checkpoint_path: null
+  checkpoint_step: null
 
 logging:
   summary_file: summary.json
@@ -155,4 +117,4 @@ launch:
 
 hydra:
   run:
-    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${launch.output_root}/eval_residual/${task.name}/${now:%Y-%m-%d_%H-%M-%S}

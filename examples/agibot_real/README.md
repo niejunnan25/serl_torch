@@ -1,6 +1,10 @@
 # AgiBot Real Residual RL
 
-`examples/agibot_real/` 当前只保留一条 canonical residual-RL 训练主线。
+`examples/agibot_real/` 当前保留一条 canonical residual-RL 训练主线，并补齐了：
+
+- 临时参考版 offline data prepare / load
+- 单独的 checkpoint eval 入口
+- 和 `examples/libero` 对齐的 rollout payload / JSONL artifact / learner logging contract
 
 如果你想先看仓库整体结构，请回到：
 
@@ -26,13 +30,23 @@
 - 一个 actor / learner 共用入口，通过 `runtime.role=actor|learner` 切角色
 - example 自己管理 observation、policy input、controller、robot runtime
 
-旧的拆分训练链路和旧 eval 入口已经移除。新的 canonical eval 入口还没有补齐，所以这份 README 只文档化训练主线。
+旧的拆分训练链路和旧 eval 入口已经移除。当前 canonical 入口包括：
+
+- 训练：
+  [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- standalone offline prepare：
+  [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+- standalone checkpoint eval：
+  [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+
+这里仍然不支持 `async eval`，也不支持和 actor rollout 并发评估。真机推荐流程仍然是先训练/rollout，再单独加载 checkpoint 做 eval。
 
 ## 这个 example 的边界
 
 当前实现是 AgiBot 真机 residual RL，约束比较明确：
 
 - `env.backend` 只支持 `local`
+- 不引入 `remote env`
 - `env.action_dim` 必须是 `14`
 - `task.control_mode` 必须是 `camera_position`
 - base-policy 图像输入是：
@@ -61,6 +75,12 @@
   typed config 定义与解析
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
   actor / learner 共用训练入口
+- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+  临时参考版 offline prepare 入口
+- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+  单独 checkpoint eval 入口
+- [eval_runner.py](eval_runner.py)
+  standalone eval runner
 - [scripts/start_robot_service.py](scripts/start_robot_service.py)
   repo-local robot-service Python launcher
 - [tools/run_actor.sh](tools/run_actor.sh)
@@ -199,6 +219,8 @@ canonical 配置是：
 - `training.max_env_steps=300000`
 - `training.max_update_steps=300000`
 - `training.max_episodes=2000`
+- `offline.enabled=false`
+- `logging.episode_log_file=episode_logs.jsonl`
 
 当前配置解析还有几个显式约束：
 
@@ -304,6 +326,16 @@ bash tools/run_learner.sh \
   wandb.project=agibot_real
 ```
 
+如果要启用 prepared offline replay：
+
+```bash
+bash tools/run_learner.sh \
+  offline.enabled=true \
+  offline.prepared_path=/path/to/prepared/offline \
+  offline.pretrain_steps=1000 \
+  offline.ratio=0.5
+```
+
 ## 4. 启动 actor
 
 先在同一个终端里加载 robot runtime：
@@ -345,6 +377,7 @@ bash tools/run_actor.sh policy.type=joyra policy.port=9001
 - `controller.enabled=true`
 
 也就是 actor 会进入人工 gating 的真机工作流。
+当前 canonical train/eval 配置已经强制要求 `controller.enabled=true`，关闭 controller 会在配置解析阶段直接报错。
 
 默认终端按键：
 
@@ -361,17 +394,22 @@ bash tools/run_actor.sh policy.type=joyra policy.port=9001
 - `h`
   help
 
-如果你想在每个 episode 开始前做 expert precheck：
-
-```bash
-bash tools/run_actor.sh training.expert_check=true
-```
-
-当前 reset / success / expert precheck 逻辑也可以通过 config 里的 hook 字段覆盖：
+当前 reset / success 逻辑可以通过 config 里的 hook 字段覆盖：
 
 - `task.reset_hook`
 - `task.success_hook`
-- `task.expert_precheck_hook`
+
+其中当前 canonical train/eval 流程里：
+
+- `task.reset_hook` 继续生效
+- `task.success_hook` 字段保留，但已经停用，不再参与 success / done / reward 判定
+
+成功语义已经统一收敛成 controller-only：
+
+- controller `success` => `reward=1.0`, `done=true`, `truncated=false`, `success=true`
+- controller `fail` => `reward=0.0`, `done=true`, `truncated=false`, `success=false`
+- controller `reset` => `reward=0.0`, `done=false`, `truncated=true`, `success=false`
+- episode step limit timeout => `reward=0.0`, `done=false`, `truncated=true`, `success=false`
 
 ## actor / learner 需要对齐的配置
 
@@ -404,7 +442,21 @@ outputs/agibot_real/train_residual/<timestamp>/
 
 - `summary.json`
 - `checkpoints/`
+- `episode_logs.jsonl`
+- `actor_timers.jsonl`
+- `learner_timers.jsonl`
 - `wandb/`
+
+如果是 standalone eval，还会写：
+
+- `episode_logs.jsonl`
+- `summary.json`
+
+如果是 offline prepare，还会写：
+
+- `summary.json`
+- prepared offline directory
+- prepared `manifest.json`
 
 ## 当前实现上的边界
 
@@ -426,9 +478,49 @@ example-local base policy adapter 做了 backend 归一化：
 
 这是当前新 AgiBot 工作应该沿着扩展的实现形状。
 
+## Offline Data
+
+当前已经补了一个临时参考版 offline pipeline：
+
+- prepare:
+  [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+- loader / manifest:
+  [offline_data.py](offline_data.py)
+
+但要明确一点：
+
+- 这套 raw dataset 输入格式只是临时参考版，主要为了先把 config、prepared artifact、learner mixing 和 pretrain 流程接通
+- 当前实现参考了 `examples/libero` 的 prepare 形状，并不代表最终 AgiBot 真机数据来源方案
+- 后续一旦明确真实 AgiBot residual offline 数据来源，需要再改一轮 [offline_data.py](offline_data.py)
+
+最小 prepare 方式示例：
+
+```bash
+python scripts/prepare_offline_data.py \
+  offline.enabled=true \
+  offline.prepare.raw_dataset_path=/path/to/reference_raw_dataset
+```
+
+prepare 完成后，再把生成的 `offline.prepared_path` 给 learner。
+
+## Standalone Eval
+
+真机不支持和 actor rollout 并发的 `async eval`，所以当前只提供 standalone checkpoint eval：
+
+```bash
+source robot/service/env.sh
+python scripts/evaluate_checkpoint.py \
+  eval.checkpoint_path=/path/to/checkpoints \
+  eval.checkpoint_step=10000
+```
+
+也可以直接传单个 checkpoint 文件：
+
+```bash
+python scripts/evaluate_checkpoint.py \
+  eval.checkpoint_path=/path/to/checkpoint_10000.pt
+```
+
 ## 当前没有文档化的内容
 
-目前这条 example 没有补齐 canonical eval 入口，所以：
-
-- 这份 README 不文档化 checkpoint eval
-- 如果你看到旧文档里还有旧 eval / 旧训练入口，请以当前目录树和这份 README 为准
+如果你看到旧文档里还有旧 eval / 旧训练入口，请以当前目录树和这份 README 为准。
