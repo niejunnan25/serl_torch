@@ -55,12 +55,14 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
         seed = int(state.seed_cursor)
         state.seed_cursor += 1
         clear_obs_cache(ctx)
+        reset_kwargs = {"init_episode_idx": current_init_episode_idx}
+        if ctx.cfg.get("task", {}).get("seed_base", None) is not None:
+            reset_kwargs["seed"] = seed
         obs_raw = _profile_call(
             ctx.profiler,
             "env_reset",
             ctx.env.reset,
-            seed=seed,
-            init_episode_idx=current_init_episode_idx,
+            **reset_kwargs,
         )
         max_episode_steps = int(ctx.env.step_limit)
         if ctx.cfg.training.max_env_steps_per_episode is not None:
@@ -77,7 +79,7 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
 
         while (episode_steps < max_episode_steps) and (not episode_done):
             if cached_base_chunk is None:
-                policy_chunk, infer_info = ctx.policy_client.infer_chunk(
+                policy_chunk, infer_info = ctx.policy_client.infer(
                     build_policy_input(ctx, obs_raw, ctx.env.current_instruction)
                 )
                 base_chunk = select_action_chunk_window(
@@ -140,8 +142,8 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                             "phase": "warmup_base_only",
                             "episode_step": episode_steps,
                             "seed": int(
-                                ctx.env.last_seed
-                                if ctx.env.last_seed is not None
+                                getattr(ctx.env, "last_seed", None)
+                                if getattr(ctx.env, "last_seed", None) is not None
                                 else seed
                             ),
                             "init_state_idx": (
@@ -205,8 +207,10 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                         break
 
                 if not done:
-                    next_policy_chunk, next_infer_info = ctx.policy_client.infer_chunk(
-                        build_policy_input(ctx, next_obs_raw, ctx.env.current_instruction)
+                    next_policy_chunk, next_infer_info = ctx.policy_client.infer(
+                        build_policy_input(
+                            ctx, next_obs_raw, ctx.env.current_instruction
+                        )
                     )
                     next_base_chunk = select_action_chunk_window(
                         next_policy_chunk,
@@ -255,7 +259,9 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                     and ctx.policy_prefetcher is not None
                 ):
                     next_chunk_future = ctx.policy_prefetcher.submit(
-                        build_policy_input(ctx, next_obs_raw, ctx.env.current_instruction)
+                        build_policy_input(
+                            ctx, next_obs_raw, ctx.env.current_instruction
+                        )
                     )
                 if done:
                     next_obs_input = _zero_obs_like(obs_input)
@@ -272,7 +278,10 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                     if next_chunk_future is not None:
                         next_policy_chunk, next_infer_info = next_chunk_future.result()
                     else:
-                        next_policy_chunk, next_infer_info = ctx.policy_client.infer_chunk(
+                        (
+                            next_policy_chunk,
+                            next_infer_info,
+                        ) = ctx.policy_client.infer(
                             build_policy_input(
                                 ctx, next_obs_raw, ctx.env.current_instruction
                             )
@@ -318,7 +327,9 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                         "phase": "warmup_base_only",
                         "episode_step": episode_steps,
                         "seed": int(
-                            ctx.env.last_seed if ctx.env.last_seed is not None else seed
+                            getattr(ctx.env, "last_seed", None)
+                            if getattr(ctx.env, "last_seed", None) is not None
+                            else seed
                         ),
                         "init_state_idx": (
                             int(ctx.env.current_init_state_idx)
@@ -375,7 +386,11 @@ def run_base_only_warmup(ctx: ActorRuntimeContext, state: ActorLoopState) -> Non
                 "warmup_episode_id": current_warmup_episode_id,
                 "train_episode_id": None,
                 "phase_episode_idx": current_warmup_episode_id,
-                "seed": int(ctx.env.last_seed if ctx.env.last_seed is not None else seed),
+                "seed": int(
+                    getattr(ctx.env, "last_seed", None)
+                    if getattr(ctx.env, "last_seed", None) is not None
+                    else seed
+                ),
                 "init_state_idx": (
                     int(ctx.env.current_init_state_idx)
                     if ctx.env.current_init_state_idx is not None

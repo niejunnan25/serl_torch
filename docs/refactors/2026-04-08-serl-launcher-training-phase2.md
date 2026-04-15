@@ -16,8 +16,6 @@ mixed infrastructure files in place.
   -> `serl_launcher/serl_launcher/residual/train/async_eval.py`
 - `serl_launcher/serl_launcher/residual/runtime/pretrain.py`
   -> `serl_launcher/serl_launcher/residual/train/pretrain.py`
-- `serl_launcher/serl_launcher/residual/runtime/schedules.py`
-  -> `serl_launcher/serl_launcher/residual/train/schedules.py`
 - `serl_launcher/serl_launcher/residual/runtime/step_chunk_replay.py`
   -> `serl_launcher/serl_launcher/residual/train/step_chunk_replay.py`
 - `serl_launcher/serl_launcher/residual/runtime/obs_utils.py`
@@ -51,8 +49,8 @@ mixed infrastructure files in place.
 
 ## Package Shape After Phase 2
 
-- `serl_launcher.residual.algorithms`
-  holds residual algorithm interfaces and algorithm adapters.
+- `serl_launcher.residual.runtime_agent`
+  holds residual DRQ/SAC runtime helpers and snapshot/sync utilities.
 - `serl_launcher.residual.train`
   holds residual training orchestration and residual-train-specific helpers.
 - `serl_launcher.training`
@@ -82,7 +80,7 @@ touching the Phase 3 mixed infrastructure files. The residual package shape is
 now much closer to the intended split:
 
 - residual semantics
-- residual algorithms
+- residual runtime helpers
 - residual training orchestration
 
 instead of a single overloaded `residual.runtime` bucket.

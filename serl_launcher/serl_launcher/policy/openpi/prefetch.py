@@ -13,9 +13,17 @@ from serl_launcher.policy.openpi.client import OpenPIPolicyClient
 
 
 class AsyncOpenPIPolicyPrefetcher:
-    def __init__(self, *, host: str, port: int, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        action_dim: int,
+        logger: logging.Logger,
+    ) -> None:
         self.host = str(host)
         self.port = int(port)
+        self.action_dim = int(action_dim)
         self.logger = logger
         self._executor = ThreadPoolExecutor(
             max_workers=1,
@@ -31,15 +39,16 @@ class AsyncOpenPIPolicyPrefetcher:
                 self._client = OpenPIPolicyClient(
                     host=self.host,
                     port=self.port,
+                    action_dim=self.action_dim,
                     logger=self.logger,
                 )
             return self._client
 
-    def _infer_chunk(
+    def _infer(
         self,
         policy_input: PolicyInput,
     ) -> tuple[np.ndarray, PolicyInferInfo]:
-        return self._get_client().infer_chunk(policy_input)
+        return self._get_client().infer(policy_input)
 
     def submit(
         self,
@@ -47,7 +56,7 @@ class AsyncOpenPIPolicyPrefetcher:
     ) -> Future[tuple[np.ndarray, PolicyInferInfo]]:
         if self._closed:
             raise RuntimeError("OpenPI prefetcher is closed")
-        return self._executor.submit(self._infer_chunk, policy_input)
+        return self._executor.submit(self._infer, policy_input)
 
     def close(self) -> None:
         if self._closed:

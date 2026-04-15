@@ -34,7 +34,6 @@ def space_stack(space: gym.Space, repeat: int):
         return gym.spaces.Dict({k: space_stack(v, repeat) for k, v in space.spaces.items()})
     raise TypeError(f"Unsupported space type: {type(space)}")
 
-
 class ChunkingWrapper(gym.Wrapper):
     """Enables observation histories and receding horizon control."""
 

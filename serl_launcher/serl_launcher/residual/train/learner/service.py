@@ -17,26 +17,50 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
+from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
+from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
-from serl_launcher.residual.algorithms.base import build_residual_algorithm
+from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
 from serl_launcher.residual.train.bindings import ResidualDataBindings
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
-from serl_launcher.residual.train.config import resolve_residual_observation_state_mode
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
+from serl_launcher.residual.utils.alpha_utils import validate_alpha
 from serl_launcher.training.async_runtime.agentlace import run_agentlace_learner_service
+from serl_launcher.training.jsonl import JsonlWriter
 from serl_launcher.training.profiling import _RuntimeProfiler
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
 from serl_launcher.utils.agentlace_io import wait_for_agentlace_bootstrap
-from serl_launcher.utils.logger import JsonlLogger
 from serl_launcher.utils.serialization import _to_jsonable
 from torch.utils.tensorboard import SummaryWriter
 
 from serl_launcher.data.replay_buffer import ReplayBuffer
+
+
+def _resolve_alpha_step(
+    cfg: DictConfig, *, base_alpha: float, schedule_step: int
+) -> float:
+    base_alpha = validate_alpha(base_alpha, name="base_alpha", allow_zero=True)
+    sched_cfg = cfg.training.get("alpha_scheduler", None)
+    if sched_cfg is None or (not bool(sched_cfg.get("enabled", False))):
+        return float(base_alpha)
+
+    min_alpha = validate_alpha(
+        sched_cfg.get("min_alpha", base_alpha),
+        name="training.alpha_scheduler.min_alpha",
+        allow_zero=True,
+    )
+    warmup_steps = int(sched_cfg.get("warmup_steps", 0))
+    anneal_steps = int(sched_cfg.get("anneal_steps", 1))
+    if schedule_step < warmup_steps:
+        return float(min_alpha)
+    if anneal_steps <= 0:
+        return float(base_alpha)
+    progress = min(1.0, max(0.0, (schedule_step - warmup_steps) / float(anneal_steps)))
+    return float(min_alpha + (float(base_alpha) - min_alpha) * progress)
 
 
 class _LearnerStatsLogger:
@@ -46,8 +70,8 @@ class _LearnerStatsLogger:
         self,
         *,
         logger: logging.Logger,
-        step_logger: JsonlLogger,
-        episode_logger: JsonlLogger,
+        step_logger: JsonlWriter,
+        episode_logger: JsonlWriter,
         tb_writer: SummaryWriter,
         replay_buffer: Any,
         offline_buffer: Optional[Any],
@@ -74,9 +98,7 @@ class _LearnerStatsLogger:
             "episode_steps": int(payload.get("episode_steps", 0)),
             "episode_return": float(payload.get("episode_return", 0.0)),
             "train_env_step": train_env_step,
-            "decision_step": (
-                None if decision_step is None else int(decision_step)
-            ),
+            "decision_step": (None if decision_step is None else int(decision_step)),
             "running_success_rate": payload.get("running_success_rate", None),
             "recent_success_rate": payload.get("recent_success_rate", None),
         }
@@ -200,7 +222,6 @@ def _build_online_replay(
     env_action_dim: int,
     chunk_horizon: int,
     chunk_step_enabled: bool,
-    state_mode: str,
 ) -> Any:
     chunk_step_cfg = cfg.get("chunk_step", None)
     chunk_step_sample_stride = (
@@ -227,7 +248,6 @@ def _build_online_replay(
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
-            state_mode=str(state_mode),
         )
 
     action_space = gym.spaces.Box(
@@ -252,7 +272,6 @@ def _build_offline_replay(
     env_action_dim: int,
     chunk_horizon: int,
     chunk_step_enabled: bool,
-    state_mode: str,
 ) -> Any:
     chunk_step_cfg = cfg.get("chunk_step", None)
     chunk_step_sample_stride = (
@@ -279,7 +298,6 @@ def _build_offline_replay(
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
-            state_mode=str(state_mode),
         )
 
     action_space = gym.spaces.Box(
@@ -302,8 +320,8 @@ def run_residual_learner_service(
     logger: logging.Logger,
     bindings: ResidualDataBindings,
 ) -> None:
-    algorithm = build_residual_algorithm(cfg)
-    logger.info("Residual algorithm: %s", algorithm.name)
+    agent_runtime = create_residual_agent_runtime(cfg)
+    logger.info("Residual runtime: %s", agent_runtime.name)
     async_cfg = cfg.training.get("async", None)
     async_enabled = (
         bool(async_cfg.get("enabled", False)) if async_cfg is not None else False
@@ -404,12 +422,6 @@ def run_residual_learner_service(
     image_keys = tuple(bootstrap.get("image_keys", tuple(bindings.image_keys)))
     chunk_step_enabled = bool(bootstrap.get("chunk_step_enabled", False))
     chunk_horizon = int(bootstrap.get("chunk_horizon", int(cfg.residual.chunk_horizon)))
-    state_mode = str(
-        bootstrap.get(
-            "state_mode",
-            resolve_residual_observation_state_mode(cfg),
-        )
-    )
     control_indices = resolve_control_indices_from_cfg(
         cfg, full_action_dim=int(env_action_dim)
     )
@@ -430,9 +442,6 @@ def run_residual_learner_service(
         )
 
     task_key = str(bindings.task_key)
-    normalizer = bindings.normalizer
-    if normalizer is not None:
-        logger.info("Loaded normalizer for task_key=%s", task_key)
 
     replay_buffer = _build_online_replay(
         cfg,
@@ -442,10 +451,9 @@ def run_residual_learner_service(
         env_action_dim=env_action_dim,
         chunk_horizon=chunk_horizon,
         chunk_step_enabled=chunk_step_enabled,
-        state_mode=state_mode,
     )
 
-    learner_agent = algorithm.build_learner_agent(
+    learner_agent = agent_runtime.create_learner_agent(
         cfg,
         sample_obs=sample_obs,
         action_dim=int(agent_action_dim),
@@ -456,7 +464,7 @@ def run_residual_learner_service(
     )
     bootstrap_initial_payload = bootstrap.get("initial_agent_payload", None)
     if isinstance(bootstrap_initial_payload, dict):
-        algorithm.apply_snapshot_payload(
+        apply_checkpoint_payload_to_agent(
             learner_agent,
             bootstrap_initial_payload,
             load_optimizers=True,
@@ -483,9 +491,9 @@ def run_residual_learner_service(
     offline_enabled = bool(cfg.offline.enabled)
     if offline_enabled:
         offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
-        has_offline_dataset_paths = bool(offline_dataset_paths_cfg) and len(
-            offline_dataset_paths_cfg
-        ) > 0
+        has_offline_dataset_paths = (
+            bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
+        )
         if not has_offline_dataset_paths:
             raise ValueError(
                 "offline.enabled=true requires offline.dataset_paths to be set "
@@ -499,9 +507,8 @@ def run_residual_learner_service(
             env_action_dim=env_action_dim,
             chunk_horizon=chunk_horizon,
             chunk_step_enabled=chunk_step_enabled,
-            state_mode=state_mode,
         )
-        offline_residual_alpha = _scheduled_alpha(
+        offline_residual_alpha = _resolve_alpha_step(
             cfg,
             base_alpha=float(cfg.residual.alpha),
             schedule_step=0,
@@ -517,9 +524,7 @@ def run_residual_learner_service(
             chunk_step_enabled=bool(chunk_step_enabled),
             logger=logger,
             data_config=bindings.data_config,
-            normalizer=normalizer,
             profiler=None,
-            state_mode=state_mode,
             max_transitions=cfg.offline.max_transitions,
             expected_task_key=task_key,
             expected_alpha=float(offline_residual_alpha),
@@ -570,10 +575,8 @@ def run_residual_learner_service(
             chunk_step_enabled=bool(chunk_step_enabled),
             logger=logger,
             data_config=bindings.data_config,
-            normalizer=normalizer,
             profiler=None,
             max_episodes=int(configured_warmup_episodes),
-            state_mode=state_mode,
             expected_task_key=task_key,
             expected_alpha=0.0,
             dataset_label="online residual training",
@@ -606,11 +609,11 @@ def run_residual_learner_service(
             configured_warmup_episodes,
         )
 
-    step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
-    episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
-    profiling_logger: Optional[JsonlLogger] = None
+    step_logger = JsonlWriter(run_dir / str(cfg.logging.step_log_file))
+    episode_logger = JsonlWriter(run_dir / str(cfg.logging.episode_log_file))
+    profiling_logger: Optional[JsonlWriter] = None
     if profiling_enabled:
-        profiling_logger = JsonlLogger(run_dir / profiling_log_file)
+        profiling_logger = JsonlWriter(run_dir / profiling_log_file)
     tb_writer = SummaryWriter(log_dir=str(run_dir / "tb"))
     profiler = _RuntimeProfiler(
         enabled=profiling_enabled,
@@ -625,7 +628,7 @@ def run_residual_learner_service(
         offline_buffer=offline_buffer,
     )
 
-    initial_payload = algorithm.snapshot_checkpoint_payload(
+    initial_payload = snapshot_agent_checkpoint_payload(
         learner_agent,
         step=int(learner_agent.state.step),
     )
@@ -637,7 +640,7 @@ def run_residual_learner_service(
         tb_writer=tb_writer,
     )
     if int(critic_pretrain.get("enabled", 0)) > 0:
-        initial_payload = algorithm.snapshot_checkpoint_payload(
+        initial_payload = snapshot_agent_checkpoint_payload(
             learner_agent,
             step=int(learner_agent.state.step),
         )
@@ -676,7 +679,7 @@ def run_residual_learner_service(
             batch_size=int(cfg.replay.batch_size),
             offline_ratio=float(cfg.offline.ratio),
             symmetric_replay=bool(cfg.offline.get("symmetric_replay", False)),
-            algorithm=algorithm,
+            algorithm=agent_runtime,
             host=async_trainer_host,
             port_number=async_trainer_port,
             broadcast_port=async_broadcast_port,

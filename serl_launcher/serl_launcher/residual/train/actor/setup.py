@@ -25,10 +25,20 @@ from serl_launcher.policy.factory import build_policy_prefetcher
 from serl_launcher.residual.action import select_action_chunk_window
 from serl_launcher.residual.action_spec import build_residual_limits
 from serl_launcher.residual.data.training_loader import load_residual_training_buffer
+from serl_launcher.residual.runtime_agent import create_residual_agent_runtime
 from serl_launcher.residual.train.actor.support import ActorRuntimeContext
+from serl_launcher.residual.train.actor.support import (
+    epsilon_gating_clock as resolve_epsilon_gating_clock,
+)
+from serl_launcher.residual.train.actor.support import (
+    epsilon_gating_enabled as resolve_epsilon_gating_enabled,
+)
 from serl_launcher.residual.train.actor.support import ensure_training_runtime_started
 from serl_launcher.residual.train.actor.support import initialize_actor_loop_state
-from serl_launcher.residual.algorithms.base import build_residual_algorithm
+from serl_launcher.residual.train.actor.support import resolve_alpha_step
+from serl_launcher.residual.train.actor.support import (
+    scheduled_epsilon_gating_probability,
+)
 from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeConfig
 from serl_launcher.training.async_runtime.bridge import AgentlaceBridgeState
 from serl_launcher.training.async_runtime.bridge import create_agentlace_async_learner
@@ -43,22 +53,16 @@ from serl_launcher.residual.train.bindings import ResidualRuntimeBindings
 from serl_launcher.residual.train.config import build_residual_action_transform
 from serl_launcher.residual.train.config import resolve_action_mask_from_cfg
 from serl_launcher.residual.train.config import resolve_control_indices_from_cfg
-from serl_launcher.residual.train.config import (
-    resolve_residual_observation_state_mode,
-)
-from serl_launcher.training.checkpoint import _AsyncCheckpointWriter
+from serl_launcher.training.checkpoint import AsyncCheckpointWriter
 from serl_launcher.residual.train.obs_utils import _obs_space_from_sample
 from serl_launcher.residual.train.pretrain import _pretrain_critic_with_calql
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.profiling import _profile_call
-from serl_launcher.residual.train.schedules import _epsilon_gating_clock
-from serl_launcher.residual.train.schedules import _epsilon_gating_enabled
-from serl_launcher.residual.train.schedules import _scheduled_alpha
 from serl_launcher.residual.train.step_chunk_replay import ChunkReplayBuffer
 from serl_launcher.residual.train.telemetry import _new_tb_step_window
-from serl_launcher.utils.alpha_utils import require_residual_alpha
-from serl_launcher.utils.alpha_utils import validate_alpha
-from serl_launcher.utils.logger import JsonlLogger
+from serl_launcher.training.jsonl import JsonlWriter
+from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
+from serl_launcher.residual.utils.alpha_utils import validate_alpha
 
 if TYPE_CHECKING:
     from torch.utils.tensorboard import SummaryWriter
@@ -73,7 +77,6 @@ def build_actor_runtime_session(
     async_eval_watcher_path: Path,
 ):
     env = bindings.env
-    normalizer = bindings.normalizer
     image_keys = tuple(bindings.image_keys)
     obs_cache = bindings.obs_cache
     task_key = str(bindings.task_key)
@@ -81,15 +84,8 @@ def build_actor_runtime_session(
     build_residual_step_obs_profiled = bindings.build_step_obs_profiled
     build_residual_step_core = bindings.build_step_core
 
-    norm_cfg = cfg.get("normalization", None)
-    obs_state_mode = resolve_residual_observation_state_mode(cfg)
-    logger.info(
-        "Residual observation state_mode=%s normalization.enabled=%s",
-        obs_state_mode,
-        bool(norm_cfg.get("enabled", False)) if norm_cfg is not None else False,
-    )
-    algorithm = build_residual_algorithm(cfg)
-    logger.info("Residual algorithm: %s", algorithm.name)
+    agent_runtime = create_residual_agent_runtime(cfg)
+    logger.info("Residual runtime: %s", agent_runtime.name)
 
     policy_backend_info = build_policy_backend_info(cfg)
     policy_client = build_policy_client(cfg, logger=logger)
@@ -166,8 +162,8 @@ def build_actor_runtime_session(
         full_action_dim=env_action_dim,
     )
     action_mask = resolve_action_mask_from_cfg(cfg, full_action_dim=env_action_dim)
-    epsilon_gating_enabled = _epsilon_gating_enabled(cfg)
-    epsilon_gating_clock = _epsilon_gating_clock(cfg)
+    epsilon_gating_enabled = resolve_epsilon_gating_enabled(cfg)
+    epsilon_gating_clock = resolve_epsilon_gating_clock(cfg)
     resolved_cfg_dict = OmegaConf.to_container(cfg, resolve=True)
     logger.info(
         "Residual config: image_keys=%s step_action_dim=%s agent_action_dim=%s "
@@ -221,7 +217,7 @@ def build_actor_runtime_session(
             if epsilon_gating_clock == "env_step"
             else int(decision_step_value)
         )
-        gate_prob = _scheduled_epsilon_gating_probability(
+        gate_prob = scheduled_epsilon_gating_probability(
             cfg, schedule_step=schedule_step
         )
         if alpha_value <= 0.0:
@@ -231,9 +227,9 @@ def build_actor_runtime_session(
 
     offline_enabled = bool(cfg.offline.enabled)
     offline_dataset_paths_cfg = cfg.offline.get("dataset_paths", None)
-    has_offline_dataset_paths = bool(offline_dataset_paths_cfg) and len(
-        offline_dataset_paths_cfg
-    ) > 0
+    has_offline_dataset_paths = (
+        bool(offline_dataset_paths_cfg) and len(offline_dataset_paths_cfg) > 0
+    )
     offline_ratio = float(cfg.offline.ratio)
     if not (0.0 <= offline_ratio <= 1.0):
         raise ValueError(f"offline.ratio must be in [0,1], got {offline_ratio}")
@@ -318,8 +314,8 @@ def build_actor_runtime_session(
         if async_bounded_lag_cfg is not None
         else False
     )
-    async_bounded_lag_enabled = (
-        bool(async_enabled) and bool(async_bounded_lag_cfg_enabled)
+    async_bounded_lag_enabled = bool(async_enabled) and bool(
+        async_bounded_lag_cfg_enabled
     )
     async_bounded_lag_max_update_calls = (
         int(async_bounded_lag_cfg.get("max_update_lag_calls", 2))
@@ -406,9 +402,8 @@ def build_actor_runtime_session(
             "training.async.bounded_lag.env_steps_per_update_call must be "
             f"positive when set, got {async_bounded_lag_env_steps_per_update_call}"
         )
-    if (
-        async_bounded_lag_env_steps_per_update_call is not None
-        and (not async_bounded_lag_enabled)
+    if async_bounded_lag_env_steps_per_update_call is not None and (
+        not async_bounded_lag_enabled
     ):
         logger.warning(
             "training.async.bounded_lag.env_steps_per_update_call=%s is set, but "
@@ -510,7 +505,11 @@ def build_actor_runtime_session(
         bounded_lag_manual_rate_enabled=bool(async_bounded_lag_manual_rate_enabled),
     )
     agentlace_bridge_state = AgentlaceBridgeState()
-    if offline_enabled and manage_learner_state_locally and (not has_offline_dataset_paths):
+    if (
+        offline_enabled
+        and manage_learner_state_locally
+        and (not has_offline_dataset_paths)
+    ):
         raise ValueError(
             "offline.enabled=true requires offline.dataset_paths to be set "
             "because offline bootstrap has been removed"
@@ -584,7 +583,7 @@ def build_actor_runtime_session(
     async_learner: Optional[Any] = None
     sync_replay_lock: Optional[threading.Lock] = None
     sync_replay_prefetcher: Optional[_MixedBatchPrefetcher] = None
-    checkpoint_writer: Optional[_AsyncCheckpointWriter] = None
+    checkpoint_writer: Optional[AsyncCheckpointWriter] = None
     policy_prefetcher: Optional[PolicyPrefetcher] = None
     replay_buffer = None
     offline_buffer = None
@@ -696,8 +695,8 @@ def build_actor_runtime_session(
         enabled=(profiling_enabled or external_agentlace_actor_mode),
         window_size=profiling_window_size,
     )
-    checkpoint_writer = _AsyncCheckpointWriter(profiler=profiler)
-    profiling_logger: Optional[JsonlLogger] = None
+    checkpoint_writer = AsyncCheckpointWriter(profiler=profiler)
+    profiling_logger: Optional[JsonlWriter] = None
     profiling_last_flush_step = -1
     async_eval_queue_path: Optional[Path] = None
     (
@@ -714,11 +713,11 @@ def build_actor_runtime_session(
         logger=logger,
     )
 
-    step_logger = JsonlLogger(run_dir / str(cfg.logging.step_log_file))
-    episode_logger = JsonlLogger(run_dir / str(cfg.logging.episode_log_file))
+    step_logger = JsonlWriter(run_dir / str(cfg.logging.step_log_file))
+    episode_logger = JsonlWriter(run_dir / str(cfg.logging.episode_log_file))
     policy_prefetcher = build_policy_prefetcher(cfg, logger=logger)
     if profiling_enabled:
-        profiling_logger = JsonlLogger(run_dir / profiling_log_file)
+        profiling_logger = JsonlWriter(run_dir / profiling_log_file)
     # Import TensorBoard lazily so real-robot env setup can initialize the
     # AgiBot DDS stack before TensorFlow/tensorboard side effects occur.
     from torch.utils.tensorboard import SummaryWriter
@@ -804,14 +803,17 @@ def build_actor_runtime_session(
             logger=logger,
         )
 
+    task_cfg = cfg.get("task", {})
+    sample_reset_kwargs = {"init_episode_idx": -1}
+    if task_cfg is not None and task_cfg.get("seed_base", None) is not None:
+        sample_reset_kwargs["seed"] = int(task_cfg.get("seed_base"))
     sample_obs_raw = _profile_call(
         profiler,
         "env_reset",
         env.reset,
-        seed=int(cfg.task.seed_base),
-        init_episode_idx=-1,
+        **sample_reset_kwargs,
     )
-    sample_policy_chunk, _ = policy_client.infer_chunk(
+    sample_policy_chunk, _ = policy_client.infer(
         _policy_input(sample_obs_raw, env.current_instruction)
     )
     sample_base_chunk = select_action_chunk_window(
@@ -825,24 +827,15 @@ def build_actor_runtime_session(
         sample_base_chunk[0],
         image_keys=image_keys,
         stack_horizon=stack_horizon,
-        normalizer=normalizer,
         obs_cache=obs_cache,
         base_action_chunk=(sample_base_chunk if chunk_step_enabled else None),
         alpha=float(residual_alpha),
-        state_mode=obs_state_mode,
     )
     sample_state_core = build_residual_step_core(
         sample_obs_raw,
         image_keys=image_keys,
-        normalizer=normalizer,
         obs_cache=obs_cache,
     )["state_core"]
-
-    def _normalize_step_action(action: np.ndarray) -> np.ndarray:
-        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-        if normalizer is None:
-            return action_arr.astype(np.float32)
-        return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
 
     def _build_chunk_step_record(
         current_obs_raw: Dict[str, Any],
@@ -857,7 +850,6 @@ def build_actor_runtime_session(
         obs_core = build_residual_step_core(
             current_obs_raw,
             image_keys=image_keys,
-            normalizer=normalizer,
             obs_cache=obs_cache,
         )
         base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
@@ -865,7 +857,6 @@ def build_actor_runtime_session(
         return {
             "obs_core": obs_core,
             "base_action": base_action_arr,
-            "base_action_norm": _normalize_step_action(base_action_arr),
             "actions": final_action_arr,
             "rewards": 0.0,
             "dones": bool(done),
@@ -878,16 +869,14 @@ def build_actor_runtime_session(
         return int(getattr(buffer, "num_steps", len(buffer)))
 
     learner_agent_device = (
-        async_learner_device
-        if async_enabled and manage_learner_state_locally
-        else None
+        async_learner_device if async_enabled and manage_learner_state_locally else None
     )
     actor_agent_device = (
         async_actor_device
         if async_enabled and async_backend in {"process", "agentlace"}
         else None
     )
-    learner_agent = algorithm.build_learner_agent(
+    learner_agent = agent_runtime.create_learner_agent(
         cfg,
         sample_obs=sample_obs,
         action_dim=agent_action_dim,
@@ -897,7 +886,7 @@ def build_actor_runtime_session(
         device=learner_agent_device,
     )
     if async_enabled and async_backend in {"process", "agentlace"}:
-        agent = algorithm.build_actor_agent(
+        agent = agent_runtime.create_actor_agent(
             cfg,
             sample_obs=sample_obs,
             action_dim=agent_action_dim,
@@ -906,7 +895,7 @@ def build_actor_runtime_session(
             action_transform=action_transform,
             device=actor_agent_device,
         )
-        algorithm.sync_modules(agent, learner_agent)
+        agent_runtime.sync_modules(agent, learner_agent)
         if not manage_learner_state_locally:
             learner_agent = agent
     else:
@@ -922,7 +911,6 @@ def build_actor_runtime_session(
             sample_stride=chunk_step_sample_stride,
             require_full_horizon=chunk_step_require_full_horizon,
             pad_action_to_horizon=chunk_step_pad_action,
-            state_mode=obs_state_mode,
         )
     else:
         replay_buffer = ReplayBuffer(
@@ -942,7 +930,6 @@ def build_actor_runtime_session(
                 sample_stride=chunk_step_sample_stride,
                 require_full_horizon=chunk_step_require_full_horizon,
                 pad_action_to_horizon=chunk_step_pad_action,
-                state_mode=obs_state_mode,
             )
         else:
             offline_buffer = ReplayBuffer(
@@ -950,7 +937,7 @@ def build_actor_runtime_session(
                 action_space=action_space,
                 capacity=int(cfg.offline.capacity),
             )
-        offline_residual_alpha = _scheduled_alpha(
+        offline_residual_alpha = resolve_alpha_step(
             cfg, base_alpha=residual_alpha, schedule_step=0
         )
         offline_stats = load_residual_training_buffer(
@@ -964,9 +951,7 @@ def build_actor_runtime_session(
             chunk_step_enabled=chunk_step_enabled,
             logger=logger,
             data_config=data_config,
-            normalizer=normalizer,
             profiler=profiler,
-            state_mode=obs_state_mode,
             max_transitions=cfg.offline.max_transitions,
             expected_task_key=task_key,
             expected_alpha=float(offline_residual_alpha),
@@ -1016,9 +1001,7 @@ def build_actor_runtime_session(
             action_transform=action_transform,
             chunk_step_enabled=bool(chunk_step_enabled),
             chunk_horizon=int(chunk_horizon),
-            state_mode=str(obs_state_mode),
             learner_agent=learner_agent,
-            algorithm=algorithm,
             logger=logger,
         )
 
@@ -1029,7 +1012,7 @@ def build_actor_runtime_session(
             )
         async_learner = create_agentlace_async_learner(
             config=replace(agentlace_bridge_config, spawn_local_worker=False),
-            algorithm=algorithm,
+            algorithm=agent_runtime,
             actor_agent=agent,
             replay_buffer=replay_buffer,
             offline_buffer=None,
@@ -1105,10 +1088,8 @@ def build_actor_runtime_session(
             chunk_step_enabled=chunk_step_enabled,
             logger=logger,
             data_config=data_config,
-            normalizer=normalizer,
             profiler=profiler,
             max_episodes=configured_warmup_episodes,
-            state_mode=obs_state_mode,
             expected_task_key=task_key,
             expected_alpha=0.0,
             dataset_label="online residual training",
@@ -1161,7 +1142,7 @@ def build_actor_runtime_session(
             agentlace_replay_buffer = replay_buffer
             async_learner = create_agentlace_async_learner(
                 config=agentlace_bridge_config,
-                algorithm=algorithm,
+                algorithm=agent_runtime,
                 actor_agent=agent,
                 replay_buffer=agentlace_replay_buffer,
                 offline_buffer=(
@@ -1179,7 +1160,7 @@ def build_actor_runtime_session(
             replay_buffer = async_learner.replay_proxy
         elif async_backend == "process":
             async_learner = _ProcessAsyncLearner(
-                algorithm=algorithm,
+                algorithm=agent_runtime,
                 actor_agent=agent,
                 online_buffer=replay_buffer,
                 offline_buffer=offline_buffer if offline_enabled else None,
@@ -1201,7 +1182,7 @@ def build_actor_runtime_session(
             )
             async_learner.start()
         else:
-            agent = algorithm.build_actor_agent(
+            agent = agent_runtime.create_actor_agent(
                 cfg,
                 sample_obs=sample_obs,
                 action_dim=agent_action_dim,
@@ -1210,9 +1191,9 @@ def build_actor_runtime_session(
                 action_transform=action_transform,
                 device=async_actor_device,
             )
-            algorithm.sync_modules(agent, learner_agent)
+            agent_runtime.sync_modules(agent, learner_agent)
             async_learner = _AsyncLearner(
-                algorithm=algorithm,
+                algorithm=agent_runtime,
                 learner_agent=learner_agent,
                 actor_agent=agent,
                 online_buffer=replay_buffer,
@@ -1271,13 +1252,12 @@ def build_actor_runtime_session(
         async_eval_watcher_path=async_eval_watcher_path,
     )
     ctx.update(
-        algorithm=algorithm,
+        algorithm=agent_runtime,
         env=env,
         policy_backend_info=policy_backend_info,
         policy_client=policy_client,
         policy_prefetcher=policy_prefetcher,
         stack_horizon=stack_horizon,
-        obs_state_mode=obs_state_mode,
         env_action_dim=env_action_dim,
         control_indices=control_indices,
         step_action_dim=step_action_dim,

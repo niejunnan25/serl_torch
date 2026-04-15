@@ -11,9 +11,7 @@ from typing import Tuple
 
 import numpy as np
 from PIL import Image
-from serl_launcher.data.normalizer import StateActionNormalizer
 from serl_launcher.residual.observation import build_residual_step_obs_from_core
-from serl_launcher.residual.observation import normalize_residual_observation_state_mode
 
 from ..schema import resolve_agibot_image_keys
 
@@ -183,9 +181,6 @@ class AgiBotObservationCache:
             OrderedDict()
         )
         self._state_cache: "OrderedDict[Hashable, np.ndarray]" = OrderedDict()
-        self._normalized_state_cache: "OrderedDict[Hashable, np.ndarray]" = (
-            OrderedDict()
-        )
         self._step_obs_cache: "OrderedDict[Hashable, Dict[str, np.ndarray]]" = (
             OrderedDict()
         )
@@ -195,7 +190,6 @@ class AgiBotObservationCache:
             self._policy_image_cache.clear()
             self._residual_image_cache.clear()
             self._state_cache.clear()
-            self._normalized_state_cache.clear()
             self._step_obs_cache.clear()
 
     def _resolve_key(
@@ -249,35 +243,17 @@ class AgiBotObservationCache:
         self,
         obs: Dict[str, Any],
         *,
-        normalizer: Optional[StateActionNormalizer] = None,
         cache_key: Optional[Hashable] = None,
     ) -> np.ndarray:
         with self._lock:
             obs_key = self._resolve_key(obs, cache_key)
-            norm_key = None if normalizer is None else id(normalizer)
-            if norm_key is None:
-                cached = _lru_get(self._state_cache, obs_key)
-                if cached is not None:
-                    return cached
-                state = _compute_agibot_state(obs)
-                return _lru_set(
-                    self._state_cache,
-                    obs_key,
-                    state,
-                    limit=self.max_obs_entries,
-                )
-
-            cache_token = (obs_key, norm_key)
-            cached = _lru_get(self._normalized_state_cache, cache_token)
+            cached = _lru_get(self._state_cache, obs_key)
             if cached is not None:
                 return cached
-
-            state = self.get_state(obs, cache_key=cache_key)
-            normalized_state = normalizer.normalize_state(state)
             return _lru_set(
-                self._normalized_state_cache,
-                cache_token,
-                np.asarray(normalized_state, dtype=np.float32),
+                self._state_cache,
+                obs_key,
+                _compute_agibot_state(obs),
                 limit=self.max_obs_entries,
             )
 
@@ -288,18 +264,13 @@ class AgiBotObservationCache:
         *,
         image_keys: Tuple[str, ...],
         stack_horizon: int = 1,
-        normalizer: Optional[StateActionNormalizer] = None,
         cache_key: Optional[Hashable] = None,
         action_dim: Optional[int] = None,
         base_action_chunk: Optional[np.ndarray] = None,
         alpha: Optional[float] = None,
-        state_mode: str = "fused",
     ) -> Dict[str, np.ndarray]:
         with self._lock:
             image_keys = resolve_agibot_image_keys(image_keys)
-            normalized_state_mode = normalize_residual_observation_state_mode(
-                state_mode
-            )
             if int(stack_horizon) != 1:
                 raise ValueError(
                     f"Only stack_horizon=1 is currently supported, got {stack_horizon}"
@@ -321,8 +292,6 @@ class AgiBotObservationCache:
                 None if alpha is None else float(alpha),
                 image_keys,
                 int(stack_horizon),
-                normalized_state_mode,
-                None if normalizer is None else id(normalizer),
                 None if action_dim is None else int(action_dim),
             )
             cached = _lru_get(self._step_obs_cache, fused_key)
@@ -332,7 +301,6 @@ class AgiBotObservationCache:
             core = build_residual_step_core(
                 obs,
                 image_keys=image_keys,
-                normalizer=normalizer,
                 obs_cache=self,
                 cache_key=cache_key,
             )
@@ -341,8 +309,6 @@ class AgiBotObservationCache:
                 base_action=base_action_arr,
                 base_action_chunk=base_action_chunk_arr,
                 alpha=alpha,
-                normalizer=normalizer,
-                state_mode=normalized_state_mode,
                 stack_horizon=int(stack_horizon),
             )
             if action_dim is not None and base_action_arr.shape[0] != int(action_dim):
@@ -363,14 +329,10 @@ def build_agibot_state(
     *,
     obs_cache: Optional[AgiBotObservationCache] = None,
     cache_key: Optional[Hashable] = None,
-    normalizer: Optional[StateActionNormalizer] = None,
 ) -> np.ndarray:
     if obs_cache is not None:
-        return obs_cache.get_state(obs, normalizer=normalizer, cache_key=cache_key)
-    state = _compute_agibot_state(obs)
-    if normalizer is not None:
-        state = normalizer.normalize_state(state)
-    return np.asarray(state, dtype=np.float32)
+        return obs_cache.get_state(obs, cache_key=cache_key)
+    return np.asarray(_compute_agibot_state(obs), dtype=np.float32)
 
 
 def build_agibot_joyra_state(
@@ -408,7 +370,6 @@ def build_residual_step_core(
     obs: Dict[str, Any],
     *,
     image_keys: Tuple[str, ...],
-    normalizer: Optional[StateActionNormalizer] = None,
     obs_cache: Optional[AgiBotObservationCache] = None,
     cache_key: Optional[Hashable] = None,
 ) -> Dict[str, np.ndarray]:
@@ -416,7 +377,6 @@ def build_residual_step_core(
         obs,
         obs_cache=obs_cache,
         cache_key=cache_key,
-        normalizer=normalizer,
     )
     resolved_image_keys = resolve_agibot_image_keys(image_keys)
     images_all = extract_residual_images(obs, obs_cache=obs_cache, cache_key=cache_key)
@@ -439,14 +399,12 @@ def build_residual_step_obs(
     base_action: np.ndarray,
     image_keys: Tuple[str, ...],
     stack_horizon: int = 1,
-    normalizer: Optional[StateActionNormalizer] = None,
     *,
     obs_cache: Optional[AgiBotObservationCache] = None,
     cache_key: Optional[Hashable] = None,
     action_dim: Optional[int] = None,
     base_action_chunk: Optional[np.ndarray] = None,
     alpha: Optional[float] = None,
-    state_mode: str = "fused",
 ) -> Dict[str, np.ndarray]:
     if obs_cache is not None:
         return obs_cache.build_residual_step_obs(
@@ -454,18 +412,15 @@ def build_residual_step_obs(
             base_action,
             image_keys=image_keys,
             stack_horizon=stack_horizon,
-            normalizer=normalizer,
             cache_key=cache_key,
             action_dim=action_dim,
             base_action_chunk=base_action_chunk,
             alpha=alpha,
-            state_mode=state_mode,
         )
 
     core = build_residual_step_core(
         obs,
         image_keys=image_keys,
-        normalizer=normalizer,
     )
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
     if action_dim is not None and base_action_arr.shape[0] != int(action_dim):
@@ -482,7 +437,5 @@ def build_residual_step_obs(
         base_action=base_action_arr,
         base_action_chunk=base_action_chunk_arr,
         alpha=alpha,
-        normalizer=normalizer,
-        state_mode=state_mode,
         stack_horizon=int(stack_horizon),
     )

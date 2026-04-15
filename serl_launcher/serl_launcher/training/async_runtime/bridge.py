@@ -9,11 +9,12 @@ from typing import Any
 from typing import Dict
 from typing import Optional
 
+from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.training.loop_utils import _count_env_step_update_triggers
 from serl_launcher.training.profiling import _RuntimeProfiler
 from serl_launcher.training.async_runtime.agentlace import _AgentlaceAsyncLearner
 from serl_launcher.training.async_runtime.agentlace import _MixedBatchPrefetcher
-from serl_launcher.residual.algorithms.base import ResidualAlgorithm
+from serl_launcher.residual.runtime_agent import ResidualAgentRuntime
 from serl_launcher.utils.agentlace_io import resolve_agentlace_bootstrap_path
 from serl_launcher.utils.agentlace_io import save_agentlace_bootstrap
 
@@ -73,7 +74,7 @@ def _replay_capacity(buffer: Any) -> Optional[int]:
 def create_agentlace_async_learner(
     *,
     config: AgentlaceBridgeConfig,
-    algorithm: ResidualAlgorithm,
+    algorithm: ResidualAgentRuntime,
     actor_agent: Any,
     replay_buffer: Any,
     offline_buffer: Optional[Any],
@@ -128,9 +129,7 @@ def save_actor_bootstrap(
     action_transform: Any,
     chunk_step_enabled: bool,
     chunk_horizon: int,
-    state_mode: str,
     learner_agent: Any,
-    algorithm: ResidualAlgorithm,
     logger: logging.Logger,
 ) -> Path:
     bootstrap_path = resolve_agentlace_bootstrap_path(
@@ -150,8 +149,7 @@ def save_actor_bootstrap(
             "action_transform": action_transform,
             "chunk_step_enabled": bool(chunk_step_enabled),
             "chunk_horizon": int(chunk_horizon),
-            "state_mode": str(state_mode),
-            "initial_agent_payload": algorithm.snapshot_checkpoint_payload(
+            "initial_agent_payload": snapshot_agent_checkpoint_payload(
                 learner_agent,
                 step=int(learner_agent.state.step),
             ),
@@ -182,7 +180,9 @@ def build_agentlace_timer_payload(
         "train_env_step": int(train_env_step),
         "decision_step": int(decision_step),
         "train_episode_id": int(train_episode_id),
-        "online_buffer_size": int(len(replay_buffer)) if replay_buffer is not None else 0,
+        "online_buffer_size": int(len(replay_buffer))
+        if replay_buffer is not None
+        else 0,
     }
     if offline_buffer is not None:
         payload["offline_buffer_size"] = int(len(offline_buffer))

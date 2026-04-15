@@ -21,7 +21,6 @@ task:
   name: office_setting
   task_key: null
   prompt: "The right arm picks up the white mouse from the desk and places the mouse on the black mouse pad"
-  seed_base: 7
   control_mode: camera_position
   hz: 5.0
   trajectory_time: null

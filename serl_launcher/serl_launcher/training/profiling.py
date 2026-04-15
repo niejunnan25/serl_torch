@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import numpy as np
 
-from serl_launcher.utils.logger import JsonlLogger
+from serl_launcher.training.jsonl import JsonlWriter
 
 if TYPE_CHECKING:
     from torch.utils.tensorboard import SummaryWriter
@@ -138,7 +138,7 @@ def _tb_safe_metric_name(name: str) -> str:
 def _emit_profiling_snapshot(
     profiler: Optional[_RuntimeProfiler],
     *,
-    profile_logger: Optional[JsonlLogger],
+    profile_logger: Optional[JsonlWriter],
     tb_writer: Optional[SummaryWriter],
     logger: logging.Logger,
     train_env_step: int,

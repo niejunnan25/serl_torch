@@ -22,8 +22,7 @@ if str(REPO_PARENT) not in sys.path:
 if str(SERL_LAUNCHER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
-from serl_launcher.utils.alpha_utils import require_residual_alpha
-from serl_launcher.utils.alpha_utils import validate_alpha
+from serl_launcher.residual.utils.alpha_utils import require_residual_alpha
 
 
 def _as_bool(value: Any) -> bool:
@@ -152,72 +151,11 @@ def _load_summary(summary_path: Path) -> Optional[Dict[str, Any]]:
 def _resolve_eval_residual_alpha(
     *,
     train_cfg: Dict[str, Any],
-    async_eval_cfg: Dict[str, Any],
-    checkpoint_step: int,
     logger: logging.Logger,
-) -> tuple[float, str, Optional[int]]:
+) -> float:
+    del logger
     residual_cfg = train_cfg.get("residual", {}) if isinstance(train_cfg, dict) else {}
-    base_alpha = require_residual_alpha(residual_cfg, path="residual.alpha")
-    alpha_mode_raw = (
-        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule")).strip().lower()
-    )
-    valid_modes = {"checkpoint_schedule", "base", "fixed"}
-    if alpha_mode_raw not in valid_modes:
-        raise ValueError(
-            "training.async_eval.alpha_mode must be one of "
-            f"{sorted(valid_modes)}, got {alpha_mode_raw!r}"
-        )
-
-    if alpha_mode_raw == "base":
-        return float(base_alpha), "base", None
-
-    if alpha_mode_raw == "fixed":
-        fixed_alpha = async_eval_cfg.get("fixed_alpha", None)
-        if fixed_alpha is None:
-            raise ValueError(
-                "training.async_eval.alpha_mode=fixed requires "
-                "training.async_eval.fixed_alpha to be set"
-            )
-        return (
-            validate_alpha(
-                fixed_alpha,
-                name="training.async_eval.fixed_alpha",
-                allow_zero=True,
-            ),
-            "fixed",
-            None,
-        )
-
-    training_cfg = train_cfg.get("training", {}) if isinstance(train_cfg, dict) else {}
-    alpha_scheduler_cfg = (
-        training_cfg.get("alpha_scheduler", {})
-        if isinstance(training_cfg, dict)
-        else {}
-    )
-    if (not isinstance(alpha_scheduler_cfg, dict)) or (
-        not _as_bool(alpha_scheduler_cfg.get("enabled", False))
-    ):
-        return float(base_alpha), "checkpoint_schedule_disabled", int(checkpoint_step)
-
-    min_alpha = validate_alpha(
-        alpha_scheduler_cfg.get("min_alpha", base_alpha),
-        name="training.alpha_scheduler.min_alpha",
-        allow_zero=True,
-    )
-    warmup_steps = int(alpha_scheduler_cfg.get("warmup_steps", 0))
-    anneal_steps = int(alpha_scheduler_cfg.get("anneal_steps", 1))
-    # Async eval receives checkpoint snapshots keyed by train env-step only.
-    # Therefore alpha reconstruction in checkpoint_schedule mode is always env-step based.
-    schedule_step = int(checkpoint_step)
-
-    if schedule_step < warmup_steps:
-        return float(min_alpha), "checkpoint_schedule", schedule_step
-    if anneal_steps <= 0:
-        return float(base_alpha), "checkpoint_schedule", schedule_step
-
-    progress = min(1.0, max(0.0, (schedule_step - warmup_steps) / float(anneal_steps)))
-    alpha = float(min_alpha + (float(base_alpha) - min_alpha) * progress)
-    return alpha, "checkpoint_schedule", schedule_step
+    return float(require_residual_alpha(residual_cfg, path="residual.alpha"))
 
 
 def _build_eval_command(
@@ -227,7 +165,6 @@ def _build_eval_command(
     train_cfg: Dict[str, Any],
     eval_run_dir: Path,
     checkpoint_path: Path,
-    eval_seed: int,
     eval_cfg: Dict[str, Any],
     eval_residual_alpha: float,
 ) -> List[str]:
@@ -239,7 +176,6 @@ def _build_eval_command(
         "residual",
         "chunk_step",
         "sac",
-        "normalization",
         "openpi",
         "joyra",
         "env",
@@ -254,10 +190,8 @@ def _build_eval_command(
             f"{eval_cfg['policy_section']}.host={_to_override_value(eval_cfg['policy_host'])}",
             f"{eval_cfg['policy_section']}.port={_to_override_value(eval_cfg['policy_port'])}",
             f"residual.alpha={_to_override_value(eval_residual_alpha)}",
-            f"task.seed_base={_to_override_value(eval_seed)}",
             f"eval.episodes={_to_override_value(eval_cfg['episodes'])}",
             f"eval.expert_check={_to_override_value(eval_cfg['expert_check'])}",
-            f"eval.seed={_to_override_value(eval_cfg['seed'])}",
             f"eval.deterministic={_to_override_value(eval_cfg['deterministic'])}",
             f"eval.enable_base_probing={_to_override_value(eval_cfg['enable_base_probing'])}",
             f"eval.probing_alpha={_to_override_value(eval_cfg['probing_alpha'])}",
@@ -425,53 +359,12 @@ def main() -> None:
         )
 
     episodes = int(async_eval_cfg.get("episodes", 50))
-    seed = int(async_eval_cfg.get("seed", 7))
     deterministic = _as_bool(async_eval_cfg.get("deterministic", True))
     expert_check = _as_bool(async_eval_cfg.get("expert_check", False))
     enable_base_probing = _as_bool(async_eval_cfg.get("enable_base_probing", False))
     probing_alpha = async_eval_cfg.get("probing_alpha", None)
     probing_min_steps = int(async_eval_cfg.get("probing_min_steps", 0))
     probing_max_steps = int(async_eval_cfg.get("probing_max_steps", 0))
-    alpha_mode = (
-        str(async_eval_cfg.get("alpha_mode", "checkpoint_schedule")).strip().lower()
-    )
-    valid_modes = {"checkpoint_schedule", "base", "fixed"}
-    if alpha_mode not in valid_modes:
-        raise ValueError(
-            "training.async_eval.alpha_mode must be one of "
-            f"{sorted(valid_modes)}, got {alpha_mode!r}"
-        )
-    fixed_alpha_cfg = async_eval_cfg.get("fixed_alpha", None)
-    if alpha_mode == "fixed" and fixed_alpha_cfg is None:
-        raise ValueError(
-            "training.async_eval.alpha_mode=fixed requires "
-            "training.async_eval.fixed_alpha to be set"
-        )
-    fixed_alpha = (
-        None
-        if fixed_alpha_cfg is None
-        else validate_alpha(
-            fixed_alpha_cfg,
-            name="training.async_eval.fixed_alpha",
-            allow_zero=True,
-        )
-    )
-
-    if alpha_mode == "checkpoint_schedule":
-        chunk_step_cfg = (
-            train_cfg.get("chunk_step", {}) if isinstance(train_cfg, dict) else {}
-        )
-        scheduler_clock = (
-            str(chunk_step_cfg.get("scheduler_clock", "env_step")).strip().lower()
-        )
-        if scheduler_clock != "env_step":
-            # Hard guard: checkpoint-schedule async eval only supports env-step clock.
-            raise ValueError(
-                "training.async_eval.alpha_mode=checkpoint_schedule requires "
-                "training.chunk_step.scheduler_clock=env_step "
-                f"(got {scheduler_clock})"
-            )
-
     eval_script = async_eval_cfg.get("eval_script", None)
     if eval_script is None:
         eval_script_path = (
@@ -494,7 +387,6 @@ def main() -> None:
         "episodes": episodes,
         "deterministic": deterministic,
         "expert_check": expert_check,
-        "seed": seed,
         "enable_base_probing": enable_base_probing,
         "probing_alpha": probing_alpha,
         "probing_min_steps": probing_min_steps,
@@ -503,8 +395,6 @@ def main() -> None:
         "policy_section": policy_section,
         "policy_host": policy_host,
         "policy_port": policy_port,
-        "alpha_mode": alpha_mode,
-        "fixed_alpha": fixed_alpha,
     }
 
     logger.warning(
@@ -513,15 +403,12 @@ def main() -> None:
     )
 
     logger.info(
-        "watch start: checkpoints=%s queue=%s every_episodes=%s eval_episodes=%s seed=%s alpha_mode=%s fixed_alpha=%s "
+        "watch start: checkpoints=%s queue=%s every_episodes=%s eval_episodes=%s "
         "queue_policy=%s poll_sec=%.2f stable_sec=%.2f",
         checkpoints_dir,
         queue_file,
         every_episodes,
         episodes,
-        seed,
-        alpha_mode,
-        fixed_alpha,
         queue_policy,
         poll_sec,
         file_stable_sec,
@@ -550,13 +437,10 @@ def main() -> None:
     running_train_env_step: Optional[int] = None
     running_checkpoint_step: Optional[int] = None
     running_checkpoint_path: Optional[Path] = None
-    running_seed: Optional[int] = None
     running_start_time = 0.0
     running_eval_dir: Optional[Path] = None
     running_log_fp = None
     running_eval_alpha: Optional[float] = None
-    running_eval_alpha_mode: Optional[str] = None
-    running_eval_alpha_schedule_step: Optional[int] = None
 
     while not stop_requested["value"]:
         if running_proc is not None:
@@ -595,16 +479,9 @@ def main() -> None:
                 "checkpoint_path": str(running_checkpoint_path)
                 if running_checkpoint_path is not None
                 else None,
-                "seed": int(running_seed) if running_seed is not None else None,
                 "eval_alpha": float(running_eval_alpha)
                 if running_eval_alpha is not None
                 else None,
-                "eval_alpha_mode": running_eval_alpha_mode,
-                "eval_alpha_schedule_step": (
-                    int(running_eval_alpha_schedule_step)
-                    if running_eval_alpha_schedule_step is not None
-                    else None
-                ),
                 "eval_run_dir": str(running_eval_dir)
                 if running_eval_dir is not None
                 else None,
@@ -632,11 +509,8 @@ def main() -> None:
             running_train_env_step = None
             running_checkpoint_step = None
             running_checkpoint_path = None
-            running_seed = None
             running_eval_dir = None
             running_eval_alpha = None
-            running_eval_alpha_mode = None
-            running_eval_alpha_schedule_step = None
             continue
 
         queue_requests: List[Dict[str, Any]] = []
@@ -738,7 +612,6 @@ def main() -> None:
                 time.sleep(poll_sec)
                 continue
 
-            eval_seed = int(seed)
             episode_label = (
                 int(train_episode_id) if train_episode_id is not None else -1
             )
@@ -750,14 +623,8 @@ def main() -> None:
             ).resolve()
             eval_run_dir.mkdir(parents=True, exist_ok=True)
             eval_log_path = eval_run_dir / "eval_runner.log"
-            (
-                eval_alpha,
-                eval_alpha_mode,
-                eval_alpha_schedule_step,
-            ) = _resolve_eval_residual_alpha(
+            eval_alpha = _resolve_eval_residual_alpha(
                 train_cfg=train_cfg,
-                async_eval_cfg=async_eval_cfg,
-                checkpoint_step=int(checkpoint_step),
                 logger=logger,
             )
 
@@ -767,7 +634,6 @@ def main() -> None:
                 train_cfg=train_cfg,
                 eval_run_dir=eval_run_dir,
                 checkpoint_path=checkpoint_path,
-                eval_seed=eval_seed,
                 eval_cfg=eval_cfg,
                 eval_residual_alpha=float(eval_alpha),
             )
@@ -787,28 +653,18 @@ def main() -> None:
             )
             running_checkpoint_step = int(checkpoint_step)
             running_checkpoint_path = checkpoint_path
-            running_seed = int(eval_seed)
             running_eval_dir = eval_run_dir
             running_start_time = time.time()
             running_eval_alpha = float(eval_alpha)
-            running_eval_alpha_mode = str(eval_alpha_mode)
-            running_eval_alpha_schedule_step = (
-                int(eval_alpha_schedule_step)
-                if eval_alpha_schedule_step is not None
-                else None
-            )
 
             logger.info(
                 "async eval started: eval_index=%s train_episode=%s train_env_step=%s "
-                "checkpoint_step=%s seed=%s alpha=%.6f alpha_mode=%s schedule_step=%s pid=%s run_dir=%s",
+                "checkpoint_step=%s alpha=%.6f pid=%s run_dir=%s",
                 eval_index,
                 train_episode_id,
                 train_env_step,
                 checkpoint_step,
-                eval_seed,
                 float(eval_alpha),
-                eval_alpha_mode,
-                eval_alpha_schedule_step,
                 running_proc.pid,
                 eval_run_dir,
             )
@@ -853,16 +709,9 @@ def main() -> None:
                 "checkpoint_path": str(running_checkpoint_path)
                 if running_checkpoint_path is not None
                 else None,
-                "seed": int(running_seed) if running_seed is not None else None,
                 "eval_alpha": float(running_eval_alpha)
                 if running_eval_alpha is not None
                 else None,
-                "eval_alpha_mode": running_eval_alpha_mode,
-                "eval_alpha_schedule_step": (
-                    int(running_eval_alpha_schedule_step)
-                    if running_eval_alpha_schedule_step is not None
-                    else None
-                ),
                 "eval_run_dir": str(running_eval_dir)
                 if running_eval_dir is not None
                 else None,

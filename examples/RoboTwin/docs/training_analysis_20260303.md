@@ -96,7 +96,6 @@ warmup_base_episodes: 100  # 前 100 个 episode 残差为 0
 ### 问题 6（配置）：其他待优化项
 
 - **`backup_entropy: false`**：Critic TD target 不含熵项，与 Actor 目标不一致
-- **`normalization.enabled: false`**：未对 state/action 进行归一化，可能影响网络学习效率
 - **`utd_ratio: 2`**：UTD 偏低，可能在 off-policy 效率上有提升空间
 - **训练速度慢**：每 episode 平均 5.6 分钟，1,876 env steps/hour
 
@@ -148,7 +147,6 @@ Episode 100, global_env_step = 16,490, global_policy_step = 10,321
 |---|------|----------|
 | 3 | **修复 xi_scheduler 退火时机**：`xi_scheduler.warmup_steps` 设置为与 warmup 对齐，或 `effective_step = max(0, policy_step - warmup_end_step)` | warmup 结束后残差从小到大渐进放大，避免策略突变 |
 | 4 | **减少或消除 warmup 零动作对 replay 的污染**：warmup 数据不入 replay，或缩短 warmup 到 10–20 episodes | Critic 从一开始就在有效数据上训练 |
-| 5 | **启用 observation normalization**：设置 `normalization.enabled: true`，提前计算 state/action 统计量 | 网络输入分布更均匀，训练更稳定 |
 
 ### 可选优化（P2/P3）
 
@@ -184,7 +182,6 @@ training:
     warmup_steps: 4000            # 对齐 warmup 结束后再开始退火
     anneal_steps: 10000           # 更缓慢地放大残差幅度
 
-normalization:
   enabled: true
   stats_dir: /path/to/precomputed/stats
 ```

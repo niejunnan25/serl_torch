@@ -11,7 +11,6 @@ Introduce a shared `ResidualRuntimeBindings` protocol so the residual runtime de
   - attributes:
     - `env`
     - `image_keys`
-    - `normalizer`
     - `obs_cache`
     - `task_key`
     - `data_config`

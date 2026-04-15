@@ -8,7 +8,6 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo
     echo "Default actor wrapper for AgiBot split-process training."
     echo "This alias forwards to tools/run_actor_agentlace.sh."
-    echo "Config-driven alternative: tools/run_actor_generic.sh"
     exit 0
 fi
 

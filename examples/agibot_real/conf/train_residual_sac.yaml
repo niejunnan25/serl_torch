@@ -1,8 +1,6 @@
 # ---------------------------
 # Global / Paths
 # ---------------------------
-seed: 0
-
 # ---------------------------
 # Task / Environment
 # ---------------------------
@@ -11,7 +9,6 @@ task:
   name: agibot_real_default
   task_key: null
   prompt: Pick up the object with the right hand and place it at the target location.
-  seed_base: 7
   control_mode: camera_position
   hz: 20.0
   trajectory_time: null
@@ -61,8 +58,6 @@ controller:
 residual:
   image_keys: [head_image, wrist_left_image, wrist_right_image]
   alpha: 0.2
-  observation:
-    state_mode: fused
   epsilon_gating:
     enabled: false
     schedule: linear
@@ -162,7 +157,6 @@ training:
   online_prefill:
     enabled: false
     dataset_paths: []
-  random_steps: 0
   enable_base_probing: false
   probing_alpha: null
   probing_min_steps: 0
@@ -171,21 +165,20 @@ training:
   update_every: 1
   updates_per_step: 1
   async:
-    enabled: false
-    backend: process
+    # AgiBot train entrypoints are Agentlace-only.
+    # Keep only the connection/runtime parameters here; the scripts inject the
+    # non-optional mode fields internally instead of exposing them as toggles.
     update_frequency: 10
     idle_sleep_sec: 0.002
     actor_device: null
     learner_device: null
-    batch_queue_size: 2
     trainer_host: 127.0.0.1
     trainer_port: 5488
     broadcast_port: 5489
     data_store_queue_size: 2000
     stats_period_steps: 100
     agentlace:
-      spawn_local_worker: true
-      bootstrap_file: agentlace_bootstrap.pkl
+      bootstrap_file: ${oc.env:AGIBOT_AGENTLACE_BOOTSTRAP,/tmp/agibot_agentlace_bootstrap.pkl}
       connect_timeout_sec: 120.0
     bounded_lag:
       enabled: false
@@ -216,7 +209,6 @@ training:
     enabled: false
     every_episodes: 20
     episodes: 10
-    seed: 7
     expert_check: false
     deterministic: true
     enable_base_probing: false
@@ -232,8 +224,6 @@ training:
     summary_jsonl: async_eval_results.jsonl
     eval_script: null
     python_executable: null
-    alpha_mode: checkpoint_schedule
-    fixed_alpha: null
   calql_pretrain:
     enabled: false
     steps: 0
@@ -241,12 +231,6 @@ training:
     alpha: 1.0
     n_actions: 10
     temperature: 1.0
-  alpha_scheduler:
-    enabled: false
-    type: linear
-    min_alpha: 0.05
-    warmup_steps: 0
-    anneal_steps: 20000
   phases:
     - name: residual_rl
       episodes: 2000
@@ -256,14 +240,8 @@ training:
 # Logging / Misc
 # ---------------------------
 logging:
-  step_log_file: step_logs.jsonl
-  episode_log_file: episode_logs.jsonl
   summary_file: summary.json
   tensorboard: true
-
-normalization:
-  enabled: false
-  stats_dir: null
 
 launch:
   output_root: outputs/agibot_real

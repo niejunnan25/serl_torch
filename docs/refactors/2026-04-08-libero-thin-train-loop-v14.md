@@ -1,14 +1,14 @@
-# V14: Residual Algorithm Minimal Abstraction
+# V14: Residual Runtime Minimal Abstraction
 
 ## Goal
 
-Introduce a minimal residual-algorithm abstraction so actor / learner runtime no longer
-directly depends on the concrete SAC implementation.
+Introduce a minimal residual runtime abstraction so actor / learner runtime no longer
+directly depends on the concrete DRQ/SAC implementation.
 
 This stage keeps the current training behavior and only changes the ownership boundary:
 
-- runtime depends on `ResidualAlgorithm`
-- SAC becomes one implementation of that interface
+- runtime depends on `ResidualAgentRuntime`
+- DRQ/SAC becomes one implementation of that runtime surface
 
 ## What Changed
 
@@ -20,14 +20,14 @@ Added:
 Key runtime changes:
 
 - `actor_setup.py`
-  - builds one `ResidualAlgorithm`
+  - builds one `ResidualAgentRuntime`
   - uses it to construct actor / learner agents
   - passes it into async learner paths and agentlace bootstrap
 - `actor_support.py`
   - uses algorithm snapshot / sync helpers instead of direct SAC helpers
 - `agentlace_bridge.py`
-  - accepts `ResidualAlgorithm`
-  - stores algorithm-produced snapshot payloads in actor bootstrap
+  - accepts `ResidualAgentRuntime`
+  - stores runtime-produced snapshot payloads in actor bootstrap
 - `learner_service.py`
   - builds learner agent through the algorithm
   - applies / emits snapshot payloads through the algorithm
@@ -54,7 +54,7 @@ After this stage:
 
 - policy backend is one axis
 - bindings are one axis
-- residual algorithm is now a third axis
+- residual runtime is now a third axis
 
 This keeps the runtime aligned with the longer-term goal of supporting:
 

@@ -97,9 +97,6 @@ eval:
   collect_only_success: true
   collect_include_probing: false
 
-normalization:
-  enabled: false
-  stats_dir: null
 
 hydra:
   run:

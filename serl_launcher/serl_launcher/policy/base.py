@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Protocol, Tuple
+from typing import Any, Dict, Mapping, Optional, Protocol, Tuple
 
 import numpy as np
 
@@ -27,8 +27,8 @@ class PolicyOutput:
 
 
 class PolicyClient(Protocol):
-    def infer_chunk(self, policy_input: PolicyInput) -> PolicyInferResult:
-        """Run a chunked policy and return `(action_chunk, info)`."""
+    def infer(self, policy_input: PolicyInput) -> PolicyInferResult:
+        """Run the policy and return `(action_chunk, info)`."""
 
 
 class PolicyPrefetcher(Protocol):
@@ -37,3 +37,36 @@ class PolicyPrefetcher(Protocol):
 
     def close(self) -> None:
         """Release prefetch resources."""
+
+
+def coerce_action_chunk(
+    actions: Any,
+    *,
+    action_dim: Optional[int] = None,
+) -> np.ndarray:
+    chunk = np.asarray(actions, dtype=np.float32)
+    if chunk.ndim == 3 and chunk.shape[0] == 1:
+        chunk = chunk[0]
+    elif chunk.ndim == 1:
+        if action_dim is None:
+            chunk = chunk.reshape(1, -1)
+        else:
+            if chunk.size % int(action_dim) != 0:
+                raise ValueError(
+                    "Flat action payload must be divisible by action_dim, got "
+                    f"shape={chunk.shape}, action_dim={int(action_dim)}"
+                )
+            chunk = chunk.reshape(-1, int(action_dim))
+    if chunk.ndim != 2:
+        raise ValueError(f"Unexpected action chunk shape: {chunk.shape}")
+    if chunk.shape[0] < 1:
+        raise ValueError("Policy returned empty action chunk")
+    if action_dim is not None:
+        if chunk.shape[1] < int(action_dim):
+            raise ValueError(
+                f"Policy action dim {chunk.shape[1]} is smaller than required env action dim "
+                f"{int(action_dim)}"
+            )
+        if chunk.shape[1] > int(action_dim):
+            chunk = chunk[:, : int(action_dim)]
+    return np.asarray(chunk, dtype=np.float32)

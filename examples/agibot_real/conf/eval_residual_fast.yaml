@@ -1,10 +1,7 @@
-seed: 0
-
 task:
   name: agibot_real_default
   task_key: null
   prompt: Pick up the object with the right hand and place it at the target location.
-  seed_base: 7
   control_mode: camera_position
   hz: 20.0
   trajectory_time: null
@@ -51,8 +48,6 @@ controller:
 residual:
   image_keys: [head_image, wrist_left_image, wrist_right_image]
   alpha: 0.2
-  observation:
-    state_mode: fused
   epsilon_gating:
     enabled: false
     schedule: linear
@@ -117,7 +112,6 @@ sac:
 eval:
   episodes: 10
   expert_check: false
-  seed: 7
   max_env_steps_per_episode: null
   deterministic: true
   checkpoint_path: null
@@ -127,14 +121,8 @@ eval:
   probing_max_steps: 20
 
 logging:
-  step_log_file: step_logs.jsonl
-  episode_log_file: episode_logs.jsonl
   summary_file: summary.json
   tensorboard: true
-
-normalization:
-  enabled: false
-  stats_dir: null
 
 hydra:
   run:

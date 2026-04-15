@@ -96,6 +96,8 @@ class DrQAgent(SACAgent):
         temperature_init: float = 1.0,
         image_keys: Iterable[str] = ("image",),
         resnet_kwargs: Optional[dict] = None,
+        vector_obs_keys: Optional[Iterable[str]] = None,
+        proprio_latent_dim: int = 64,
         **kwargs,
     ):
         """
@@ -154,8 +156,10 @@ class DrQAgent(SACAgent):
         encoder_def = EncodingWrapper(
             encoder=encoders,
             use_proprio=use_proprio,
+            proprio_latent_dim=proprio_latent_dim,
             enable_stacking=True,
             image_keys=image_keys,
+            vector_obs_keys=vector_obs_keys,
         )
 
         # 是否共享编码器：共享可减少参数量，不共享则 actor/critic 各一份

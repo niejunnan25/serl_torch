@@ -13,7 +13,6 @@ import tensorflow as tf
 from serl_launcher.wrappers.chunking import ChunkingWrapper
 from serl_launcher.wrappers.dmcgym import DMCGYM
 from serl_launcher.wrappers.mujoco import GCMujocoWrapper
-from serl_launcher.wrappers.norm import UnnormalizeActionProprio
 from serl_launcher.wrappers.roboverse import GCRoboverseWrapper
 from serl_launcher.wrappers.video_recorder import VideoRecorder
 
@@ -21,7 +20,6 @@ from serl_launcher.wrappers.video_recorder import VideoRecorder
 def make_mujoco_gc_env(
     env_name: str,
     max_episode_steps: int,
-    action_proprio_metadata: dict,
     save_video: bool,
     save_video_dir: str,
     save_video_prefix: str,
@@ -32,7 +30,6 @@ def make_mujoco_gc_env(
     env = mujoco_manipulation.load(env_name)
     env = DMCGYM(env)
     env = GCMujocoWrapper(env, goals)
-    env = UnnormalizeActionProprio(env, action_proprio_metadata)
     if obs_horizon is not None or act_exec_horizon is not None:
         env = ChunkingWrapper(env, obs_horizon, act_exec_horizon)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
@@ -52,11 +49,9 @@ def make_mujoco_gc_env(
 def wrap_roboverse_gc_env(
     env: gym.Env,
     max_episode_steps: int,
-    action_proprio_metadata: dict,
     goal_sampler: Union[np.ndarray, Callable],
 ):
     env = GCRoboverseWrapper(env, goal_sampler)
-    env = UnnormalizeActionProprio(env, action_proprio_metadata)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     return env
 
@@ -64,14 +59,13 @@ def wrap_roboverse_gc_env(
 def make_roboverse_gc_env(
     env_name: str,
     max_episode_steps: int,
-    action_proprio_metadata: dict,
     save_video: bool,
     save_video_dir: str,
     save_video_prefix: str,
     goals: Union[np.ndarray, Callable],
 ):
     env = roboverse.make(env_name, transpose_image=False)
-    env = wrap_roboverse_gc_env(env, max_episode_steps, action_proprio_metadata, goals)
+    env = wrap_roboverse_gc_env(env, max_episode_steps, goals)
 
     if save_video:
         env = VideoRecorder(

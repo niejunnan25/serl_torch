@@ -21,9 +21,9 @@ class EpisodeSpec:
     phase_train: bool
     phase_episode_idx: int
     train_episode_id: Optional[int]
-    seed: int
     init_episode_idx: int
     max_episode_steps: int
+    seed: Optional[int] = None
 
 
 @dataclass
@@ -102,7 +102,9 @@ def sample_replay_batch(
 ) -> Optional[tuple[Any, int, int]]:
     profiler = ctx.profiler
     if state.sync_replay_prefetcher is not None:
-        sampled_batch = state.sync_replay_prefetcher.get(timeout=ctx.async_idle_sleep_sec)
+        sampled_batch = state.sync_replay_prefetcher.get(
+            timeout=ctx.async_idle_sleep_sec
+        )
         if sampled_batch is None:
             return None
         return sampled_batch
@@ -278,7 +280,9 @@ def maybe_emit_episode_profiling(
         return
     if state.train_env_step <= 0:
         return
-    if (state.train_env_step - state.profiling_last_flush_step) < profiling_log_period_steps:
+    if (
+        state.train_env_step - state.profiling_last_flush_step
+    ) < profiling_log_period_steps:
         return
     _emit_profiling_snapshot(
         ctx.profiler,

@@ -30,7 +30,6 @@ examples/libero/scripts/
   data/
     collect_online_prefill.py
     prepare_offline_demos.py
-    compute_normalization_stats.py
   services/
     serve_env.py
 ```

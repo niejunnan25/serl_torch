@@ -63,6 +63,7 @@ def build_policy_client(
         return OpenPIPolicyClient(
             host=host,
             port=port,
+            action_dim=int(cfg.get("env", {}).get("action_dim", 14)),
             logger=logger,
         )
     if policy_type == "joyra":
@@ -87,6 +88,7 @@ def build_policy_prefetcher(
         return AsyncOpenPIPolicyPrefetcher(
             host=host,
             port=port,
+            action_dim=int(cfg.get("env", {}).get("action_dim", 14)),
             logger=logger,
         )
     if policy_type == "joyra":

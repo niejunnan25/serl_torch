@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from serl_launcher.policy.base import PolicyInferInfo, PolicyInput
+from serl_launcher.policy.base import coerce_action_chunk, PolicyInferInfo, PolicyInput
 from serl_launcher.policy.openpi.request_builder import build_openpi_request
 
 
@@ -34,6 +34,7 @@ class OpenPIPolicyClient:
         self,
         host: str,
         port: int,
+        action_dim: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
         *,
         connect_timeout_sec: Optional[float] = 30.0,
@@ -48,6 +49,7 @@ class OpenPIPolicyClient:
         self._logger = logger or logging.getLogger(__name__)
         self._host = str(host)
         self._port = int(port)
+        self._action_dim = None if action_dim is None else int(action_dim)
         self._connect_timeout_sec = connect_timeout_sec
         self._ping_interval_sec = ping_interval_sec
         self._ping_timeout_sec = ping_timeout_sec
@@ -96,7 +98,7 @@ class OpenPIPolicyClient:
     def _is_retryable_connection_error(self, err: BaseException) -> bool:
         return isinstance(err, (self._websocket_connection_closed_error, OSError))
 
-    def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
+    def infer(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
         send_data = build_openpi_request(policy_input)
         for attempt_idx in range(self._reconnect_retry_count + 1):
             try:
@@ -104,7 +106,10 @@ class OpenPIPolicyClient:
                 with self._client_lock:
                     pred = self._client.infer(send_data)
                 e2e_ms = (time.time() - start) * 1000.0
-                chunk = np.asarray(pred["actions"], dtype=np.float32)
+                chunk = coerce_action_chunk(
+                    pred["actions"],
+                    action_dim=self._action_dim,
+                )
                 info: PolicyInferInfo = {
                     "e2e_ms": float(e2e_ms),
                     "policy_ms": maybe_get_policy_infer_ms(pred),
@@ -130,3 +135,7 @@ class OpenPIPolicyClient:
                     time.sleep(self._reconnect_retry_backoff_sec)
 
         raise RuntimeError("OpenPI infer retry loop exited unexpectedly.")
+
+    def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
+        """Backward-compatible alias for older call sites."""
+        return self.infer(policy_input)

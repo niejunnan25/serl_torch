@@ -10,7 +10,6 @@
 | 步骤 | 修改项 | 优先级 | 需改代码？ | 需改配置？ |
 |------|--------|--------|-----------|-----------|
 | 1 | 确认 ResNet 编码器修复生效 | 致命 | 已修复 | 已修复 |
-| 2 | 启用 observation normalization | 高 | 否 | 是 |
 | 3 | 去掉 warmup，用 xi_scheduler 替代 | 高 | 否 | 是 |
 | 4 | 开启 backup_entropy | 低 | 否 | 是 |
 | 5 | 运行训练并观察前 50 个 episode | — | 否 | 否 |
@@ -52,18 +51,15 @@ ls /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-
 
 ---
 
-## 步骤 2：启用 observation normalization
 
 ### 修改 `conf/train_residual_sac.yaml`
 
 ```yaml
 # 修改前
-normalization:
   enabled: false
   stats_dir: null
 
 # 修改后
-normalization:
   enabled: true
   stats_dir: null    # null 时自动查找 data/stats/{task_name}.json
 ```
@@ -79,7 +75,6 @@ ls data/stats/place_a2b_left.json
 训练启动后日志中应看到：
 
 ```
-State/action normalizer loaded for task=place_a2b_left
 ```
 
 **如果看到 `Normalization disabled`，说明没有生效。**
@@ -187,7 +182,6 @@ target_q = reward + gamma * (min_next_q - alpha * log_pi(next_a))
 
 2. **归一化器加载成功**：
    ```
-   State/action normalizer loaded for task=place_a2b_left
    ```
 
 3. **无 warmup**（不应看到连续的全零残差 episode）：
@@ -252,7 +246,6 @@ training:
     min_xi: 0.05                # 原值 0.1
     anneal_steps: 20000         # 原值 2000
 
-normalization:
   enabled: true                 # 原值 false
 ```
 

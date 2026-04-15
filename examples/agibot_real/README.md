@@ -300,9 +300,7 @@ python scripts/train/run_learner.py \
   joyra.host=127.0.0.1 \
   joyra.port=9001 \
   hydra.run.dir=outputs/agibot_real/train_default/learner \
-  ++training.async.enabled=true \
-  ++training.async.backend=agentlace \
-  ++training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
+  training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
 ```
 
 ### Terminal E: Actor
@@ -334,16 +332,14 @@ python scripts/train/run_actor.py \
   joyra.host=127.0.0.1 \
   joyra.port=9001 \
   hydra.run.dir=outputs/agibot_real/train_default/actor \
-  ++training.async.enabled=true \
-  ++training.async.backend=agentlace \
-  ++training.async.agentlace.spawn_local_worker=false \
-  ++training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
+  training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
 ```
 
 Notes:
 
 - learner and actor must use the same `--bootstrap` path
 - learner and actor must agree on `policy.type` and backend host/port
+- Agentlace is implicit for `agibot_real`; you only need to provide the bootstrap path
 - the actor terminal owns the live robot env, action queue, and manual
   controller
 - `controller.enabled=true` and `chunk_step.enabled=true` are the expected
@@ -474,9 +470,9 @@ TODO / questions to confirm before declaring full JoyRA parity:
   `13` with `/0.9` then clip to `[0, 1]`. This behavior is intentionally not
   ported yet; confirm the reason before adding it to residual RL.
 - If JoyRA sometimes returns fewer actions than `residual.chunk_horizon`, the
-  shared chunk helper currently pads by repeating the final action. Confirm
-  whether that is acceptable for the real robot, or whether AgiBot should execute
-  the shorter raw chunk directly.
+  shared chunk helper now treats that as a contract error and raises
+  immediately. Fix the policy backend to return a full chunk before using it on
+  the real robot.
 
 ## Removed Paths
 
@@ -493,7 +489,6 @@ entrypoints reject enabling those paths.
 - only `camera_position` mode is implemented
 - only 14D residual actions are executed
 - success/reward logic is hook-driven; there is no baked-in AgiBot task reward
-- normalization is disabled by default
 - async eval launches a separate eval process, so keep
   `training.async_eval.enabled=false` unless that worker can own the robot
   exclusively

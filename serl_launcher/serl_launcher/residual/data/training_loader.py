@@ -18,7 +18,6 @@ from serl_launcher.residual.data.transitions import build_stepchunk_transition
 from serl_launcher.residual.observation import build_residual_step_obs_from_core
 
 if TYPE_CHECKING:
-    from serl_launcher.data.normalizer import StateActionNormalizer
     from serl_launcher.data.replay_buffer import ReplayBuffer
 
 
@@ -54,11 +53,9 @@ def load_residual_training_buffer(
     chunk_step_enabled: bool,
     logger: logging.Logger,
     data_config: ResidualDataConfig,
-    normalizer: Optional["StateActionNormalizer"] = None,
     profiler: Optional[Any] = None,
     max_episodes: Optional[int] = None,
     max_transitions: Optional[int] = None,
-    state_mode: str = "fused",
     expected_task_key: Optional[str] = None,
     expected_alpha: Optional[float] = None,
     expected_projection: Optional[Mapping[str, Any]] = None,
@@ -205,7 +202,6 @@ def load_residual_training_buffer(
                     frame_idx=step_idx,
                     image_keys=image_keys,
                     image_views=data_config.image_views,
-                    normalizer=normalizer,
                 )
                 base_chunk = _get_payload_base_chunk_for_start(
                     payload,
@@ -226,7 +222,6 @@ def load_residual_training_buffer(
                             alpha=float(alpha),
                             episode_id=int(episode_id),
                             episode_step=int(step_idx),
-                            normalizer=normalizer,
                         )
                     )
                     stats["inserted"] += 1
@@ -236,8 +231,6 @@ def load_residual_training_buffer(
                     core,
                     base_action=base_action,
                     alpha=float(alpha),
-                    normalizer=normalizer,
-                    state_mode=state_mode,
                     stack_horizon=stack_horizon,
                 )
 
@@ -261,7 +254,6 @@ def load_residual_training_buffer(
                         frame_idx=next_step_idx,
                         image_keys=image_keys,
                         image_views=data_config.image_views,
-                        normalizer=normalizer,
                     )
                     next_obs_input = build_residual_step_obs_from_core(
                         next_core,
@@ -269,8 +261,6 @@ def load_residual_training_buffer(
                             next_base_chunk[next_step_in_chunk], dtype=np.float32
                         ),
                         alpha=float(alpha),
-                        normalizer=normalizer,
-                        state_mode=state_mode,
                         stack_horizon=stack_horizon,
                     )
                     mask = 1.0

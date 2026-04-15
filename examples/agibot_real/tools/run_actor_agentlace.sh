@@ -29,12 +29,10 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             echo "Usage: bash tools/run_actor_agentlace.sh <yaml|path/to/config.yaml> --bootstrap path/to/bootstrap.pkl [--gpu_id N] [extra overrides...]"
             echo
-            echo "Explicit split actor wrapper for external agentlace async training."
+            echo "Explicit split actor wrapper for AgiBot's external Agentlace training."
             echo "AgiBot real env is local-only."
-            echo "This wrapper forces training.async.enabled=true, training.async.backend=agentlace,"
-            echo "and training.async.agentlace.spawn_local_worker=false."
+            echo "Agentlace is implicit for AgiBot; this wrapper only supplies the bootstrap path."
             echo "Default alias: tools/run_actor.sh"
-            echo "Config-driven alternative: tools/run_actor_generic.sh"
             exit 0
             ;;
         --bootstrap)
@@ -93,29 +91,17 @@ CONFIG_DIR="$(cd "$(dirname "$CONFIG_PATH")" && pwd)"
 CONFIG_BASENAME="$(basename "$CONFIG_PATH")"
 CONFIG_NAME="${CONFIG_BASENAME%.yaml}"
 
-NORMALIZED_EXTRA_ARGS=()
-for arg in "${EXTRA_ARGS[@]}"; do
-    if [[ "$arg" == training.async.*=* ]] || [[ "$arg" == training.async=* ]]; then
-        NORMALIZED_EXTRA_ARGS+=("++$arg")
-    else
-        NORMALIZED_EXTRA_ARGS+=("$arg")
-    fi
-done
-
 export CUDA_VISIBLE_DEVICES="$GPU_ID"
 cd "$ROOT_DIR"
 echo "=========================================="
 echo "  AgiBot Split Actor Wrapper"
 echo "=========================================="
-echo "  Mode        : explicit agentlace actor"
+echo "  Mode        : agentlace actor"
 echo "  Entry alias : tools/run_actor.sh"
 echo "  Env mode    : local AgiBot env"
 echo "=========================================="
 exec "$PYTHON_BIN" "$ROOT_DIR/scripts/train/run_actor.py" \
     --config-dir "$CONFIG_DIR" \
     --config-name "$CONFIG_NAME" \
-    "${NORMALIZED_EXTRA_ARGS[@]}" \
-    "++training.async.enabled=true" \
-    "++training.async.backend=agentlace" \
-    "++training.async.agentlace.spawn_local_worker=false" \
-    "++training.async.agentlace.bootstrap_file=$BOOTSTRAP_ABS"
+    "${EXTRA_ARGS[@]}" \
+    "training.async.agentlace.bootstrap_file=$BOOTSTRAP_ABS"

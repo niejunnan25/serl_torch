@@ -51,7 +51,7 @@ def _run_probing_steps(
             probe_chunk, probe_info = probe_future.result()
             probe_future = None
         else:
-            probe_chunk, probe_info = policy_client.infer_chunk(
+            probe_chunk, probe_info = policy_client.infer(
                 build_policy_input(ctx, state.obs_raw, env.current_instruction)
             )
         probe_base_chunk = select_action_chunk_window(
@@ -94,14 +94,22 @@ def _run_probing_steps(
                 )
             step_logger.write(
                 {
-                    "train_env_step": int(state.train_env_step) if spec.phase_train else None,
-                    "decision_step": int(state.decision_step) if spec.phase_train else None,
+                    "train_env_step": int(state.train_env_step)
+                    if spec.phase_train
+                    else None,
+                    "decision_step": int(state.decision_step)
+                    if spec.phase_train
+                    else None,
                     "warmup_episode_id": None,
                     "train_episode_id": spec.train_episode_id,
                     "phase_episode_idx": int(spec.phase_episode_idx),
                     "phase": str(spec.phase_name),
                     "episode_step": state.episode_steps,
-                    "seed": int(env.last_seed if env.last_seed is not None else spec.seed),
+                    "seed": int(
+                        getattr(env, "last_seed", None)
+                        if getattr(env, "last_seed", None) is not None
+                        else spec.seed
+                    ),
                     "init_state_idx": (
                         int(env.current_init_state_idx)
                         if env.current_init_state_idx is not None
@@ -111,9 +119,15 @@ def _run_probing_steps(
                     "replan_point": bool(probe_step == 0),
                     "chunk_step": int(probe_step),
                     "chunk_horizon": int(chunk_horizon),
-                    "infer_e2e_ms": probe_info.get("e2e_ms") if probe_step == 0 else None,
-                    "infer_policy_ms": probe_info.get("policy_ms") if probe_step == 0 else None,
-                    "infer_server_ms": probe_info.get("server_ms") if probe_step == 0 else None,
+                    "infer_e2e_ms": probe_info.get("e2e_ms")
+                    if probe_step == 0
+                    else None,
+                    "infer_policy_ms": probe_info.get("policy_ms")
+                    if probe_step == 0
+                    else None,
+                    "infer_server_ms": probe_info.get("server_ms")
+                    if probe_step == 0
+                    else None,
                     "a_base": base_action.tolist(),
                     "a_res_policy": [0.0] * step_action_dim,
                     "a_res_policy_applied": [0.0] * step_action_dim,
@@ -179,7 +193,7 @@ def run_policy_episode(
 
     while state.episode_steps < spec.max_episode_steps and not state.episode_done:
         if state.cached_base_chunk is None:
-            policy_chunk, infer_info = policy_client.infer_chunk(
+            policy_chunk, infer_info = policy_client.infer(
                 build_policy_input(ctx, state.obs_raw, ctx.env.current_instruction)
             )
             base_chunk = select_action_chunk_window(

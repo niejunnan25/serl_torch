@@ -2,22 +2,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import numpy as np
-
-from serl_launcher.data.normalizer import StateActionNormalizer
-
-
-def normalize_step_action(
-    action: np.ndarray,
-    *,
-    normalizer: Optional[StateActionNormalizer] = None,
-) -> np.ndarray:
-    action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-    if normalizer is None:
-        return action_arr.astype(np.float32)
-    return np.asarray(normalizer.normalize_action(action_arr), dtype=np.float32)
 
 
 def build_stepchunk_transition(
@@ -30,17 +17,12 @@ def build_stepchunk_transition(
     alpha: float,
     episode_id: int,
     episode_step: int,
-    normalizer: Optional[StateActionNormalizer] = None,
-    base_action_norm: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     base_action_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
-    if base_action_norm is None:
-        base_action_norm = normalize_step_action(base_action_arr, normalizer=normalizer)
 
     return {
         "obs_core": deepcopy(obs_core),
         "base_action": base_action_arr,
-        "base_action_norm": np.asarray(base_action_norm, dtype=np.float32).reshape(-1),
         "actions": np.asarray(actions, dtype=np.float32).reshape(-1),
         "rewards": np.float32(reward),
         "dones": bool(done),

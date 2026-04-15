@@ -50,7 +50,6 @@ class AgiBotRuntimeBindings(AgiBotDataBindings, ResidualRuntimeBindings):
         return build_residual_step_core(
             obs_raw,
             image_keys=self.image_keys,
-            normalizer=self.normalizer,
             obs_cache=self.obs_cache,
             cache_key=cache_key,
         )
@@ -65,7 +64,6 @@ class AgiBotRuntimeBindings(AgiBotDataBindings, ResidualRuntimeBindings):
         action_dim: Optional[int] = None,
         base_action_chunk: Any = None,
         alpha: Optional[float] = None,
-        state_mode: str = "fused",
         **_: Any,
     ) -> dict[str, Any]:
         return build_residual_step_obs(
@@ -73,13 +71,11 @@ class AgiBotRuntimeBindings(AgiBotDataBindings, ResidualRuntimeBindings):
             base_action,
             image_keys=self.image_keys,
             stack_horizon=stack_horizon,
-            normalizer=self.normalizer,
             obs_cache=self.obs_cache,
             cache_key=cache_key,
             action_dim=action_dim,
             base_action_chunk=base_action_chunk,
             alpha=alpha,
-            state_mode=state_mode,
         )
 
     def build_step_obs_profiled(
@@ -115,7 +111,6 @@ def build_agibot_runtime_bindings(
     return AgiBotRuntimeBindings(
         env=env,
         image_keys=data_bindings.image_keys,
-        normalizer=data_bindings.normalizer,
         obs_cache=AgiBotObservationCache(),
         task_key=data_bindings.task_key,
         data_config=data_bindings.data_config,

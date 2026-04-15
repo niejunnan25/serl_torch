@@ -25,7 +25,9 @@ def to_hidden_dims(values) -> list[int]:
     return [int(v) for v in values]
 
 
-def build_optimizer_kwargs(cfg: DictConfig, *, for_temperature: bool = False) -> Dict[str, Any]:
+def build_optimizer_kwargs(
+    cfg: DictConfig, *, for_temperature: bool = False
+) -> Dict[str, Any]:
     """从配置构建优化器参数（adam / adamw + warmup / cosine / grad_clip）。"""
     opt_cfg = cfg.sac.get("optimizer", None)
     kwargs: Dict[str, Any] = {"learning_rate": float(cfg.sac.learning_rate)}
@@ -79,7 +81,9 @@ def resolve_control_indices_from_cfg(cfg: DictConfig) -> np.ndarray:
     )
 
     control_gripper_cfg = cfg.residual.get("control_gripper", None)
-    control_gripper = bool(control_gripper_cfg) if control_gripper_cfg is not None else None
+    control_gripper = (
+        bool(control_gripper_cfg) if control_gripper_cfg is not None else None
+    )
 
     return resolve_control_indices(
         action_dim=action_dim,
@@ -88,7 +92,7 @@ def resolve_control_indices_from_cfg(cfg: DictConfig) -> np.ndarray:
     )
 
 
-def build_drq_agent(
+def create_drq_agent(
     cfg: DictConfig,
     sample_obs: Dict[str, np.ndarray],
     action_dim: int,
@@ -106,7 +110,9 @@ def build_drq_agent(
     resnet_cfg = cfg.sac.get("resnet", None)
     if resnet_cfg is not None:
         model_name = str(resnet_cfg.get("model_name", "microsoft/resnet-18"))
-        if not os.path.isabs(model_name) and not model_name.startswith(("http://", "https://")):
+        if not os.path.isabs(model_name) and not model_name.startswith(
+            ("http://", "https://")
+        ):
             candidate = os.path.join(get_original_cwd(), model_name)
             if os.path.isdir(candidate):
                 model_name = candidate
@@ -114,7 +120,9 @@ def build_drq_agent(
             "model_name": model_name,
             "pretrained": bool(resnet_cfg.get("pretrained", True)),
             "freeze_backbone": bool(resnet_cfg.get("freeze_backbone", False)),
-            "pooling_method": str(resnet_cfg.get("pooling_method", "spatial_learned_embeddings")),
+            "pooling_method": str(
+                resnet_cfg.get("pooling_method", "spatial_learned_embeddings")
+            ),
             "num_spatial_blocks": int(resnet_cfg.get("num_spatial_blocks", 8)),
             "bottleneck_dim": int(resnet_cfg.get("bottleneck_dim", 256)),
         }

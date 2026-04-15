@@ -1,13 +1,12 @@
-"""残差策略的观测构建：图像提取、state 拼接、归一化。"""
+"""残差策略的观测构建：图像提取与 state/base_action 拼接。"""
 from __future__ import annotations
 
 import io
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 from PIL import Image
 
-from data.normalizer import StateActionNormalizer
 from utils.constants import ALOHA_ACTION_DIM
 
 # 与 OpenPI 一致的图像尺寸：resize_with_pad 目标，保证离线数据与环境观测统一
@@ -58,7 +57,6 @@ def build_residual_step_obs(
     base_action: np.ndarray,
     image_keys: Tuple[str, ...],
     stack_horizon: int = 1,
-    normalizer: Optional[StateActionNormalizer] = None,
 ) -> Dict[str, np.ndarray]:
     """
     构建"逐步残差策略"的输入观测：当前图像 + 当前状态 + 当前将执行的 base action。
@@ -68,7 +66,6 @@ def build_residual_step_obs(
     - 各 image_keys 对应的图像（增加一维时间/堆叠维）
     - ``"state"``：当前关节/动作向量与当前步 base_action 的拼接
 
-    若提供了 normalizer，将对 state 和 base_action 分别做归一化后再拼接。
     """
     state = np.asarray(obs["joint_action"]["vector"], dtype=np.float32)
     base_action = np.asarray(base_action, dtype=np.float32).reshape(-1)
@@ -77,14 +74,7 @@ def build_residual_step_obs(
             f"Unexpected base action shape: {base_action.shape}, expected ({ALOHA_ACTION_DIM},)"
         )
 
-    # 归一化 state 和 base_action（若提供了 normalizer）
-    if normalizer is not None:
-        state = normalizer.normalize_state(state)
-        base_action_norm = normalizer.normalize_action(base_action)
-    else:
-        base_action_norm = base_action
-
-    fused_state = np.concatenate([state, base_action_norm], axis=-1).astype(np.float32)
+    fused_state = np.concatenate([state, base_action], axis=-1).astype(np.float32)
 
     images_all = _extract_residual_images(obs)
     missing_keys = [key for key in image_keys if key not in images_all]
@@ -112,7 +102,6 @@ def build_residual_chunk_obs(
     base_chunk: np.ndarray,
     image_keys: Tuple[str, ...],
     stack_horizon: int = 1,
-    normalizer: Optional[StateActionNormalizer] = None,
 ) -> Dict[str, np.ndarray]:
     """兼容旧接口：输入整段 base chunk 时，默认使用第 0 步动作构建逐步残差观测。"""
     chunk = np.asarray(base_chunk, dtype=np.float32)
@@ -123,7 +112,6 @@ def build_residual_chunk_obs(
         base_action=chunk[0],
         image_keys=image_keys,
         stack_horizon=stack_horizon,
-        normalizer=normalizer,
     )
 
 

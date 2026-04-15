@@ -1,5 +1,6 @@
 from typing import Iterable, Optional
 
+import numpy as np
 import torch
 
 from serl_launcher.common.common import TorchRLTrainState, nonpytree_field
@@ -81,6 +82,30 @@ class BCAgent:
         dist = self.state.modules["actor"](obs_t, temperature=temperature, train=False)
         actions = dist.mode() if argmax else dist.sample()
         return actions.detach().cpu().numpy()
+
+    @torch.no_grad()
+    def sample_action(
+        self,
+        observations,
+        *,
+        seed: Optional[int] = None,
+        temperature: float = 1.0,
+        argmax: bool = False,
+    ) -> np.ndarray:
+        del seed
+        actions = self.sample_actions(
+            observations,
+            temperature=temperature,
+            argmax=argmax,
+        )
+        action = np.asarray(actions, dtype=np.float32)
+        if action.ndim == 2 and action.shape[0] == 1:
+            action = action[0]
+        if action.ndim != 1:
+            raise ValueError(
+                f"Expected single action shape (A,) or (1, A), got {action.shape}"
+            )
+        return np.asarray(action, dtype=np.float32)
 
     @torch.no_grad()
     def get_debug_metrics(self, batch, **kwargs):

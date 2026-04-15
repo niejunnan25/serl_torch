@@ -129,6 +129,8 @@ env.bak/
 venv.bak/
 !examples/agibot_real/env/
 !examples/agibot_real/env/**
+!examples/libero/env/
+!examples/libero/env/**
 
 # Spyder project settings
 .spyderproject
@@ -183,10 +185,11 @@ pretrained_models/
 
 # Generated example data
 examples/libero/data/**
-examples/libero/configs/
+examples/libero/experiments/
 examples/libero/training_logs/
 examples/libero/.local/
 .libero/
+.codex
 .codex/
 
 
