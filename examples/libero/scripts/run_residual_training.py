@@ -21,11 +21,6 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from tqdm.auto import tqdm
 
-try:
-    import gym
-except ModuleNotFoundError:
-    import gymnasium as gym
-
 from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
@@ -38,10 +33,17 @@ from serl_launcher.common.training_observability import configure_learner_wandb_
 from serl_launcher.common.training_observability import configure_rollout_wandb_metrics
 from serl_launcher.common.training_observability import extract_learner_wandb_metrics
 from serl_launcher.common.training_observability import extract_rollout_wandb_metrics
+from serl_launcher.common.training_payloads import build_rollout_payload
+from serl_launcher.common.training_payloads import build_rollout_stats_payload
+from serl_launcher.common.training_payloads import parse_rollout_stats_payload
+from serl_launcher.common.training_reporting import format_learner_heartbeat
+from serl_launcher.common.training_reporting import sync_eval_results_to_wandb
 from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.policy.typed_factory import build_policy_client
 from serl_launcher.policy.typed_factory import describe_policy_backend
+from serl_launcher.residual.chunk_replay import create_chunk_replay_buffer
+from serl_launcher.residual.chunk_replay import sample_mixed_training_batch
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl
@@ -56,7 +58,6 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.config import LiberoTrainConfig
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import parse_train_cfg
-from serl_torch.examples.libero.async_eval import AsyncEvalRuntime
 from serl_torch.examples.libero.async_eval import append_async_eval_request
 from serl_torch.examples.libero.async_eval import append_async_eval_stop
 from serl_torch.examples.libero.async_eval import check_async_eval_worker
@@ -85,199 +86,6 @@ FILL_WAIT_SLEEP_SEC = 1.0
 LEARNER_IDLE_SLEEP_SEC = 1.0
 ACTOR_TIMER_LOG_FILE = "actor_timers.jsonl"
 LEARNER_TIMER_LOG_FILE = "learner_timers.jsonl"
-
-
-def _sync_async_eval_results_to_wandb(
-    async_eval: AsyncEvalRuntime,
-    *,
-    wandb_logger: WandBLogger,
-    logger: logging.Logger,
-) -> None:
-    if not async_eval.enabled:
-        return
-    records = load_new_async_eval_results(async_eval)
-    for payload in records:
-        status = str(payload.get("status", "")).strip().lower()
-        train_update_step = payload.get("train_update_step", None)
-        train_episode_id = payload.get("train_episode_id", None)
-        if not isinstance(train_episode_id, (int, float)):
-            continue
-
-        metrics: dict[str, Any] = {
-            "eval/train_episode_id": float(train_episode_id),
-            "eval/status_failed": 0.0 if status == "ok" else 1.0,
-        }
-
-        summary = payload.get("summary", None)
-        if status == "ok" and isinstance(summary, dict):
-            for payload_key, metric_key in (
-                ("success_rate", "eval/success_rate"),
-                ("mean_return", "eval/mean_return"),
-            ):
-                value = summary.get(payload_key, None)
-                if isinstance(value, (int, float)):
-                    metrics[metric_key] = float(value)
-
-        # Eval finishes long after its checkpoint was created, so logging it
-        # back to the historical train_update_step causes W&B monotonic-step
-        # warnings. We log it at the current W&B history position and let
-        # eval/train_episode_id provide the meaningful x-axis instead.
-        wandb_logger.log(to_jsonable(metrics))
-
-        if status == "ok":
-            logger.info(
-                "eval done: eval_index=%s episode=%s update_steps=%s env_steps=%s success_rate=%s",
-                payload.get("eval_index", None),
-                payload.get("train_episode_id", None),
-                train_update_step,
-                payload.get("train_env_step", None),
-                (
-                    summary.get("success_rate", None)
-                    if isinstance(summary, dict)
-                    else None
-                ),
-            )
-        else:
-            logger.warning(
-                "eval failed: eval_index=%s episode=%s update_steps=%s error=%s",
-                payload.get("eval_index", None),
-                payload.get("train_episode_id", None),
-                train_update_step,
-                payload.get("error", None),
-            )
-
-def _maybe_float(metrics: dict[str, Any], key: str) -> float | None:
-    value = metrics.get(key, None)
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
-def _format_optional_metric(value: float | None, *, digits: int = 3) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value:.{digits}f}"
-
-
-def _format_learner_heartbeat(
-    *,
-    update_steps: int,
-    env_steps: int,
-    replay_size: int,
-    updates_per_sec: float,
-    update_info: dict[str, Any],
-    offline_suffix: str = "",
-) -> str:
-    return (
-        "learner heartbeat: "
-        f"update_steps={int(update_steps)} "
-        f"env_steps={int(env_steps)} "
-        f"replay_size={int(replay_size)} "
-        f"updates_per_sec={updates_per_sec:.2f} "
-        f"critic_loss={_format_optional_metric(_maybe_float(update_info, 'critic_loss'))} "
-        f"critic_td_loss={_format_optional_metric(_maybe_float(update_info, 'critic_td_loss'))} "
-        f"actor_loss={_format_optional_metric(_maybe_float(update_info, 'actor_loss'))} "
-        f"temperature={_format_optional_metric(_maybe_float(update_info, 'temperature'))} "
-        f"entropy={_format_optional_metric(_maybe_float(update_info, 'entropy'))} "
-        f"predicted_qs={_format_optional_metric(_maybe_float(update_info, 'predicted_qs'))} "
-        f"target_qs={_format_optional_metric(_maybe_float(update_info, 'target_qs'))} "
-        f"actor_predicted_q={_format_optional_metric(_maybe_float(update_info, 'actor_predicted_q'))}"
-        f"{offline_suffix}"
-    )
-
-
-def _create_chunk_replay_buffer(
-    *,
-    cfg: LiberoTrainConfig,
-    observation_space: gym.spaces.Dict,
-    image_keys: tuple[str, ...],
-    capacity: int,
-) -> MemoryEfficientStepWindowReplayBufferDataStore:
-    return MemoryEfficientStepWindowReplayBufferDataStore(
-        observation_space=observation_space,
-        action_space=gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(int(cfg.env.action_dim),),
-            dtype=np.float32,
-        ),
-        capacity=int(capacity),
-        window_size=int(cfg.residual.chunk_horizon),
-        discount=float(cfg.sac.discount),
-        sample_stride=1,
-        require_full_window=False,
-        image_keys=image_keys,
-    )
-
-
-def _reshape_chunk_batch_for_training(batch: dict[str, Any]) -> dict[str, Any]:
-    batch_out = dict(batch)
-    if "actions" in batch_out:
-        batch_out["actions"] = np.asarray(batch_out["actions"]).reshape(
-            int(np.asarray(batch_out["actions"]).shape[0]),
-            -1,
-        )
-    if "action_mask" in batch_out:
-        batch_out["action_mask"] = np.asarray(batch_out["action_mask"]).reshape(
-            int(np.asarray(batch_out["action_mask"]).shape[0]),
-            -1,
-        )
-    return batch_out
-
-
-def _concat_batch_trees(values: list[Any]) -> Any:
-    first = values[0]
-    if isinstance(first, dict):
-        return {
-            key: _concat_batch_trees([value[key] for value in values])
-            for key in first
-        }
-    arrays = [np.asarray(value) for value in values]
-    return np.concatenate(arrays, axis=0)
-
-
-def _sample_training_batch(
-    *,
-    online_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore,
-    offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None,
-    batch_size: int,
-    offline_ratio: float,
-) -> tuple[dict[str, Any], dict[str, int]]:
-    offline_size = 0 if offline_replay_buffer is None else int(len(offline_replay_buffer))
-    online_size = int(len(online_replay_buffer))
-
-    if offline_replay_buffer is None or offline_size <= 0 or offline_ratio <= 0.0:
-        return online_replay_buffer.sample(int(batch_size)), {
-            "online_batch_size": int(batch_size),
-            "offline_batch_size": 0,
-        }
-    if online_size <= 0:
-        return offline_replay_buffer.sample(int(batch_size)), {
-            "online_batch_size": 0,
-            "offline_batch_size": int(batch_size),
-        }
-
-    offline_batch_size = int(round(float(batch_size) * float(offline_ratio)))
-    offline_batch_size = min(int(batch_size), max(0, int(offline_batch_size)))
-    online_batch_size = int(batch_size) - int(offline_batch_size)
-
-    if offline_batch_size <= 0:
-        return online_replay_buffer.sample(int(batch_size)), {
-            "online_batch_size": int(batch_size),
-            "offline_batch_size": 0,
-        }
-    if online_batch_size <= 0:
-        return offline_replay_buffer.sample(int(batch_size)), {
-            "online_batch_size": 0,
-            "offline_batch_size": int(batch_size),
-        }
-
-    online_batch = online_replay_buffer.sample(int(online_batch_size))
-    offline_batch = offline_replay_buffer.sample(int(offline_batch_size))
-    return _concat_batch_trees([online_batch, offline_batch]), {
-        "online_batch_size": int(online_batch_size),
-        "offline_batch_size": int(offline_batch_size),
-    }
 
 
 def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -491,21 +299,21 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
             recent_success_rate_20 = float(sum(recent_episode_successes)) / float(
                 max(1, len(recent_episode_successes))
             )
-            episode_stats = {
-                "train": to_jsonable(last_info),
-                "env_steps": int(env_steps),
-                "rollout": {
-                    "episode_id": int(episode_id),
-                    "episode_steps": int(episode_steps),
-                    "episode_return": float(episode_return),
-                    "init_episode_idx": int(init_episode_idx),
-                    "success": bool(episode_success),
-                    "cumulative_success_rate": float(
+            episode_stats = build_rollout_stats_payload(
+                env_steps=int(env_steps),
+                rollout=build_rollout_payload(
+                    episode_id=int(episode_id),
+                    episode_steps=int(episode_steps),
+                    episode_return=float(episode_return),
+                    init_episode_idx=int(init_episode_idx),
+                    success=bool(episode_success),
+                    cumulative_success_rate=float(
                         success_count / max(1, episode_id)
                     ),
-                    "recent_success_rate_20": float(recent_success_rate_20),
-                },
-            }
+                    recent_success_rate_20=float(recent_success_rate_20),
+                ),
+                env_info=last_info,
+            )
 
             append_jsonl(
                 rollout_log_path,
@@ -589,9 +397,11 @@ def learner(
         sample_obs=sample_obs,
         image_keys=image_keys,
     )
-    replay_buffer = _create_chunk_replay_buffer(
-        cfg=cfg,
+    replay_buffer = create_chunk_replay_buffer(
         observation_space=observation_space,
+        action_dim=int(cfg.env.action_dim),
+        chunk_horizon=int(cfg.residual.chunk_horizon),
+        discount=float(cfg.sac.discount),
         image_keys=image_keys,
         capacity=int(cfg.replay.capacity),
     )
@@ -655,22 +465,23 @@ def learner(
         nonlocal latest_completed_episode_id
         if request_type != "send-stats":
             raise ValueError(f"Invalid request type: {request_type}")
+        rollout_stats = parse_rollout_stats_payload(payload)
+        if rollout_stats is None:
+            logger.warning(
+                "ignore malformed rollout stats payload: keys=%s",
+                sorted(payload.keys()),
+            )
+            return {}
         with progress_state_lock:
-            if "env_steps" in payload:
-                env_steps = max(int(env_steps), int(payload["env_steps"]))
-            rollout = payload.get("rollout", None)
-            if isinstance(rollout, dict):
-                try:
-                    episode_id = int(rollout.get("episode_id", 0))
-                except Exception:
-                    episode_id = 0
-                if episode_id > 0:
-                    latest_completed_episode_id = max(
-                        int(latest_completed_episode_id),
-                        int(episode_id),
-                    )
-                    completed_episode_env_steps[int(episode_id)] = int(env_steps)
-        rollout_metrics = extract_rollout_wandb_metrics(payload)
+            env_steps = max(int(env_steps), int(rollout_stats["env_steps"]))
+            episode_id = int(rollout_stats["rollout"]["episode_id"])
+            if episode_id > 0:
+                latest_completed_episode_id = max(
+                    int(latest_completed_episode_id),
+                    int(episode_id),
+                )
+                completed_episode_env_steps[int(episode_id)] = int(env_steps)
+        rollout_metrics = extract_rollout_wandb_metrics(rollout_stats)
         if rollout_metrics:
             wandb_logger.log(to_jsonable(rollout_metrics))
         return {}
@@ -696,9 +507,11 @@ def learner(
         if offline_resolution.manifest_paths:
             offline_manifest_path = offline_resolution.manifest_paths[0]
         offline_validation_stats = dict(offline_resolution.validation_stats)
-        offline_replay_buffer = _create_chunk_replay_buffer(
-            cfg=cfg,
+        offline_replay_buffer = create_chunk_replay_buffer(
             observation_space=observation_space,
+            action_dim=int(cfg.env.action_dim),
+            chunk_horizon=int(cfg.residual.chunk_horizon),
+            discount=float(cfg.sac.discount),
             image_keys=image_keys,
             capacity=int(cfg.offline.capacity),
         )
@@ -743,18 +556,6 @@ def learner(
     offline_pretrain_steps_done = 0
     initial_network_published = False
 
-    def _sample_and_reshape_batch(
-        *,
-        offline_ratio: float,
-    ) -> tuple[dict[str, Any], dict[str, int]]:
-        batch, batch_mix = _sample_training_batch(
-            online_replay_buffer=replay_buffer,
-            offline_replay_buffer=offline_replay_buffer,
-            batch_size=int(cfg.replay.batch_size),
-            offline_ratio=float(offline_ratio),
-        )
-        return _reshape_chunk_batch_for_training(batch), batch_mix
-
     def _run_training_update(
         *,
         offline_ratio: float,
@@ -766,13 +567,21 @@ def learner(
         }
         for _ in range(max(0, critic_actor_ratio - 1)):
             with timer.context("sample_replay_buffer"):
-                batch, _ = _sample_and_reshape_batch(offline_ratio=float(offline_ratio))
+                batch, _ = sample_mixed_training_batch(
+                    online_replay_buffer=replay_buffer,
+                    offline_replay_buffer=offline_replay_buffer,
+                    batch_size=int(cfg.replay.batch_size),
+                    offline_ratio=float(offline_ratio),
+                )
             with timer.context("train_critics"):
                 agent, _critics_info = agent.update_critics(batch)
 
         with timer.context("train"):
-            batch, train_batch_mix = _sample_and_reshape_batch(
-                offline_ratio=float(offline_ratio)
+            batch, train_batch_mix = sample_mixed_training_batch(
+                online_replay_buffer=replay_buffer,
+                offline_replay_buffer=offline_replay_buffer,
+                batch_size=int(cfg.replay.batch_size),
+                offline_ratio=float(offline_ratio),
             )
             agent, update_info = agent.update_high_utd(
                 batch,
@@ -963,8 +772,8 @@ def learner(
 
             if update_steps % log_period == 0:
                 check_async_eval_worker(async_eval, logger=logger)
-                _sync_async_eval_results_to_wandb(
-                    async_eval,
+                sync_eval_results_to_wandb(
+                    records=load_new_async_eval_results(async_eval),
                     wandb_logger=wandb_logger,
                     logger=logger,
                 )
@@ -1009,7 +818,7 @@ def learner(
                         f"offline_pretrain={int(offline_pretrain_steps_done)}"
                     )
                 logger.info(
-                    _format_learner_heartbeat(
+                    format_learner_heartbeat(
                         update_steps=int(update_steps),
                         env_steps=int(env_steps),
                         replay_size=int(len(replay_buffer)),
@@ -1042,8 +851,8 @@ def learner(
                 async_eval,
                 logger=logger,
             )
-            _sync_async_eval_results_to_wandb(
-                async_eval,
+            sync_eval_results_to_wandb(
+                records=load_new_async_eval_results(async_eval),
                 wandb_logger=wandb_logger,
                 logger=logger,
             )
