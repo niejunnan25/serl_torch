@@ -179,6 +179,7 @@ wandb/
 
 # Training outputs (Hydra logs, checkpoints, etc.)
 outputs/
+output/
 
 # Root-level generated data artifacts. Keep package source directories such as
 # serl_launcher/serl_launcher/data tracked.
