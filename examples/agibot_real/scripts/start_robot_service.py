@@ -55,6 +55,11 @@ def _peek_args() -> argparse.Namespace:
     return parser.parse_known_args()[0]
 
 
+def _append_no_ros_flag() -> None:
+    if "--no-ros" not in sys.argv[1:]:
+        sys.argv.append("--no-ros")
+
+
 def main() -> None:
     if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
         _print_help()
@@ -62,7 +67,16 @@ def main() -> None:
     args = _peek_args()
     ensure_repo_local_a2d_sdk()
     if not args.no_ros:
-        ensure_repo_local_forwarder()
+        try:
+            ensure_repo_local_forwarder()
+        except RuntimeError as exc:
+            if "AgiBot forwarder bundle not found" not in str(exc):
+                raise
+            print(
+                "Warning: forwarder bundle is missing; starting robot-service with --no-ros.",
+                file=sys.stderr,
+            )
+            _append_no_ros_flag()
     from a2d_sdk.tools.robot_service import main as robot_service_main
 
     robot_service_main()

@@ -205,6 +205,8 @@ reference/
 
 # Temporary scratch files and directories
 tmp*
+examples/agibot_real/camera.txt
+examples/agibot_real/hal.txt
 
 # macOS Finder metadata
 .DS_Store
