@@ -82,12 +82,6 @@ from serl_torch.examples.libero.residual_observation import (
     prepare_base_actions_chunk,
 )
 
-FILL_WAIT_SLEEP_SEC = 1.0
-LEARNER_IDLE_SLEEP_SEC = 1.0
-ACTOR_TIMER_LOG_FILE = "actor_timers.jsonl"
-LEARNER_TIMER_LOG_FILE = "learner_timers.jsonl"
-
-
 def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     env = create_env(cfg, logger)
     task_prompt = str(env.task_description)
@@ -149,7 +143,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     episode_id = 0
     success_count = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
-    actor_timer_log_path = run_dir / ACTOR_TIMER_LOG_FILE
+    actor_timer_log_path = run_dir / "actor_timers.jsonl"
     rollout_log_path = run_dir / str(
         cfg.logging.episode_log_file or "episode_logs.jsonl"
     )
@@ -449,7 +443,7 @@ def learner(
     latest_completed_episode_id = 0
     completed_episode_env_steps: dict[int, int] = {}
     last_queued_async_eval_episode = 0
-    learner_timer_log_path = run_dir / LEARNER_TIMER_LOG_FILE
+    learner_timer_log_path = run_dir / "learner_timers.jsonl"
     progress_state_lock = Lock()
     summary: dict[str, Any] = {
         "role": "learner",
@@ -550,6 +544,8 @@ def learner(
     max_update_steps = cfg.training.max_update_steps
     critic_actor_ratio = max(1, cfg.training.critic_actor_ratio)
     steps_per_update = cfg.training.steps_per_update
+    replay_warmup_poll_interval_sec = 1.0
+    idle_poll_interval_sec = 1.0
     timer = Timer()
     last_log_time = time.time()
     last_log_update_steps = int(update_steps)
@@ -723,7 +719,7 @@ def learner(
                     env_steps=int(env_steps),
                     refresh=False,
                 )
-                time.sleep(FILL_WAIT_SLEEP_SEC)
+                time.sleep(replay_warmup_poll_interval_sec)
             current_replay_size = min(int(len(replay_buffer)), int(training_starts))
             if current_replay_size > warmup_replay_size:
                 warmup_bar.update(current_replay_size - warmup_replay_size)
@@ -751,7 +747,7 @@ def learner(
             _maybe_queue_async_eval()
             online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
             if not online_update_steps < env_steps:
-                time.sleep(LEARNER_IDLE_SLEEP_SEC)
+                time.sleep(idle_poll_interval_sec)
                 continue
 
             update_info, batch_mix = _run_training_update(
