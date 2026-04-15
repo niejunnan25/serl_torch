@@ -1,498 +1,563 @@
 # AgiBot Real Residual RL
 
-`examples/agibot_real` is the repo-local AgiBot real-robot residual RL example.
+`examples/agibot_real/` 当前保留一条 canonical residual-RL 训练主线，并补齐了：
 
-The important boundary is:
+- 临时参考版 offline data prepare / load
+- 单独的 checkpoint eval 入口
+- 和 `examples/libero` 对齐的 rollout payload / JSONL artifact / learner logging contract
 
-- this repo owns the residual RL actor / learner / eval flow
-- this repo owns the AgiBot env wrapper and robot-service bootstrap needed by
-  that flow
-- this repo does not import, source, or execute anything from
-  `/vla/users/niejunnan/codebase/serl_torch/reference`
-- the reference Tangyili inference code is only used as a semantic reference for
-  observation/action contracts
-- there is no standalone inference entrypoint in this example tree
+如果你想先看仓库整体结构，请回到：
 
-The base policy server is external by design. For local real-robot residual RL,
-assume it is already serving websocket policy requests at `127.0.0.1:9001`.
+- [../../README.md](../../README.md)
 
-## What Is Included
+## 当前主线是什么
 
-- Local AgiBot env implementation:
-  - [`env/task_env.py`](env/task_env.py)
-  - [`env/controller.py`](env/controller.py)
-  - [`env/factory.py`](env/factory.py)
-- Robot-facing runtime helpers:
-  - [`robot/interface.py`](robot/interface.py)
-  - [`robot/retargeter.py`](robot/retargeter.py)
-  - [`robot/hooks.py`](robot/hooks.py)
-  - [`robot/init_positions.py`](robot/init_positions.py)
-  - [`robot/reset_hooks.py`](robot/reset_hooks.py)
-- Repo-local vendored SDK/bootstrap:
-  - [`robot/sdk_bootstrap.py`](robot/sdk_bootstrap.py)
-  - `vendor/a2d_sdk/wheels/*.whl`
-- Repo-local robot-service bootstrap files:
-  - [`robot_service/env.sh`](robot_service/env.sh)
-  - [`robot_service/conf/copilot.pbtxt`](robot_service/conf/copilot.pbtxt)
-  - [`robot_service/scripts/ros_env_wrapper.sh`](robot_service/scripts/ros_env_wrapper.sh)
-  - [`scripts/services/start_robot_service.py`](scripts/services/start_robot_service.py)
-- Residual RL runtime/data bindings:
-  - [`runtime/runtime_bindings.py`](runtime/runtime_bindings.py)
-  - [`runtime/data_bindings.py`](runtime/data_bindings.py)
-  - [`runtime/obs_adapter.py`](runtime/obs_adapter.py)
-  - [`runtime/policy_adapter.py`](runtime/policy_adapter.py)
-  - [`runtime/controller_actor.py`](runtime/controller_actor.py)
-- Training and eval entrypoints:
-  - [`scripts/train/run_actor.py`](scripts/train/run_actor.py)
-  - [`scripts/train/run_learner.py`](scripts/train/run_learner.py)
-  - [`scripts/eval/evaluate_checkpoint.py`](scripts/eval/evaluate_checkpoint.py)
-  - [`scripts/eval/process_eval_queue.py`](scripts/eval/process_eval_queue.py)
-- Runtime preparation helper:
-  - [`tools/prepare_robot_runtime.sh`](tools/prepare_robot_runtime.sh)
+当前 canonical 主线是：
 
-## Observation And Action Contract
+- config:
+  [configs/train_residual.yaml](configs/train_residual.yaml)
+- entrypoint:
+  [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- actor wrapper:
+  [tools/run_actor.sh](tools/run_actor.sh)
+- learner wrapper:
+  [tools/run_learner.sh](tools/run_learner.sh)
 
-The current real-robot residual RL implementation intentionally keeps a narrow
-execution contract:
+训练拓扑和 `examples/libero` 一样：
 
-- control mode: `camera_position`
-- env action dimension: `14`
-- executed action layout:
-  - left arm pose: `0:6`
-  - left gripper: `6`
-  - right arm pose: `7:13`
-  - right gripper: `13`
-- proprio state sent to base policy:
-  - OpenPI / PI05: 14D `state/pose`
-  - JoyRA: 18D `state/pose + state/head + state/waist`
-- policy images:
-  - head image
-  - left wrist image
-  - right wrist image
+- 一个 typed config parser：
+  [config.py](config.py)
+- 一个 actor / learner 共用入口，通过 `runtime.role=actor|learner` 切角色
+- example 自己管理 observation、policy input、controller、robot runtime
 
-JoyRA may return an 18D action chunk. The current residual RL runtime keeps the
-first 14 dimensions before composing residual actions, because the current
-`AgiBotTaskEnv` only executes 14D `camera_position` actions. This is consistent
-with the current real-robot execution path where head/waist control is disabled,
-but it is not full 18D JoyRA parity.
+旧的拆分训练链路和旧 eval 入口已经移除。当前 canonical 入口包括：
 
-No interpolation is added in this repo-local residual RL flow. The actor consumes
-the base policy action chunk, composes residual actions, and enqueues the final
-chunk into the controller-driven env.
+- 训练：
+  [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- standalone offline prepare：
+  [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+- standalone checkpoint eval：
+  [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+- 真机启动文档：
+  [docs/real_robot_startup_guide.md](docs/real_robot_startup_guide.md)
 
-## Runtime Dependency Boundary
+这里仍然不支持 `async eval`，也不支持和 actor rollout 并发评估。真机推荐流程仍然是先训练/rollout，再单独加载 checkpoint 做 eval。
 
-For true robot residual RL, this repo no longer needs anything under
-`/vla/users/niejunnan/codebase/serl_torch/reference` at runtime.
+## 这个 example 的边界
 
-The AgiBot-specific runtime pieces that used to live outside the repo are now
-bundled here:
+当前实现是 AgiBot 真机 residual RL，约束比较明确：
 
-- `a2d_sdk` wheel
-- `genie_msgs_pb` wheel
-- `cosine_bus` wheels for `x86_64` and `aarch64`
-- repo-local `robot_service` env/config/scripts
+- `env.backend` 只支持 `local`
+- 不引入 `remote env`
+- `env.action_dim` 必须是 `14`
+- `task.control_mode` 必须是 `camera_position`
+- base-policy 图像输入是：
+  - `head`
+  - `left wrist`
+  - `right wrist`
+- OpenPI 用 canonical 14D `state/pose`
+- JoyRA 额外可以消费 18D `pose + head + waist`
+- 不管 base policy backend 是 OpenPI 还是 JoyRA，进入 residual RL 前都会统一成同一个 14D dual-arm action chunk
 
-At runtime, [`robot/sdk_bootstrap.py`](robot/sdk_bootstrap.py) extracts the
-vendored wheels into `examples/agibot_real/vendor/a2d_sdk/_site/` and prepends
-that directory to `sys.path`.
+当前 residual learner 训练时使用的 observation 字段是：
 
-The ROS forwarder bundle is treated as a runtime asset, not a Git-tracked source
-file. When robot-service is started with ROS/forwarder enabled, the repo-local
-bootstrap resolves it in this order:
+- `robot_proprio`
+- `base_action`
+- `base_action_chunk`
+- `alpha`
+- `image_rgb_0`
+- `image_rgb_1`
+- `image_rgb_2`
 
-1. `AGIBOT_FORWARDER_DIR=/path/to/extracted/forwarder`
-2. `AGIBOT_FORWARDER_TAR=/path/to/forwarder_x86_v1.7.0.tar.gz`
-3. existing `examples/agibot_real/robot_service/forwarder`
-4. local cache `examples/agibot_real/vendor/a2d_sdk/forwarder_x86_v1.7.0.tar.gz`
+## 目录结构
 
-Important:
+- [configs/train_residual.yaml](configs/train_residual.yaml)
+  当前 canonical 训练配置
+- [config.py](config.py)
+  typed config 定义与解析
+- [scripts/run_residual_training.py](scripts/run_residual_training.py)
+  actor / learner 共用训练入口
+- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+  临时参考版 offline prepare 入口
+- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+  单独 checkpoint eval 入口
+- [docs/real_robot_startup_guide.md](docs/real_robot_startup_guide.md)
+  真机 bring-up / 训练 / 评估启动文档
+- [eval_runner.py](eval_runner.py)
+  standalone eval runner
+- [scripts/start_robot_service.py](scripts/start_robot_service.py)
+  repo-local robot-service Python launcher
+- [scripts/reset_robot.py](scripts/reset_robot.py)
+  一次性机器人归位脚本，直接复用当前 reset hook
+- [tools/run_actor.sh](tools/run_actor.sh)
+  actor shell wrapper
+- [tools/run_learner.sh](tools/run_learner.sh)
+  learner shell wrapper
+- [tools/start_robot_service.sh](tools/start_robot_service.sh)
+  robot-service shell wrapper
+- [tools/prepare_robot_runtime.sh](tools/prepare_robot_runtime.sh)
+  准备 repo-local forwarder / SDK runtime
+- [tools/serve_openpi.sh](tools/serve_openpi.sh)
+  OpenPI server wrapper
+- [tools/serve_joyra.sh](tools/serve_joyra.sh)
+  JoyRA server wrapper
+- [env/base_policy.py](env/base_policy.py)
+  example-local base policy adapter
+- [env/controller.py](env/controller.py)
+  人工 gating / success / fail / reset 控制器
+- [env/task_env.py](env/task_env.py)
+  真机环境主体
+- [env/observation.py](env/observation.py)
+  observation 解析和 policy input 所需 state / image 逻辑
+- [residual_observation.py](residual_observation.py)
+  residual observation schema
+- `robot/service/`
+  repo-local robot-service 运行时文件
+- `vendor/a2d_sdk/`
+  vendored SDK / forwarder 资产
 
-- the vendored `cosine_bus` wheel is CPython 3.10-specific, so the robot-side
-  Python interpreter must be `3.10`
-- kinematics/runtime deps such as `scipy`, `ruckig`, and the packages needed by
-  [`robot/retargeter.py`](robot/retargeter.py) still need to exist in the active
-  Python env
-- base policy serving, such as JoyRA or OpenPI, remains external and is assumed
-  to be local at `127.0.0.1:9001`
+## 依赖和运行环境
 
-## Directory Layout
+最常见的环境拆分是：
 
-```text
-examples/agibot_real/
-  assets/
-  conf/
-  env/
-  robot/
-  robot_service/
-  runtime/
-  scripts/
-    services/
-    train/
-    eval/
-  tools/
-  vendor/
-```
+- `serl_torch`
+  learner、actor 脚本、本仓库代码
+- `robot`
+  真实机器人 runtime
+- `openpi` 或 `openpi-modified`
+  OpenPI server
+- `joyra`
+  JoyRA server
 
-## Start The Real-Robot Residual RL Flow
-
-The intended startup order is:
-
-1. Start the external base policy server at `127.0.0.1:9001`.
-2. Prepare the ROS forwarder runtime once per machine if you need repo-local ROS startup.
-3. Start repo-local AgiBot robot-service if it is not already running.
-4. Start the learner.
-5. Start the actor. The actor terminal owns the live robot env and controller.
-
-### Terminal A: Base Policy Server
-
-For JoyRA, start your external JoyRA server in its own environment. Example:
+最小安装通常至少包括：
 
 ```bash
-cd /workspace/codebase/JoyRA
-conda activate joyra
-export CUDA_VISIBLE_DEVICES=0
-export PYTHONPATH=/workspace/codebase/JoyRA:$PYTHONPATH
-python /workspace/codebase/JoyRA/deployment/real_infer/server.py \
-  --host 0.0.0.0 \
-  --port 9001 \
-  --ckpt-path /path/to/run_dir/checkpoints/steps_xxx.pt
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
+conda activate serl_torch
+pip install -r serl_launcher/requirements.txt
+pip install -e ./serl_launcher
 ```
 
-This command is intentionally outside `serl_torch`: the model server is a base
-policy dependency, not part of the residual RL runtime.
+`agentlace` 需要手工安装。
 
-If you want to launch the same JoyRA server shape from this repo, the wrapper
-now follows that exact pattern:
+如果你使用 `policy.type=openpi`，训练环境还需要能导入：
+
+```bash
+pip install -e ./third_party/openpi-client
+```
+
+这只安装 vendored 的 client 包。  
+如果你还要在本机启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并设置 `OPENPI_ROOT`。
+
+如果不是 editable install，可以补：
+
+```bash
+export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
+```
+
+## Actor 和 robot-service 的 shell 环境
+
+actor 终端需要先加载 repo-local robot runtime 环境：
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-JOYRA_ROOT=/workspace/codebase/JoyRA \
-JOYRA_CKPT_PATH=/workspace/codebase/JoyRA/outputs/.../checkpoints/steps_30000_pytorch_model.pt \
-JOYRA_CONDA_ENV=joyra \
-bash tools/serve_joyra.sh --port 9001
+source robot/service/env.sh
 ```
 
-`tools/serve_joyra.sh` now:
+这一步会设置真机 runtime 用到的环境变量，例如：
 
-1. activates the JoyRA conda env
-2. `cd`s into `JOYRA_ROOT`
-3. exports `PYTHONPATH=$JOYRA_ROOT:$PYTHONPATH`
-4. runs `$JOYRA_ROOT/deployment/real_infer/server.py`
+- `LOCATOR_IP`
+- `AORTA_DISCOVERY_URI`
+- `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION`
+- ROS / DDS 相关变量
 
-This matches the validated container-side JoyRA startup command more closely than
-the older wrapper behavior.
+`tools/run_actor.sh` 不会自动 `source robot/service/env.sh`，所以请在启动 actor 的同一个终端里先执行这一步。
 
-### Terminal B: Prepare Robot Runtime
+`tools/start_robot_service.sh` 会自己 `source robot/service/env.sh`，所以如果你走这个 wrapper，通常不需要在启动 robot-service 前再手工做一遍。只有你直接运行 [scripts/start_robot_service.py](scripts/start_robot_service.py) 或其他底层命令时，才需要自己先准备这套环境变量。
 
-If you want the repo-local robot-service wrapper to start ROS/forwarder for you,
-prepare the forwarder runtime once on that machine.
+当前 learner 已经尽量和 robot SDK import path 解耦，通常不需要 `source robot/service/env.sh`。如果你为了方便想从同一个准备好的 shell 启 learner，也可以。
 
-Option 1: use an already extracted forwarder directory.
+## 准备 repo-local robot runtime
+
+如果 forwarder / vendored runtime 还没准备好，先跑：
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
 bash tools/prepare_robot_runtime.sh --from-dir /path/to/forwarder
 ```
 
-Option 2: use a local tarball.
+也支持：
+
+- `--from-tar /path/to/forwarder_x86_v1.7.0.tar.gz`
+- `--from-url https://...`
+
+或者用环境变量：
+
+- `AGIBOT_FORWARDER_DIR`
+- `AGIBOT_FORWARDER_TAR`
+- `AGIBOT_FORWARDER_URL`
+
+如果你计划用 `--no-ros` 模式跑 robot-service，可以设：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-bash tools/prepare_robot_runtime.sh --from-tar /path/to/forwarder_x86_v1.7.0.tar.gz
+export AGIBOT_NO_ROS=1
 ```
 
-Option 3: download once from an internal artifact URL.
+## 当前默认配置
+
+canonical 配置是：
+
+- [configs/train_residual.yaml](configs/train_residual.yaml)
+
+当前默认关键参数：
+
+- `policy.type=openpi`
+- `policy.host=127.0.0.1`
+- `policy.port=30001`
+- `policy.id=pi05_agibot`
+- `env.backend=local`
+- `env.action_dim=14`
+- `task.control_mode=camera_position`
+- `task.max_episode_steps=150`
+- `controller.enabled=true`
+- `residual.alpha=0.2`
+- `residual.chunk_horizon=15`
+- `training.training_starts=1000`
+- `training.steps_per_update=30`
+- `training.critic_actor_ratio=4`
+- `training.max_env_steps=300000`
+- `training.max_update_steps=300000`
+- `training.max_episodes=2000`
+- `offline.enabled=false`
+- `logging.episode_log_file=episode_logs.jsonl`
+
+当前配置解析还有几个显式约束：
+
+- `obs.stack_horizon` 目前必须是 `1`
+- `encoder.use_proprio=true` 时，`obs.vector_obs_keys` 不能为空
+- `env.action_dim` 目前强制为 `14`
+
+## 推荐启动顺序
+
+当前推荐顺序：
+
+1. 启动 base-policy server
+2. 准备 robot runtime
+3. 启动 robot-service
+4. 启动 learner
+5. 在机器人终端启动 actor
+
+如果你只是想先把机器人归位，不想启动整条训练链路，可以直接运行：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-AGIBOT_FORWARDER_URL=https://internal.example/path/forwarder_x86_v1.7.0.tar.gz \
-bash tools/prepare_robot_runtime.sh
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
+python examples/agibot_real/scripts/reset_robot.py
 ```
 
-This prepares a repo-local `robot_service/forwarder` directory, or reuses an
-existing one. The local cache path
-`examples/agibot_real/vendor/a2d_sdk/forwarder_x86_v1.7.0.tar.gz` is intentionally
-not tracked in Git.
+默认行为等价于：
 
-If your machine already has a system-managed forwarder path, or you plan to run
-robot-service with `--no-ros`, you can skip this step.
+- `--task-name agibot_real_default`
+- `--prompt "Pick up the object with the right hand and place it at the target location."`
+- `--hz 20.0`
 
-### Terminal C: Robot Service
-
-Start the robot service from this repo:
+也支持显式指定任务名：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-conda activate serl_torch
-source robot_service/env.sh
-python scripts/services/start_robot_service.py \
-  -s \
-  -c robot_service/conf/copilot.pbtxt
+python examples/agibot_real/scripts/reset_robot.py --task-name office_setting
+python examples/agibot_real/scripts/reset_robot.py --task-name pour_water --hz 10
 ```
 
-What this does:
+这个脚本只做“机器人姿态归位”：
 
-1. extracts vendored SDK wheels from `vendor/a2d_sdk/wheels/`
-2. resolves forwarder assets from `AGIBOT_FORWARDER_DIR`, `AGIBOT_FORWARDER_TAR`,
-   `robot_service/forwarder`, or the local cache tarball
-3. prepends the extracted wheel site to `sys.path`
-4. imports `a2d_sdk.tools.robot_service`
-5. delegates to `a2d_sdk.tools.robot_service.main()`
+- 发送 head command
+- 发送 waist command
+- 发送 16D joint reset command
 
-That replaces the old external-style startup:
+它不会自动 reset 场景物体，也不会替代完整训练链路里的 robot-service / actor / learner。
 
-```bash
-cd /path/to/external/a2d_sdk
-source env.sh
-robot-service -s -c ./conf/copilot.pbtxt
-```
+## 1. 启动 base-policy server
 
-If `robot-service` is already running, do not start another one.
-
-If you do not want repo-local ROS/forwarder startup, use:
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-conda activate serl_torch
-source robot_service/env.sh
-python scripts/services/start_robot_service.py \
-  -s \
-  -c robot_service/conf/copilot.pbtxt \
-  --no-ros
-```
-
-or equivalently:
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-AGIBOT_NO_ROS=1 bash tools/start_robot_service.sh
-```
-
-### Terminal D: Learner
-
-Recommended wrapper:
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-mkdir -p outputs/agibot_real/train_default
-SERL_CONDA_ENV=serl_torch \
-bash tools/run_learner.sh \
-  conf/train_residual_sac.yaml \
-  --bootstrap outputs/agibot_real/train_default/agentlace_bootstrap.pkl \
-  policy.type=joyra \
-  joyra.host=127.0.0.1 \
-  joyra.port=9001 \
-  hydra.run.dir=outputs/agibot_real/train_default/learner
-```
-
-Equivalent direct command:
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-conda activate serl_torch
-mkdir -p outputs/agibot_real/train_default
-export CUDA_VISIBLE_DEVICES=0
-python scripts/train/run_learner.py \
-  --config-dir conf \
-  --config-name train_residual_sac \
-  policy.type=joyra \
-  joyra.host=127.0.0.1 \
-  joyra.port=9001 \
-  hydra.run.dir=outputs/agibot_real/train_default/learner \
-  training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
-```
-
-### Terminal E: Actor
-
-Recommended wrapper:
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-SERL_CONDA_ENV=serl_torch \
-bash tools/run_actor.sh \
-  conf/train_residual_sac.yaml \
-  --bootstrap outputs/agibot_real/train_default/agentlace_bootstrap.pkl \
-  policy.type=joyra \
-  joyra.host=127.0.0.1 \
-  joyra.port=9001 \
-  hydra.run.dir=outputs/agibot_real/train_default/actor
-```
-
-Equivalent direct command:
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-conda activate serl_torch
-export CUDA_VISIBLE_DEVICES=0
-python scripts/train/run_actor.py \
-  --config-dir conf \
-  --config-name train_residual_sac \
-  policy.type=joyra \
-  joyra.host=127.0.0.1 \
-  joyra.port=9001 \
-  hydra.run.dir=outputs/agibot_real/train_default/actor \
-  training.async.agentlace.bootstrap_file=/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/outputs/agibot_real/train_default/agentlace_bootstrap.pkl
-```
-
-Notes:
-
-- learner and actor must use the same `--bootstrap` path
-- learner and actor must agree on `policy.type` and backend host/port
-- Agentlace is implicit for `agibot_real`; you only need to provide the bootstrap path
-- the actor terminal owns the live robot env, action queue, and manual
-  controller
-- `controller.enabled=true` and `chunk_step.enabled=true` are the expected
-  default training mode for real robot
-- for a base-policy-only safety check, override `residual.alpha=0.0` before
-  letting the residual policy affect the robot
-
-## What The Actor Does
-
-The real-robot actor loop is controller-driven:
-
-1. read the latest robot observation from `AgiBotTaskEnv`
-2. build a canonical policy input through `runtime/policy_adapter.py`
-3. call the base policy server, such as JoyRA at `127.0.0.1:9001`
-4. truncate the base action chunk to the current 14D env action contract
-5. sample the residual SAC policy
-6. compose `final_action = base_action + alpha * residual_delta`
-7. enqueue the final action chunk into the env controller
-8. collect executed transitions from the robot control thread
-9. insert those transitions into replay for learner updates
-
-The actor is therefore the real deployment entrypoint for residual RL. There is
-no separate repo-local inference loop to run.
-
-## JoyRA Websocket Contract
-
-The repo-local JoyRA backend in
-[`serl_launcher/policy/joyra`](../../serl_launcher/serl_launcher/policy/joyra)
-is aligned to the current JoyRA websocket server shape.
-
-Request fields sent to JoyRA:
-
-- `observation/image`
-- `observation/wrist_left_image`
-- `observation/wrist_right_image`
-- `observation/state`
-- `prompt`
-
-State layout:
-
-- preferred JoyRA layout: 18D `pose + head + waist`
-- fallback layout: 14D `pose` if the observation payload does not carry
-  `state/head` and `state/waist`
-
-Expected response fields:
-
-- `actions`
-- optional `policy_timing.infer_ms`
-- optional `server_timing.infer_ms`
-
-JoyRA requests are resized locally to `224x224` with padding before they are
-sent. OpenPI/PI05 is not changed by this JoyRA-specific preprocessing.
-
-## OpenPI / PI05
-
-OpenPI remains supported through the existing OpenPI backend:
+### OpenPI
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
 OPENPI_ROOT=/path/to/openpi \
-OPENPI_CONDA_ENV=my_openpi_env \
-POLICY_CONFIG=pi05_agibot \
-POLICY_DIR=/path/to/pi05_agibot/checkpoint \
-bash tools/serve_openpi.sh --port 9001 --gpu-id 0
+POLICY_DIR=/path/to/policy/checkpoint \
+bash tools/serve_openpi.sh --port 30001
 ```
 
-Then run learner/actor with:
+常见可覆盖环境变量：
 
-```bash
-policy.type=openpi openpi.host=127.0.0.1 openpi.port=9001
-```
+- `OPENPI_ROOT`
+- `POLICY_DIR`
+- `DEFAULT_POLICY_DIR`
+- `OPENPI_CONDA_ENV`
+- `OPENPI_CONDA_PREFIX`
 
-## Controller Keys
-
-When `controller.enabled=true`, the actor/eval terminal accepts:
-
-- `g`: ready / resume
-- `p`: pause
-- `r`: reset / truncate the current episode
-- `s`: mark success
-- `f`: mark failure
-- `h`: print help
-
-Current reset behavior is intentionally simple: `r` ends the episode and clears
-queued actions, but it does not move the robot back to a home pose. Task-specific
-reset motion should live in reset hooks.
-
-## Evaluate A Checkpoint
-
-Start the base policy server first, make sure the robot service is running, and
-then run:
+### JoyRA
 
 ```bash
 cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
-SERL_CONDA_ENV=serl_torch \
-bash tools/eval.sh \
-  policy.type=joyra \
-  joyra.host=127.0.0.1 \
-  joyra.port=9001 \
-  eval.checkpoint_path=outputs/checkpoint_2500.pt \
-  hydra.run.dir=outputs/agibot_real/eval_default
+JOYRA_ROOT=/path/to/JoyRA \
+JOYRA_CKPT_PATH=/path/to/checkpoints/steps_xxx.pt \
+bash tools/serve_joyra.sh --port 9001
 ```
 
-With controller mode enabled, the eval terminal is also the operator console.
+常见可覆盖环境变量：
 
-## Reference Notes
+- `JOYRA_ROOT`
+- `JOYRA_CKPT_PATH`
+- `JOYRA_SERVER_PY`
+- `JOYRA_CONDA_ENV`
+- `JOYRA_CONDA_PREFIX`
 
-The reference implementation used for semantic comparison is:
+切 JoyRA 训练时，最常见的 actor / learner override 是：
 
-- `reference/tangyili/tangyili/code/agibot/inference_camera_position.py`
-- `reference/tangyili/tangyili/run_agibot.sh`
+```bash
+policy.type=joyra policy.port=9001
+```
 
-The comparison informed this repo in these ways:
+## 2. 启动 robot-service
 
-- JoyRA should receive 18D state: `state/pose + state/head + state/waist`
-- PI05/OpenPI should continue to receive 14D `state/pose`
-- JoyRA policy images should be padded/resized to `224x224`
-- the current real-robot execution path can stay 14D while head/waist control is
-  disabled
-- interpolation/extrapolation from the reference inference script is not part of
-  the current residual RL flow
+先确保 runtime 已经准备好，再执行：
 
-TODO / questions to confirm before declaring full JoyRA parity:
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+bash tools/start_robot_service.sh
+```
 
-- Is dropping the final 4 JoyRA action dimensions acceptable long term, or
-  should `AgiBotTaskEnv` eventually support the full 18D action path?
-- The reference script applies gripper postprocessing on dimensions `6` and
-  `13` with `/0.9` then clip to `[0, 1]`. This behavior is intentionally not
-  ported yet; confirm the reason before adding it to residual RL.
-- If JoyRA sometimes returns fewer actions than `residual.chunk_horizon`, the
-  shared chunk helper now treats that as a contract error and raises
-  immediately. Fix the policy backend to return a full chunk before using it on
-  the real robot.
+这个 wrapper 会：
 
-## Removed Paths
+- 激活你指定的 conda env
+- `source robot/service/env.sh`
+- 使用 repo-local `robot/service/conf/copilot.pbtxt`
+- 调用 [scripts/start_robot_service.py](scripts/start_robot_service.py)
 
-The example-local offline demo conversion and online prefill collection paths
-were removed from `examples/agibot_real`.
+如果你已经准备好 shell 环境，也可以看 help：
 
-The shared residual training framework still has generic offline / prefill
-support, so the AgiBot config keeps disabled compatibility stubs for
-`cfg.offline` and `cfg.training.online_prefill`. The AgiBot actor and learner
-entrypoints reject enabling those paths.
+```bash
+bash tools/start_robot_service.sh --help
+```
 
-## Current Limitations
+## 3. 启动 learner
 
-- only `camera_position` mode is implemented
-- only 14D residual actions are executed
-- success/reward logic is hook-driven; there is no baked-in AgiBot task reward
-- async eval launches a separate eval process, so keep
-  `training.async_eval.enabled=false` unless that worker can own the robot
-  exclusively
+最常见的命令：
 
-That is intentional for this version: the goal is a clean, repo-local AgiBot
-residual RL runtime without dragging unrelated reference training/model code into
-`examples/agibot_real`.
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+bash tools/run_learner.sh
+```
+
+等价的直跑方式：
+
+```bash
+python scripts/run_residual_training.py runtime.role=learner
+```
+
+常见 overrides：
+
+```bash
+bash tools/run_learner.sh \
+  training.max_update_steps=300000 \
+  training.checkpoint.dir=checkpoints \
+  wandb.project=agibot_real
+```
+
+如果要启用 prepared offline replay：
+
+```bash
+bash tools/run_learner.sh \
+  offline.enabled=true \
+  offline.prepared_path=/path/to/prepared/offline \
+  offline.pretrain_steps=1000 \
+  offline.ratio=0.5
+```
+
+## 4. 启动 actor
+
+先在同一个终端里加载 robot runtime：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+source robot/service/env.sh
+bash tools/run_actor.sh
+```
+
+等价的直跑方式：
+
+```bash
+source robot/service/env.sh
+python scripts/run_residual_training.py runtime.role=actor
+```
+
+常见 overrides：
+
+```bash
+bash tools/run_actor.sh \
+  policy.type=openpi \
+  policy.host=127.0.0.1 \
+  policy.port=30001 \
+  task.name=agibot_real_default \
+  task.prompt='Pick up the object with the right hand and place it at the target location.'
+```
+
+如果切 JoyRA：
+
+```bash
+bash tools/run_actor.sh policy.type=joyra policy.port=9001
+```
+
+## controller 模式
+
+当前默认是：
+
+- `controller.enabled=true`
+
+也就是 actor 会进入人工 gating 的真机工作流。
+当前 canonical train/eval 配置已经强制要求 `controller.enabled=true`，关闭 controller 会在配置解析阶段直接报错。
+
+默认终端按键：
+
+- `g`
+  ready / resume
+- `p`
+  pause
+- `r`
+  reset
+- `s`
+  success
+- `f`
+  fail
+- `h`
+  help
+
+当前 reset / success 逻辑可以通过 config 里的 hook 字段覆盖：
+
+- `task.reset_hook`
+- `task.success_hook`
+
+其中当前 canonical train/eval 流程里：
+
+- `task.reset_hook` 继续生效
+- `task.success_hook` 字段保留，但已经停用，不再参与 success / done / reward 判定
+
+成功语义已经统一收敛成 controller-only：
+
+- controller `success` => `reward=1.0`, `done=true`, `truncated=false`, `success=true`
+- controller `fail` => `reward=0.0`, `done=true`, `truncated=false`, `success=false`
+- controller `reset` => `reward=0.0`, `done=false`, `truncated=true`, `success=false`
+- episode step limit timeout => `reward=0.0`, `done=false`, `truncated=true`, `success=false`
+
+## actor / learner 需要对齐的配置
+
+至少下面这些字段需要一致：
+
+- `runtime.trainer_host`
+- `runtime.trainer_port`
+- `runtime.broadcast_port`
+- `policy.type`
+- `policy.host`
+- `policy.port`
+- `env.action_dim`
+- `residual.chunk_horizon`
+- `obs.image_keys`
+- `obs.vector_obs_keys`
+
+## 输出目录
+
+默认 Hydra 输出目录来自配置：
+
+- `launch.output_root=outputs/agibot_real`
+
+默认训练 run 会写到：
+
+```text
+outputs/agibot_real/train_residual/<timestamp>/
+```
+
+典型内容包括：
+
+- `summary.json`
+- `checkpoints/`
+- `episode_logs.jsonl`
+- `actor_timers.jsonl`
+- `learner_timers.jsonl`
+- `wandb/`
+
+如果是 standalone eval，还会写：
+
+- `episode_logs.jsonl`
+- `summary.json`
+
+如果是 offline prepare，还会写：
+
+- `summary.json`
+- prepared offline directory
+- prepared `manifest.json`
+
+## 当前实现上的边界
+
+这条主线现在主要围绕下面这些文件展开：
+
+- [config.py](config.py)
+- [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- [env/base_policy.py](env/base_policy.py)
+- [env/controller.py](env/controller.py)
+- [env/task_env.py](env/task_env.py)
+- [env/observation.py](env/observation.py)
+- [residual_observation.py](residual_observation.py)
+
+example-local base policy adapter 做了 backend 归一化：
+
+- OpenPI 原生走 canonical 14D action space
+- JoyRA 可以消费 18D state、返回更宽 action chunk
+- `agibot_real` 会在进入 residual 观测构造和 action compose 之前，把不同 backend 统一到同一个 canonical 14D dual-arm action chunk
+
+这是当前新 AgiBot 工作应该沿着扩展的实现形状。
+
+## Offline Data
+
+当前已经补了一个临时参考版 offline pipeline：
+
+- prepare:
+  [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+- loader / manifest:
+  [offline_data.py](offline_data.py)
+
+但要明确一点：
+
+- 这套 raw dataset 输入格式只是临时参考版，主要为了先把 config、prepared artifact、learner mixing 和 pretrain 流程接通
+- 当前实现参考了 `examples/libero` 的 prepare 形状，并不代表最终 AgiBot 真机数据来源方案
+- 后续一旦明确真实 AgiBot residual offline 数据来源，需要再改一轮 [offline_data.py](offline_data.py)
+
+最小 prepare 方式示例：
+
+```bash
+python scripts/prepare_offline_data.py \
+  offline.enabled=true \
+  offline.prepare.raw_dataset_path=/path/to/reference_raw_dataset
+```
+
+prepare 完成后，再把生成的 `offline.prepared_path` 给 learner。
+
+## Standalone Eval
+
+真机不支持和 actor rollout 并发的 `async eval`，所以当前只提供 standalone checkpoint eval：
+
+```bash
+source robot/service/env.sh
+python scripts/evaluate_checkpoint.py \
+  eval.checkpoint_path=/path/to/checkpoints \
+  eval.checkpoint_step=10000
+```
+
+也可以直接传单个 checkpoint 文件：
+
+```bash
+python scripts/evaluate_checkpoint.py \
+  eval.checkpoint_path=/path/to/checkpoint_10000.pt
+```
+
+## 当前没有文档化的内容
+
+如果你看到旧文档里还有旧 eval / 旧训练入口，请以当前目录树和这份 README 为准。

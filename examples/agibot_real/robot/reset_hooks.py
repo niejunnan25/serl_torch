@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 def reset_to_task_initial_pose(
     *,
     env: Any,
-    init_episode_idx: int | None,
-    episode_info: dict[str, Any] | None,
     task_name: str,
     prompt: str,
 ) -> None:
@@ -55,10 +53,9 @@ def reset_to_task_initial_pose(
         raise ValueError(f"joint_action must be 16D, got shape {joint.shape}")
 
     logger.info(
-        "reset_to_task_initial_pose: task_name=%s init_key=%s init_episode_idx=%s",
+        "reset_to_task_initial_pose: task_name=%s init_key=%s",
         task_name,
         init_key,
-        init_episode_idx,
     )
     robot_node.publish_head_command(head)
     robot_node.publish_waist_command(waist)

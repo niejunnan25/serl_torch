@@ -1,8 +1,7 @@
-"""AgiBot robot-side helpers."""
+"""AgiBot robot-side helpers.
 
-from .hooks import resolve_hook
-from .interface import AgiBotRobotNode
-from .retargeter import BodyRetargeter
+Keep this package entrypoint lightweight so imports do not eagerly pull in the
+SDK-backed robot interface.
+"""
 
-__all__ = ["AgiBotRobotNode", "BodyRetargeter", "resolve_hook"]
-
+__all__: list[str] = []

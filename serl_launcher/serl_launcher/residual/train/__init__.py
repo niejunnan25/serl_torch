@@ -1,1 +1,0 @@
-"""Residual training orchestration helpers."""

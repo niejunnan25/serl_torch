@@ -8,11 +8,8 @@ setup(
     author="auth",
     license="MIT",
     install_requires=[
-        "zmq",
         "typing",
         "typing_extensions",
-        "opencv-python",
-        "lz4",
         "hydra-core>=1.3.2",
         "torch>=2.0",
         "torchvision>=0.15",

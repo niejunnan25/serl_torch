@@ -17,7 +17,7 @@ EXAMPLE_ROOT = Path(__file__).resolve().parents[1]
 VENDOR_ROOT = EXAMPLE_ROOT / "vendor" / "a2d_sdk"
 WHEELS_ROOT = VENDOR_ROOT / "wheels"
 SITE_ROOT = VENDOR_ROOT / "_site"
-ROBOT_SERVICE_ROOT = EXAMPLE_ROOT / "robot_service"
+ROBOT_SERVICE_ROOT = EXAMPLE_ROOT / "robot" / "service"
 FORWARDER_TAR = VENDOR_ROOT / "forwarder_x86_v1.7.0.tar.gz"
 FORWARDER_ROOT = ROBOT_SERVICE_ROOT / "forwarder"
 FORWARDER_DIR_ENV = "AGIBOT_FORWARDER_DIR"
@@ -178,7 +178,7 @@ def ensure_repo_local_forwarder() -> Path:
     Resolution order:
     1. `AGIBOT_FORWARDER_DIR`
     2. `AGIBOT_FORWARDER_TAR`
-    3. existing `robot_service/forwarder`
+    3. existing `robot/service/forwarder`
     4. local repo cache `vendor/a2d_sdk/forwarder_x86_v1.7.0.tar.gz`
     """
     machine = _canonical_machine()
@@ -213,7 +213,7 @@ def ensure_repo_local_forwarder() -> Path:
         "AgiBot forwarder bundle not found. Provide one of:\n"
         f"  1. {FORWARDER_DIR_ENV}=/path/to/extracted/forwarder\n"
         f"  2. {FORWARDER_TAR_ENV}=/path/to/forwarder_x86_v1.7.0.tar.gz\n"
-        "  3. a prepared robot_service/forwarder directory\n"
+        "  3. a prepared robot/service/forwarder directory\n"
         "  4. a local cache at examples/agibot_real/vendor/a2d_sdk/forwarder_x86_v1.7.0.tar.gz\n"
         "Or start robot-service with --no-ros / AGIBOT_NO_ROS=1."
     )

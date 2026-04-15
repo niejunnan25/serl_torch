@@ -180,6 +180,10 @@ wandb/
 # Training outputs (Hydra logs, checkpoints, etc.)
 outputs/
 
+# Root-level generated data artifacts. Keep package source directories such as
+# serl_launcher/serl_launcher/data tracked.
+/data/
+
 # Pretrained model weights (download via tools/download_resnet.py)
 pretrained_models/
 
@@ -201,6 +205,8 @@ reference/
 
 # Temporary scratch files and directories
 tmp*
+examples/agibot_real/camera.txt
+examples/agibot_real/hal.txt
 
 # macOS Finder metadata
 .DS_Store

@@ -46,20 +46,6 @@ def call_optional_hook(
     return hook(**kwargs)
 
 
-def coerce_precheck_result(result: Any) -> tuple[bool, Optional[dict[str, Any]]]:
-    if result is None:
-        return True, None
-    if isinstance(result, bool):
-        return bool(result), None
-    if isinstance(result, Mapping):
-        passed = bool(result.get("passed", True))
-        episode_info = result.get("episode_info", None)
-        if episode_info is not None and (not isinstance(episode_info, Mapping)):
-            episode_info = None
-        return passed, (None if episode_info is None else dict(episode_info))
-    raise TypeError(f"Unsupported precheck hook result: {type(result)}")
-
-
 def coerce_success_result(result: Any) -> dict[str, Any]:
     if result is None:
         return {
@@ -93,4 +79,3 @@ def coerce_success_result(result: Any) -> dict[str, Any]:
             "info": dict(info),
         }
     raise TypeError(f"Unsupported success hook result: {type(result)}")
-

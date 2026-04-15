@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import logging
 
-from serl_torch.examples.libero.config import LiberoTrainConfig
+from serl_torch.examples.libero.config import LiberoRunConfig
 
 from .remote_task_env import RemoteLiberoTaskEnv
 from .task_env import LiberoTaskEnv
 
 
-def _create_env(cfg: LiberoTrainConfig, logger: logging.Logger):
+def create_env(cfg: LiberoRunConfig, logger: logging.Logger):
     common_kwargs = dict(
         suite_name=cfg.task.suite_name,
         task_id=cfg.task.task_id,

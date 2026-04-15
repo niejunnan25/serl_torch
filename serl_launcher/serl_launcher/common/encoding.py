@@ -14,8 +14,12 @@ def _flatten_history_image(image: torch.Tensor) -> torch.Tensor:
     return image
 
 
-def _flatten_vector_features(vector: torch.Tensor) -> torch.Tensor:
-    if vector.ndim <= 1:
+def _flatten_vector_features(
+    vector: torch.Tensor,
+    *,
+    preserve_batch_dim: bool,
+) -> torch.Tensor:
+    if not preserve_batch_dim or vector.ndim <= 1:
         return vector.reshape(-1)
     return vector.reshape(vector.shape[0], -1)
 
@@ -91,6 +95,7 @@ class EncodingWrapper(nn.Module):
         encoding = torch.cat(encoded, dim=-1)
 
         vector_inputs = None
+        preserve_vector_batch_dim = encoding.ndim > 1
         if self.vector_obs_keys is not None and len(self.vector_obs_keys) > 0:
             vector_parts = []
             for key in self.vector_obs_keys:
@@ -99,17 +104,24 @@ class EncodingWrapper(nn.Module):
                         f"Missing vector observation key {key!r}. "
                         f"Available keys: {list(observations.keys())}"
                     )
-                vector_parts.append(_flatten_vector_features(observations[key]))
+                vector_parts.append(
+                    _flatten_vector_features(
+                        observations[key],
+                        preserve_batch_dim=preserve_vector_batch_dim,
+                    )
+                )
             vector_inputs = torch.cat(vector_parts, dim=-1)
         elif self.use_proprio:
             state = observations["state"]
             if self.enable_stacking:
                 if state.ndim == 2:
                     state = rearrange(state, "t c -> (t c)")
-                    encoding = encoding.reshape(-1)
                 elif state.ndim == 3:
                     state = rearrange(state, "b t c -> b (t c)")
-            vector_inputs = state
+            vector_inputs = _flatten_vector_features(
+                state,
+                preserve_batch_dim=preserve_vector_batch_dim,
+            )
 
         if vector_inputs is not None:
             vector_features = self.proprio_proj(vector_inputs)

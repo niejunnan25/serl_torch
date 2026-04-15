@@ -43,7 +43,7 @@ obs:
   stack_horizon: 1
 
 residual:
-  alpha: 0.35
+  alpha: 0.1
   action_mask: [true, true, true, true, true, true, true]
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
@@ -96,6 +96,21 @@ replay:
   capacity: 250000
   batch_size: 128
 
+offline:
+  enabled: false
+  prepared_path: data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
+  ratio: 0.5
+  capacity: 50000
+  load_max_episodes: null
+  load_max_transitions: null
+  pretrain_steps: 0
+
+  prepare:
+    raw_dataset_path: null
+    output_root: data/residual/offline_data
+    expert_reference_scale: 1.0
+    clip_residual_to_unit: true
+
 training:
   training_starts: 1000
   steps_per_update: 30
@@ -110,6 +125,29 @@ training:
     every_steps: 2500
     keep: 0
     dir: checkpoints
+  async_eval:
+    enabled: false
+    every_episodes: 20
+    episodes: 10
+    start_episode_idx: 0
+    max_env_steps_per_episode: null
+    deterministic: true
+    poll_interval_sec: 5.0
+    queue_file: async_eval_queue.jsonl
+    summary_jsonl: async_eval_results.jsonl
+    worker_log_file: async_eval_worker.log
+    checkpoint:
+      dir: async_eval_checkpoints
+      # Must stay 0 for now so queued eval checkpoints are never deleted before processing.
+      keep: 0
+    env:
+      # Async eval must use a dedicated remote env server and must not share the
+      # training actor's env.remote.host/port pair.
+      backend: remote
+      remote:
+        host: 127.0.0.1
+        port: 30010
+        timeout_sec: 180.0
 
 logging:
   summary_file: summary.json

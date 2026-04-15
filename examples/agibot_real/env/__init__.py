@@ -1,5 +1,7 @@
-"""AgiBot real-robot environment package."""
+"""AgiBot real-robot environment package.
 
-from .task_env import AgiBotTaskEnv
+Keep this package entrypoint lightweight so imports do not eagerly pull in the
+real-robot environment stack.
+"""
 
-__all__ = ["AgiBotTaskEnv"]
+__all__: list[str] = []

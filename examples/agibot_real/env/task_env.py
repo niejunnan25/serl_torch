@@ -23,8 +23,6 @@ from .controller import TERMINAL_RESET
 from .controller import TERMINAL_SUCCESS
 from .controller import TERMINAL_TIMEOUT
 from ..robot.hooks import call_optional_hook
-from ..robot.hooks import coerce_precheck_result
-from ..robot.hooks import coerce_success_result
 from ..robot.hooks import resolve_hook
 from ..robot.interface import AgiBotRobotNode
 from ..robot.retargeter import BodyRetargeter
@@ -71,7 +69,6 @@ class AgiBotTaskEnv:
         controller: Optional[Mapping[str, Any]] = None,
         reset_hook: Optional[str] = None,
         success_hook: Optional[str] = None,
-        expert_precheck_hook: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.logger = logger or logging.getLogger(__name__)
@@ -115,15 +112,21 @@ class AgiBotTaskEnv:
             int(max_episode_steps) if max_episode_steps is not None else 200
         )
         self._take_action_cnt = 0
-        self.current_init_state_idx: Optional[int] = None
         self.episode_count = 0
         self._last_obs: Optional[Dict[str, Any]] = None
         self._controller_cfg = dict(controller or {})
         self._controller_enabled = bool(self._controller_cfg.get("enabled", False))
 
         self._reset_hook = resolve_hook(reset_hook)
-        self._success_hook = resolve_hook(success_hook)
-        self._expert_precheck_hook = resolve_hook(expert_precheck_hook)
+        self._success_hook_spec = (
+            None if success_hook is None else str(success_hook).strip() or None
+        )
+        if self._success_hook_spec is not None:
+            self.logger.warning(
+                "task.success_hook is currently retained for compatibility only and "
+                "is not used by the canonical AgiBot residual train/eval flow: %s",
+                self._success_hook_spec,
+            )
         self._controller: Optional[ManualEpisodeController] = None
         self._control_thread: Optional[threading.Thread] = None
         self._control_stop = threading.Event()
@@ -292,12 +295,9 @@ class AgiBotTaskEnv:
         )
 
     def _controller_error_obs(self) -> Dict[str, Any]:
-        if self._controller is not None:
-            obs = self._controller.get_latest_obs()
-            if obs is not None:
-                return obs
-        if self._last_obs is not None:
-            return _clone_obs_tree(self._last_obs)
+        obs = self._controller_cached_obs()
+        if obs:
+            return obs
         try:
             return self._get_obs()
         except Exception as obs_exc:  # noqa: BLE001
@@ -305,6 +305,15 @@ class AgiBotTaskEnv:
                 "Failed to refresh AgiBot observation after controller error: %s",
                 obs_exc,
             )
+        return {}
+
+    def _controller_cached_obs(self) -> Dict[str, Any]:
+        if self._controller is not None:
+            obs = self._controller.get_latest_obs()
+            if obs is not None:
+                return obs
+        if self._last_obs is not None:
+            return _clone_obs_tree(self._last_obs)
         return {}
 
     def _handle_controller_step_exception(
@@ -325,17 +334,18 @@ class AgiBotTaskEnv:
                 sequence_id=int(sequence_id),
                 obs=self._controller_error_obs(),
                 reward=0.0,
-                done=True,
-                truncated=False,
+                done=False,
+                truncated=True,
                 info={
                     "success": False,
+                    "infra_abort": True,
                     "controller_error": error_message,
+                    "controller_action_executed": False,
                     "controller_sequence_id": int(sequence_id),
                     "take_action_cnt": int(self._take_action_cnt),
                     "step_lim": int(self._step_limit),
                     "task_description": self._task_description,
                     "task_name": self.task_name,
-                    "init_state_idx": self.current_init_state_idx,
                 },
             )
         )
@@ -392,25 +402,11 @@ class AgiBotTaskEnv:
             "step_lim": int(self._step_limit),
             "task_description": self._task_description,
             "task_name": self.task_name,
-            "init_state_idx": self.current_init_state_idx,
         }
-        success_result = coerce_success_result(
-            call_optional_hook(
-                self._success_hook,
-                env=self,
-                obs=obs,
-                action=np.asarray(action, dtype=np.float32),
-                step_count=int(self._take_action_cnt),
-                step_limit=int(self._step_limit),
-                task_name=self.task_name,
-                prompt=self._current_instruction,
-            )
-        )
-        reward = float(success_result["reward"])
-        done = bool(success_result["done"])
-        truncated = bool(success_result["truncated"])
-        success = bool(success_result["success"])
-        info_dict.update(success_result["info"])
+        reward = 0.0
+        done = False
+        truncated = False
+        success = False
 
         if controller_mode and self._controller is not None:
             ctrl_meta = self._controller.get_meta()
@@ -422,6 +418,7 @@ class AgiBotTaskEnv:
                 truncated = False
                 success = True
                 info_dict.update(dict(terminal_info))
+                info_dict["controller_terminal_signal"] = TERMINAL_SUCCESS
                 info_dict["human_success"] = True
             elif terminal_signal == TERMINAL_FAIL:
                 reward = 0.0
@@ -429,6 +426,7 @@ class AgiBotTaskEnv:
                 truncated = False
                 success = False
                 info_dict.update(dict(terminal_info))
+                info_dict["controller_terminal_signal"] = TERMINAL_FAIL
                 info_dict["human_fail"] = True
             elif terminal_signal == TERMINAL_RESET:
                 reward = 0.0
@@ -436,11 +434,14 @@ class AgiBotTaskEnv:
                 truncated = True
                 success = False
                 info_dict.update(dict(terminal_info))
+                info_dict["controller_terminal_signal"] = TERMINAL_RESET
                 info_dict["human_reset"] = True
 
         info_dict["success"] = success
         if (not done) and (not truncated) and self._take_action_cnt >= self._step_limit:
+            reward = 0.0
             truncated = True
+            info_dict["controller_terminal_signal"] = TERMINAL_TIMEOUT
             info_dict["time_limit_reached"] = True
         return {
             "reward": float(reward),
@@ -528,6 +529,8 @@ class AgiBotTaskEnv:
         terminal_info = meta.get("terminal_info", {})
         if isinstance(terminal_info, Mapping):
             info.update(dict(terminal_info))
+        if terminal_signal is not None:
+            info["controller_terminal_signal"] = str(terminal_signal)
         if terminal_signal == TERMINAL_SUCCESS:
             payload["reward"] = 1.0
             payload["done"] = True
@@ -557,6 +560,48 @@ class AgiBotTaskEnv:
         payload["info"] = info
         return payload
 
+    def _is_completed_terminal_meta(self, meta: Mapping[str, Any]) -> bool:
+        return (
+            meta.get("terminal_signal", None)
+            in {
+                TERMINAL_SUCCESS,
+                TERMINAL_FAIL,
+                TERMINAL_RESET,
+                TERMINAL_TIMEOUT,
+            }
+            and meta.get("state", None) != STATE_RUNNING
+        )
+
+    def _synthesize_terminal_transition(
+        self,
+        *,
+        meta: Mapping[str, Any],
+        sequence_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        terminal_signal = meta.get("terminal_signal", None)
+        info: Dict[str, Any] = {
+            "success": False,
+            "take_action_cnt": int(self._take_action_cnt),
+            "step_lim": int(self._step_limit),
+            "task_description": self._task_description,
+            "task_name": self.task_name,
+            "controller_action_executed": False,
+            "controller_terminated_before_execution": True,
+        }
+        if terminal_signal is not None:
+            info["controller_terminal_signal"] = str(terminal_signal)
+        if sequence_id is not None:
+            info["controller_sequence_id"] = int(sequence_id)
+        payload = {
+            "sequence_id": int(sequence_id) if sequence_id is not None else -1,
+            "obs": self._controller_cached_obs(),
+            "reward": 0.0,
+            "done": False,
+            "truncated": False,
+            "info": info,
+        }
+        return self._override_transition_for_terminal_meta(payload, meta)
+
     def _controller_execute_chunk_blocking(
         self, actions: np.ndarray
     ) -> list[Dict[str, Any]]:
@@ -566,6 +611,9 @@ class AgiBotTaskEnv:
             raise ValueError(f"Expected 2-D action chunk, got {action_chunk.shape}")
         accepted_ids = self.enqueue_action_chunk(action_chunk)
         if not accepted_ids:
+            meta = self.get_controller_meta()
+            if self._is_completed_terminal_meta(meta):
+                return [self._synthesize_terminal_transition(meta=meta)]
             return []
         accepted_cursor = 0
         transitions: list[Dict[str, Any]] = []
@@ -603,16 +651,7 @@ class AgiBotTaskEnv:
                     inflight_sequence_id = int(inflight_sequence_id)
                 except (TypeError, ValueError):
                     inflight_sequence_id = None
-            if (
-                meta.get("terminal_signal", None)
-                in {
-                    TERMINAL_SUCCESS,
-                    TERMINAL_FAIL,
-                    TERMINAL_RESET,
-                    TERMINAL_TIMEOUT,
-                }
-                and meta.get("state", None) != STATE_RUNNING
-            ):
+            if self._is_completed_terminal_meta(meta):
                 if (
                     next_expected_sequence_id is not None
                     and inflight_sequence_id == next_expected_sequence_id
@@ -629,6 +668,13 @@ class AgiBotTaskEnv:
                 if pending is not None:
                     transitions.append(
                         self._override_transition_for_terminal_meta(pending, meta)
+                    )
+                else:
+                    transitions.append(
+                        self._synthesize_terminal_transition(
+                            meta=meta,
+                            sequence_id=next_expected_sequence_id,
+                        )
                     )
                 remaining_count = int(len(accepted_ids) - accepted_cursor)
                 if remaining_count > 0:
@@ -650,38 +696,14 @@ class AgiBotTaskEnv:
                 )
             )
 
-    def expert_precheck(
-        self,
-        init_episode_idx: Optional[int] = None,
-    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        result = call_optional_hook(
-            self._expert_precheck_hook,
-            env=self,
-            init_episode_idx=(
-                None if init_episode_idx is None else int(init_episode_idx)
-            ),
-            task_name=self.task_name,
-            prompt=self._current_instruction,
-        )
-        return coerce_precheck_result(result)
-
     def reset(
         self,
-        init_episode_idx: Optional[int] = None,
-        episode_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        self.current_init_state_idx = (
-            None if init_episode_idx is None else int(init_episode_idx)
-        )
         self._take_action_cnt = 0
         self.episode_count += 1
         result = call_optional_hook(
             self._reset_hook,
             env=self,
-            init_episode_idx=(
-                None if init_episode_idx is None else int(init_episode_idx)
-            ),
-            episode_info=episode_info,
             task_name=self.task_name,
             prompt=self._current_instruction,
         )

@@ -2,477 +2,326 @@
 
 `serl_torch` 是当前这套 residual RL / VLA 实验仓库。
 
-这份根目录 README 现在主要回答四类问题：
-
-1. 这个仓库现在怎么分层；
-2. 代码应该从哪里开始看；
-3. 如果你要真正跑实验，应该去看哪个 example 的 README。
-4. 少量已经验证过的关键运行摘要应该怎么看。
-
-如果你当前要跑 LIBERO，请直接看：
+当前主线已经收敛到两条 example：
 
 - [examples/libero/README.md](examples/libero/README.md)
-
-如果你当前要跑 AgiBot 真机 residual RL，请直接看：
-
+  LIBERO residual RL，支持本地 env 和 remote env server，带独立 checkpoint eval
 - [examples/agibot_real/README.md](examples/agibot_real/README.md)
+  AgiBot 真机 residual RL，当前只文档化 canonical 训练主线
 
-## 仓库定位
+如果你现在要真正跑实验，建议直接从对应 example 的 README 开始。
 
-当前主线是一套围绕：
+## 当前仓库在做什么
+
+当前主线围绕下面几件事展开：
 
 - chunk base policy
-- residual RL
+- residual action composition
 - actor / learner 异步训练
 - 多环境 example 适配
 
-展开的实验代码。
-
-目前已经重点整理过两条边界：
-
-- `serl_launcher/` 负责公共训练与算法基础设施
-- `examples/<env>/` 负责环境适配、脚本入口、实验配置
-
-## 当前代码分层
-
-推荐按下面这套分层理解：
-
-- `serl_launcher/training/`
-  通用训练基础设施，例如 checkpoint、profiling、async runtime、telemetry
-- `serl_launcher/residual/algorithms/`
-  residual 算法接口与实现
-- `serl_launcher/residual/train/`
-  residual actor / learner 编排
-- `serl_launcher/residual/data/`
-  residual 训练数据 schema、materialize、loader
-- `serl_launcher/policy/`
-  base chunk policy backend
-- `serl_launcher/agents/`
-  RL agent 本体和 builder
-- `examples/libero/`
-  LIBERO 环境适配、环境服务、数据准备、训练/评测脚本、实验配置
-- `examples/agibot_real/`
-  AgiBot 真机环境适配、controller runtime、训练/评测脚本、服务脚本
-
-## 仓库目录
+代码边界现在比较清楚：
 
 - `serl_launcher/`
-  公共训练、policy backend、agent、residual 编排
+  当前仍在复用的公共库代码，包括 agent、policy client、checkpoint、RPC、timer、replay buffer、vision encoder
 - `examples/libero/`
-  当前最完整、最常用的 example
+  LIBERO 环境适配、训练脚本、eval 脚本、env server、typed config
 - `examples/agibot_real/`
-  当前 AgiBot 真机 residual RL example
+  AgiBot 真机环境适配、controller runtime、robot-service 启动脚本、训练脚本、typed config
+
+## 目录导航
+
+- `serl_launcher/`
+  当前主线复用的公共库
+- `examples/libero/`
+  当前最完整的仿真 example
+- `examples/agibot_real/`
+  当前真机 example
 - `examples/RoboTwin/`
-  另一个 example
-- `docs/`
-  设计说明、重构记录、分析文档
+  另一个 example，不是当前文档主线
 - `third_party/`
-  本地依赖或参考仓库
+  vendored 依赖，例如 `third_party/LIBERO`
+- `docs/`
+  设计说明、重构笔记、分析文档
 - `pretrained_models/`
-  本地模型权重
+  本地缓存的视觉 backbone 权重
+- `scripts/`
+  仓库级工具脚本，例如 ResNet 下载脚本
 
-## 当前推荐入口
+## 推荐阅读顺序
 
-如果你要理解这套仓库现在的主线，建议按下面顺序看：
+如果你要快速理解现在这套代码，推荐顺序是：
 
 1. [examples/libero/README.md](examples/libero/README.md)
 2. [examples/agibot_real/README.md](examples/agibot_real/README.md)
-3. [serl_launcher/serl_launcher/training/](serl_launcher/serl_launcher/training/)
-4. [serl_launcher/serl_launcher/residual/algorithms/](serl_launcher/serl_launcher/residual/algorithms/)
-5. [serl_launcher/serl_launcher/residual/train/](serl_launcher/serl_launcher/residual/train/)
-6. [examples/libero/runtime/](examples/libero/runtime/)
+3. `serl_launcher/serl_launcher/policy/`
+4. `serl_launcher/serl_launcher/residual/`
+5. `serl_launcher/serl_launcher/data/`
+6. `serl_launcher/serl_launcher/agents/continuous/`
 
 ## 安装
 
-最常见的训练环境是 `serl_torch`：
+最常见的 Python 环境是 `serl_torch`。
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
 conda activate serl_torch
-pip install -e /workspace/serl_torch/serl_launcher
-pip install -e /workspace/openpi/packages/openpi-client
+pip install -r serl_launcher/requirements.txt
+pip install -e ./serl_launcher
 ```
 
-如果没有本地 ResNet-18 权重：
+这里两条命令的分工不同：
+
+- `pip install -r serl_launcher/requirements.txt`
+  安装当前主线运行时真正需要的第三方依赖，例如 `gym`、`numpy`、`wandb`、`omegaconf`
+- `pip install -e ./serl_launcher`
+  把本地源码目录 `serl_launcher/` 注册成当前环境里的一个 editable Python package
+
+`-e` 是 editable install。它不是把源码复制进环境，而是让 Python 直接引用你工作区里的源码。这样你修改：
+
+- `serl_launcher/serl_launcher/agents/...`
+- `serl_launcher/serl_launcher/data/...`
+- `serl_launcher/serl_launcher/policy/...`
+
+下次重新启动进程时就会直接生效，不需要重新安装一遍包。
+
+当前仓库里 `setup.py` 和 `requirements.txt` 同时存在，是因为它们解决的是两个不同问题：
+
+- `setup.py`
+  负责声明“这是一个可以被 pip 安装的本地 Python 包”，让 `import serl_launcher.*` 成立
+- `requirements.txt`
+  负责声明“当前主线运行环境需要哪些第三方依赖”
+
+对这个仓库来说，`setup.py` 更像最小打包元数据，`requirements.txt` 才是当前主线环境清单。  
+所以新机器安装时，建议始终按这个顺序：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
-python tools/download_resnet.py --models microsoft/resnet-18
+pip install -r serl_launcher/requirements.txt
+pip install -e ./serl_launcher
 ```
 
-当前常用到四套环境：
+`agentlace` 目前没有写进 `serl_launcher/setup.py`，需要手工安装。仓库里的注释给出的参考做法是：
+
+```bash
+git clone https://github.com/youliangtan/agentlace.git
+cd agentlace
+git checkout cf2c337c5e3694cdbfc14831b239bd657bc4894d
+pip install -e .
+```
+
+如果你使用 `policy.type=openpi`，还需要让训练环境能导入 `openpi-client`：
+
+```bash
+pip install -e ./third_party/openpi-client
+```
+
+这里 vendored 的只是 `openpi-client`。它解决的是训练环境里的：
+
+- `import openpi_client...`
+
+但如果你还要启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并正确设置 `OPENPI_ROOT`。
+
+如果你不是用 editable install，也可以手工补 `PYTHONPATH`：
+
+```bash
+export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
+```
+
+但对当前仓库，不建议长期依赖手工 `PYTHONPATH`。`pip install -e ./serl_launcher` 更稳，也更符合 Python 包的正常组织方式。
+
+## 关于 `requirements.txt` 和 `setup.py`
+
+你会在这个仓库里同时看到：
+
+- `serl_launcher/requirements.txt`
+- `serl_launcher/setup.py`
+
+这是比较常见但有点混合的组织方式。
+
+当前它的实际语义是：
+
+- `requirements.txt`
+  面向“开发/运行当前主线的人”，描述一台机器要装哪些依赖才能跑 `examples/agibot_real` 和 `examples/libero`
+- `setup.py`
+  面向“Python 打包工具”，描述 `serl_launcher` 这个本地包本身
+
+之所以两个都保留，是因为如果只有 `requirements.txt`：
+
+- 你能装第三方依赖
+- 但 `import serl_launcher...` 仍然不一定成立
+
+如果只有 `setup.py`：
+
+- 你能把 `serl_launcher` 这个本地包装进环境
+- 但当前主线真正依赖的很多三方库不一定会跟着一起装全
+
+所以现在这套组织是：
+
+- 用 `requirements.txt` 保证运行环境
+- 用 `setup.py` 保证本地包可安装
+
+这套方式能工作，但不是最整洁的终态。
+
+如果后面要进一步整理，我建议方向是：
+
+1. 保留一个最小 `setup.py` 或迁到 `pyproject.toml`
+2. 把当前主线依赖继续收敛到一份清晰的运行环境清单
+3. 明确区分：
+   - 核心运行依赖
+   - 可选 backend 依赖，例如 `openpi-client`
+   - 开发工具依赖
+
+更干净的终态通常是：
+
+- `pyproject.toml`
+  放包元数据和基础依赖
+- `requirements.txt`
+  只保留环境锁定或额外的开发/部署依赖
+
+但在当前仓库阶段，继续保留“`requirements.txt` + `setup.py` + editable install”是合理的，因为它最直接，也不会打断现有工作流。
+
+## 视觉权重
+
+如果本机没有缓存 HuggingFace ResNet 权重，可以先下载：
+
+```bash
+cd /Users/niejunnan.25/Documents/codebase/serl_torch
+python scripts/download_resnet.py --models microsoft/resnet-18
+```
+
+下载完成后，把配置里的 `encoder.resnet.model_name` 指到本地目录，例如：
+
+```text
+pretrained_models/microsoft--resnet-18
+```
+
+## 常见环境拆分
+
+当前常见到的环境拆分大概是：
 
 - `serl_torch`
-  actor / learner / eval / 数据准备
-- `robot`
-  当前 AgiBot 真机本地训练时常用的合并环境
+  actor / learner / eval / 通用脚本
 - `libero`
-  LIBERO 环境服务
-- `openpi-modified`
-  OpenPI 服务
+  LIBERO env server
+- `robot`
+  AgiBot 真机本地 runtime
+- `openpi` 或你们自己的 OpenPI 环境
+  base policy server
+- `joyra`
+  JoyRA server
 
 ## 当前默认路径假设
 
-这套代码通常会默认使用下面这些本机路径：
+这套代码通常会默认使用下面这些本机路径假设：
 
-- LIBERO submodule:
+- LIBERO checkout:
   `/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO`
 - LIBERO datasets:
   `/vla/users/niejunnan/datasets`
 - OpenPI repo:
   `/vla/users/niejunnan/codebase/openpi`
-- OpenPI checkpoint:
-  `/vla/users/niejunnan/openpi-assets/checkpoints/pi05_libero`
+- 本地 ResNet 缓存：
+  `/vla/users/niejunnan/codebase/serl_torch/pretrained_models`
 
-如果你的机器不同，请在命令行或环境变量里显式覆盖，例如：
+如果你的机器路径不同，请在命令行或环境变量里显式覆盖，例如：
 
 - `libero_root=...`
 - `libero_datasets_root=...`
+- `libero_config_dir=...`
+- `encoder.resnet.model_name=...`
 - `OPENPI_ROOT=...`
 - `POLICY_DIR=...`
 
-## Example README 的分工
+## 两条当前主线
 
-根目录 README 原则上不放很长的 task 级运行命令，但会补少量已经验证过、并且反复容易卡住的关键运行摘要。
+### LIBERO
 
-当前建议按下面方式分工：
+当前 canonical LIBERO 主线包括：
 
-- 根目录 README
-  负责讲仓库结构、安装、分层、入口导航，以及少量已经验证过的跨 example 运行摘要
-- `examples/libero/README.md`
-  负责讲 LIBERO 具体怎么跑，包括：
-  - 环境变量
-  - 本地 config/cache 逻辑
-  - scripts / tools 说明
-  - offline / online 数据准备
-  - async train
-  - eval smoke
-  - 日志和常见问题
-- `examples/agibot_real/README.md`
-  负责讲 AgiBot 真机的 controller 模式、env backend、service/tooling、训练/评测命令和更多真机注意事项
+- config:
+  `examples/libero/configs/train_residual.yaml`
+- actor / learner entrypoint:
+  `examples/libero/scripts/run_residual_training.py`
+- env server:
+  `examples/libero/scripts/serve_env.py`
+- checkpoint eval:
+  `examples/libero/scripts/evaluate_checkpoint.py`
 
-## AgiBot 真机跑通流程摘要
+这条线支持：
 
-下面这段是当前仓库在 `2026-04-09` 这次排障中实际验证过的本地真机训练流程摘要。
-
-目标不是替代 [examples/agibot_real/README.md](examples/agibot_real/README.md)，而是把最容易卡住的启动顺序、运行现象和排障点集中写清楚。
-
-### 适用场景
-
-这份流程对应的是当前推荐路径：
-
-- `examples/agibot_real`
+- `policy.type=openpi`
+- `policy.type=joyra`
 - `env.backend=local`
-- actor / learner 分进程
-- controller 由 actor 终端接管
-- OpenPI 通过 `localhost:9000` 提供 chunk policy
+- `env.backend=remote`
+- 训练期 async eval
 
-当前验证时使用的关键路径是：
+更完整的启动方式见：
 
-- AgiBot SDK: `/workspace/tangyili/a2d_sdk`
-- SERL repo: `/workspace/residual_rl/serl_torch`
-- 本地 ResNet-18 镜像:
-  `/workspace/residual_rl/serl_torch/pretrained_models/microsoft--resnet-18`
-- 训练 config:
-  `examples/agibot_real/conf/train_office_setting_mouse_pi05.yaml`
+- [examples/libero/README.md](examples/libero/README.md)
 
-### 先理解这条链路里谁负责什么
+### AgiBot Real
 
-- `robot-service`
-  负责 AgiBot SDK / 机器人侧服务初始化
-- OpenPI server
-  负责 base chunk policy 推理
-- learner
-  负责 RL learner、replay 消费和参数更新
-- actor
-  负责真实机器人 env、controller、base policy + residual policy 组合动作、在线数据采集
+当前 canonical AgiBot 真机主线包括：
 
-actor 和 learner 之间通过同一个 `agentlace_bootstrap.pkl` 握手。
+- config:
+  `examples/agibot_real/configs/train_residual.yaml`
+- actor / learner entrypoint:
+  `examples/agibot_real/scripts/run_residual_training.py`
+- one-shot robot reset:
+  `examples/agibot_real/scripts/reset_robot.py`
+- actor wrapper:
+  `examples/agibot_real/tools/run_actor.sh`
+- learner wrapper:
+  `examples/agibot_real/tools/run_learner.sh`
+- robot-service wrapper:
+  `examples/agibot_real/tools/start_robot_service.sh`
 
-### 一个很重要的前提
+这条线当前约束比较明确：
 
-`tools/run_actor.sh` / `tools/run_learner.sh` 会帮你切 conda env，但它们不会自动执行：
+- `env.backend=local`
+- `env.action_dim=14`
+- `task.control_mode=camera_position`
+- 提供单独的机器人归位脚本
+- 当前只文档化训练主线
+- canonical eval 入口还没有补齐
 
-```bash
-source /workspace/tangyili/a2d_sdk/env.sh
-```
+更完整的启动方式见：
 
-如果你的 AgiBot 本地环境依赖这个 `env.sh` 导出的动态库、DDS、protobuf 运行时变量，那就必须在你启动 actor/learner 的 shell 里先手工 `source` 它。
+- [examples/agibot_real/README.md](examples/agibot_real/README.md)
 
-这是这条链路里最容易忽略的前置条件之一。
+## 当前哪些目录是主线，哪些不是
 
-### 推荐启动顺序
+建议把下面这些目录当成当前主线：
 
-建议至少用 3 到 4 个终端：
+- `serl_launcher/serl_launcher/`
+- `examples/libero/`
+- `examples/agibot_real/`
 
-1. `robot-service`
-2. OpenPI
-3. learner
-4. actor
+下面这些目录更适合作为补充参考，而不是当前文档主线：
 
-如果你的 OpenPI 已经在别的 docker/container 里稳定跑着，并且监听的是配置里的 `localhost:9000`，那这一项可以直接复用。
+- `examples/RoboTwin/`
+- `reference/`
+- `third_party/`
+- `examples/libero/outputs/`
 
-### 终端 A：启动 AgiBot SDK 服务
+尤其是 `outputs/` 目录，里面主要是历史运行产物，不应该当成当前实现说明。
 
-```bash
-cd /workspace/tangyili/a2d_sdk
-source env.sh
-source /root/miniconda3/etc/profile.d/conda.sh
-conda activate robot
-robot-service -s -c ./conf/copilot.pbtxt
-```
+## README 分工
 
-说明：
-
-- `robot-service` 在当前环境里是可以正常启动的
-- 它启动前会有一段等待时间，看起来像“停住”一会儿是正常现象
-- 如果它没有起来，actor 后面的本地机器人接口大概率也不会正常
-
-### 终端 B：启动 OpenPI
-
-如果你已经有现成的 OpenPI 服务监听 `localhost:9000`，可以直接跳过这一步。
-
-如果没有，就按 `examples/agibot_real/README.md` 里的 OpenPI 服务方式单独启动。关键点只有一个：
-
-- `openpi.port` 必须和训练 config 里一致
-
-当前这次验证里，actor 读取到的是：
-
-```yaml
-openpi:
-  host: localhost
-  port: 9000
-```
-
-### 终端 C：启动 learner
-
-```bash
-cd /workspace/tangyili/a2d_sdk
-source env.sh
-source /root/miniconda3/etc/profile.d/conda.sh
-conda activate robot
-
-export SERL_CONDA_ENV=robot
-export SERL_RESNET_MODEL=/workspace/residual_rl/serl_torch/pretrained_models/microsoft--resnet-18
-
-cd /workspace/residual_rl/serl_torch/examples/agibot_real
-
-bash tools/run_learner.sh \
-  conf/train_office_setting_mouse_pi05.yaml \
-  --bootstrap /workspace/residual_rl/serl_torch/examples/agibot_real/outputs/agibot_real/office_setting_mouse_pi05/agentlace_bootstrap.pkl \
-  hydra.run.dir=/workspace/residual_rl/serl_torch/examples/agibot_real/outputs/agibot_real/office_setting_mouse_pi05/learner
-```
-
-说明：
-
-- learner 和 actor 必须使用同一个 `--bootstrap` 文件路径
-- learner 先起是正常的，它会先打印 `Waiting for actor bootstrap`
-- 只有当 actor 成功把 bootstrap 文件写出来以后，learner 才会继续往下走
-
-### 终端 D：启动 actor
-
-```bash
-cd /workspace/tangyili/a2d_sdk
-source env.sh
-source /root/miniconda3/etc/profile.d/conda.sh
-conda activate robot
-
-export SERL_CONDA_ENV=robot
-export SERL_RESNET_MODEL=/workspace/residual_rl/serl_torch/pretrained_models/microsoft--resnet-18
-
-cd /workspace/residual_rl/serl_torch/examples/agibot_real
-
-bash tools/run_actor.sh \
-  conf/train_office_setting_mouse_pi05.yaml \
-  --bootstrap /workspace/residual_rl/serl_torch/examples/agibot_real/outputs/agibot_real/office_setting_mouse_pi05/agentlace_bootstrap.pkl \
-  hydra.run.dir=/workspace/residual_rl/serl_torch/examples/agibot_real/outputs/agibot_real/office_setting_mouse_pi05/actor
-```
-
-说明：
-
-- actor 终端必须保持前台，因为它不仅在跑 env，还负责 controller 键盘输入
-- 当前代码已经支持离线加载本地 `microsoft/resnet-18` 镜像
-- 如果仓库根目录下存在 `pretrained_models/microsoft--resnet-18`，当前代码会自动把 `microsoft/resnet-18` 解析到这个本地目录
-- 即便如此，真机离线环境里仍然建议显式导出 `SERL_RESNET_MODEL`，这样日志更清晰，排障也更直接
-
-### 正常日志应该长什么样
-
-一条已经跑通到训练主循环的日志，大致会经历下面这些阶段：
-
-1. learner 打印 `Waiting for actor bootstrap`
-2. actor 打印 config、AgiBot task、Residual algorithm
-3. actor 打印 `Agentlace bootstrap saved ...`
-4. learner 打印 `Loaded bootstrap payload ...`
-5. learner 打印 `Starting standalone agentlace learner at 127.0.0.1:5488`
-6. actor 打印 `Connected actor to external agentlace learner at 127.0.0.1:5488`
-7. actor 打印 `Initialized DrQ agent, replay buffer, and offline pipeline`
-8. actor 打印 `Start controller phase=...`
-
-如果已经走到第 8 步，说明：
-
-- actor / learner 握手成功
-- 本地 ResNet 权重加载成功
-- OpenPI 客户端初始化已经过了
-- 训练循环已经正式进入 controller episode
-
-### 为什么看起来“卡住了”
-
-这是当前 AgiBot controller 模式最容易误判的一点。
-
-在 `controller.enabled=true` 的情况下，episode `reset` 完成以后，controller 会先进入 `WAIT_READY` 状态，而不会立刻开始推理和发动作。
-
-也就是说：
-
-- 看到 `Start controller phase=...`
-- 看到 `reset_to_task_initial_pose: ...`
-- 但还没继续打印推理相关输出
-
-不代表程序卡死；它通常是在等操作员确认。
-
-### 什么时候真正开始推理
-
-要在 actor 终端里按：
-
-```text
-g
-```
-
-注意：
-
-- 直接按 `g`
-- 不需要回车
-- 按键必须发生在 actor 所在的那个前台终端
-
-一旦按下 `g`，controller 会从 `WAIT_READY` 切到 `RUNNING`，之后 actor 才会真正调用 OpenPI 的 `infer_chunk()`，开始下发动作。
-
-### Controller 按键
-
-当前默认键位是：
-
-- `g`: ready / resume
-- `p`: pause
-- `r`: reset / truncate 当前 episode
-- `s`: 标记成功
-- `f`: 标记失败
-- `h`: 重新打印帮助
-
-这几个键只对“拥有 env 的终端”生效。
-
-当前 AgiBot 真机环境已经是 local-only，所以默认就是 actor 终端生效。
-
-### 当前已经验证过的几个关键修复
-
-这条 AgiBot 本地训练链路在这次排障里实际修过几类问题，当前仓库代码已经包含这些修复：
-
-- actor 启动链里避免过早导入 TensorBoard / TensorFlow，修掉了 DDS 初始化前的段错误风险
-- `microsoft/resnet-18` 支持自动解析到仓库内的本地镜像目录
-- actor controller runtime 的 `profiling_last_flush_step` 状态字段已补齐，不会在第一轮 episode 直接崩
-- OpenPI 客户端签名兼容做过向下兼容处理
-- AgiBot retargeter 某些 `(3, 1)` / `(3,)` 形状问题已修
-
-### 最常见的卡点和判断方法
-
-#### 1. learner 一直等 bootstrap
-
-现象：
-
-- learner 卡在 `Waiting for actor bootstrap`
-
-说明：
-
-- learner 本身没坏
-- actor 还没有把 bootstrap 文件写出来
-- 要优先查 actor 是否已经在更早阶段崩了
-
-#### 2. actor 一启动就崩，连 task 日志都没有
-
-优先检查：
-
-- 当前 shell 是否先执行了 `/workspace/tangyili/a2d_sdk/env.sh`
-- 当前 conda env 是否真的是可运行 AgiBot 的 `robot` 或等价 merged env
-- 是否在使用最新代码
-
-#### 3. actor 报 HuggingFace / `microsoft/resnet-18` 下载错误
-
-说明：
-
-- 当前环境没外网，或者不允许直连 HuggingFace
-
-处理方式：
-
-- 确认本地目录存在：
-  `/workspace/residual_rl/serl_torch/pretrained_models/microsoft--resnet-18`
-- 建议显式导出：
-  `SERL_RESNET_MODEL=/workspace/residual_rl/serl_torch/pretrained_models/microsoft--resnet-18`
-
-#### 4. actor 看起来不动，但已经打印 `Start controller phase=...`
-
-优先判断：
-
-- 这通常不是卡死
-- 大概率只是还没有按 `g`
-
-#### 5. 没法按键
-
-如果你看到类似：
-
-```text
-stdin is not a TTY
-```
-
-说明：
-
-- 这个 actor 不是跑在一个真正可交互的前台终端里
-- 例如用了非交互 `docker exec`，或者后台跑了脚本
-
-这时候 controller 按键线程不会生效，必须改成真实 TTY 终端运行。
-
-#### 6. learner 报 `Address already in use`，端口是 `5488`
-
-说明：
-
-- 旧 learner 还在占用 trainer port
-
-处理方式：
-
-- 先停掉旧 learner
-- 再重新启动新的 learner / actor
-
-#### 7. CUDA driver 版本过旧 warning
-
-这条 warning 当前不是 bootstrap / controller 主流程的直接阻塞项，但说明：
-
-- 当前 PyTorch 和本机 NVIDIA driver 版本不完全匹配
-- 后续如果你要稳定使用 GPU，还是应该单独处理驱动和 PyTorch 组合
-
-### 当前建议的最小操作心智模型
-
-把这条链路简单理解成下面四件事最不容易乱：
-
-1. 先把 `robot-service` 和 OpenPI 准备好
-2. learner 先起，等 actor 写 bootstrap
-3. actor 连上 learner 以后，会在 reset 后等待人工 ready
-4. 在 actor 终端按 `g`，推理和动作才真正开始
-
-如果你已经看到：
-
-- `Connected actor to external agentlace learner`
-- `Initialized DrQ agent...`
-- `Start controller phase=...`
-
-那下一步最应该做的事情通常不是继续怀疑代码，而是先在 actor 终端按一次 `g`。
+- 根目录 `README.md`
+  负责讲仓库定位、安装、分层、入口导航
+- `examples/libero/README.md`
+  负责讲 LIBERO 训练、env server、async eval、checkpoint eval
+- `examples/agibot_real/README.md`
+  负责讲 AgiBot 真机 runtime、robot-service、actor / learner 启动和 controller 工作流
 
 ## 当前状态
 
-当前已经验证过的主链路包括：
+当前已经收敛并仍在维护的，是一套 typed-config 驱动的 residual RL 主线：
 
-- offline data preparation
-- online prefill collection
-- async train smoke
-- checkpoint eval smoke
-- AgiBot real local actor / learner / controller train startup
+- 训练脚本不再按环境各自散落很多旧入口
+- policy backend 统一走 `serl_launcher.policy.*`
+- residual action 统一走 `serl_launcher.residual.typed_action`
+- replay / checkpoint / timer / JSONL 等基础设施集中在 `serl_launcher/`
 
-对应的具体命令和配置，统一放在：
-
-- [examples/libero/README.md](examples/libero/README.md)
-- [examples/agibot_real/README.md](examples/agibot_real/README.md)
+如果你想确认某条命令现在还能不能跑，请优先看 example 目录里的 README 和实际存在的脚本名，而不是旧文档或历史输出目录。

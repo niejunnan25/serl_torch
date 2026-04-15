@@ -1,10 +1,5 @@
-from collections import defaultdict
-
-import imageio
 import numpy as np
-import tensorflow as tf
 import torch
-import wandb
 
 
 def concat_batches(offline_batch, online_batch, axis=1):
@@ -20,14 +15,6 @@ def concat_batches(offline_batch, online_batch, axis=1):
         return torch.cat((a, b), dim=axis)
 
     return np.concatenate((offline_batch, online_batch), axis=axis)
-
-
-def load_recorded_video(video_path: str):
-    with tf.io.gfile.GFile(video_path, "rb") as f:
-        video = np.array(imageio.mimread(f, "MP4")).transpose((0, 3, 1, 2))
-        assert video.shape[1] == 3, "Numpy array should be (T, C, H, W)"
-
-    return wandb.Video(video, fps=20)
 
 
 def _unpack(batch):
@@ -51,5 +38,3 @@ def _unpack(batch):
     new_batch["observations"] = observations
     new_batch["next_observations"] = next_observations
     return new_batch
-
-
