@@ -5,11 +5,16 @@
 当前主线以这些文件为准：
 
 - 配置：[../configs/train_residual.yaml](../configs/train_residual.yaml)
+- optimized 配置：[../configs/train_residual_optimized.yaml](../configs/train_residual_optimized.yaml)
 - 训练入口：[../scripts/run_residual_training.py](../scripts/run_residual_training.py)
 - actor wrapper：[../tools/run_actor.sh](../tools/run_actor.sh)
 - learner wrapper：[../tools/run_learner.sh](../tools/run_learner.sh)
 - robot-service wrapper：[../tools/start_robot_service.sh](../tools/start_robot_service.sh)
 - eval 入口：[../scripts/evaluate_checkpoint.py](../scripts/evaluate_checkpoint.py)
+
+如果你想直接用 optimized 配置启动训练，请看：
+
+- [optimized_training_startup.md](optimized_training_startup.md)
 
 ## 1. 当前主线的运行语义
 
