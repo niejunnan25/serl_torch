@@ -407,6 +407,131 @@ bash tools/run_actor.sh \
 bash tools/run_actor.sh policy.type=joyra policy.port=9001
 ```
 
+## 4.1 使用新的 copy 训练入口
+
+如果你想试验新的 chunk rollout / post-hoc transition assembly 数据流，可以使用：
+
+- [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
+- [transition_assembly.py](transition_assembly.py)
+
+这条 copy 线的语义是：
+
+```text
+chunk execute -> post-hoc step transition assembly -> step-window replay
+```
+
+也就是说：
+
+- actor 先按 chunk 生成并执行动作
+- replay 里仍然存 per-step transition
+- learner 仍然按原来的 step-window replay 合同训练
+- 这不是 direct chunk replay
+
+当前推荐把它当成实验入口，而不是替代 canonical 主线：
+
+- canonical 主线：
+  [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- copy 实验入口：
+  [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
+
+### 最小同步 copy 用法
+
+最简单的方式是不启 async backfill，直接用 copy 入口跑同步 post-hoc assembly。
+
+learner：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+python scripts/run_residual_training_copy.py runtime.role=learner
+```
+
+actor：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+source robot/service/env.sh
+python scripts/run_residual_training_copy.py runtime.role=actor
+```
+
+如果你本来就在用 OpenPI，常见 actor overrides 还是：
+
+```bash
+source robot/service/env.sh
+python scripts/run_residual_training_copy.py \
+  runtime.role=actor \
+  policy.type=openpi \
+  policy.host=127.0.0.1 \
+  policy.port=30001 \
+  task.name=agibot_real_default \
+  task.prompt='Pick up the object with the right hand and place it at the target location.'
+```
+
+### Async dedicated backfill 用法
+
+copy 入口还支持把 chunk 内的 post-hoc backfill 放到后台线程，并单独打到另一台 base-policy server。
+
+这个模式下：
+
+- 主 decision policy 继续服务 actor 当前 chunk 的控制决策
+- backfill policy 专门服务 chunk 后处理
+- nonterminal chunk 的最后一步会走 tail handoff，保证 chunk 边界连续
+
+最常见的 OpenPI 启动方式是起两台 server，并使用同一份 checkpoint：
+
+主 decision policy：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+OPENPI_ROOT=/path/to/openpi \
+POLICY_DIR=/path/to/policy/checkpoint \
+bash tools/serve_openpi.sh --port 30001
+```
+
+backfill policy：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+OPENPI_ROOT=/path/to/openpi \
+POLICY_DIR=/path/to/policy/checkpoint \
+bash tools/serve_openpi.sh --port 30011
+```
+
+然后 learner 仍然用 copy 入口：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+python scripts/run_residual_training_copy.py runtime.role=learner
+```
+
+actor 打开 `backfill_policy`：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+source robot/service/env.sh
+python scripts/run_residual_training_copy.py \
+  runtime.role=actor \
+  policy.type=openpi \
+  policy.host=127.0.0.1 \
+  policy.port=30001 \
+  ++backfill_policy.enabled=true \
+  ++backfill_policy.host=127.0.0.1 \
+  ++backfill_policy.port=30011 \
+  ++backfill_policy.max_pending_chunks=2
+```
+
+如果你想继续加 task overrides，也是在这条命令后面追加：
+
+```bash
+task.name=agibot_real_default task.prompt='Pick up the object with the right hand and place it at the target location.'
+```
+
+### 这条 copy 线当前要注意什么
+
+- `policy.port` 和 `backfill_policy.port` 最好不要相同，否则主决策和后台 backfill 会抢同一个服务。
+- 两台 policy server 最好使用同一份 checkpoint。
+- actor 终端仍然需要先 `source robot/service/env.sh`。
+- 目前 README 只给了直跑 `python scripts/run_residual_training_copy.py ...` 的示例；`tools/run_actor.sh` / `tools/run_learner.sh` 仍然默认指向 canonical 入口。
+
 ## controller 模式
 
 当前默认是：
