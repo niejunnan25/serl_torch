@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional, Protocol, Tuple
+from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
 PolicyInferInfo = Dict[str, Any]
 PolicyInferResult = Tuple[np.ndarray, PolicyInferInfo]
+PolicyBatchInferResult = Tuple[list[np.ndarray], PolicyInferInfo]
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,14 @@ class PolicyOutput:
 class PolicyClient(Protocol):
     def infer(self, policy_input: PolicyInput) -> PolicyInferResult:
         """Run the policy and return `(action_chunk, info)`."""
+
+
+class BatchPolicyClient(Protocol):
+    def infer_many(
+        self,
+        policy_inputs: Sequence[PolicyInput],
+    ) -> PolicyBatchInferResult:
+        """Run a batched policy request and return per-sample action chunks."""
 
 
 class PolicyPrefetcher(Protocol):

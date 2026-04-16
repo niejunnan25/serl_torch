@@ -64,12 +64,14 @@ class ManualEpisodeController:
         enabled: bool,
         interface: str = "terminal",
         poll_interval_sec: float = 0.05,
+        terminal_grace_sec: float = 0.15,
         keys: Optional[Mapping[str, str]] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.interface = str(interface).strip().lower()
         self.poll_interval_sec = max(0.01, float(poll_interval_sec))
+        self.terminal_grace_sec = max(0.0, float(terminal_grace_sec))
         self.logger = logger or logging.getLogger(__name__)
         key_cfg = dict(keys or {})
         self.keys = {
@@ -95,6 +97,7 @@ class ManualEpisodeController:
         self._terminal_info: Dict[str, Any] = {}
         self._latest_obs: Optional[Dict[str, Any]] = None
         self._latest_obs_timestamp_ns: Optional[int] = None
+        self._terminal_grace_deadline_monotonic = 0.0
 
     @property
     def state(self) -> str:
@@ -127,6 +130,8 @@ class ManualEpisodeController:
             return {
                 "enabled": bool(self.enabled),
                 "interface": str(self.interface),
+                "terminal_grace_sec": float(self.terminal_grace_sec),
+                "terminal_grace_active": bool(self._terminal_grace_active_locked()),
                 "state": str(self._state),
                 "episode_active": bool(self._episode_active),
                 "terminal_signal": self._terminal_signal,
@@ -141,6 +146,21 @@ class ManualEpisodeController:
                 "latest_obs_ready": self._latest_obs is not None,
                 "latest_obs_timestamp_ns": self._latest_obs_timestamp_ns,
             }
+
+    def _terminal_grace_active_locked(self) -> bool:
+        return time.monotonic() < self._terminal_grace_deadline_monotonic
+
+    def _terminal_grace_remaining_locked(self) -> float:
+        return max(0.0, self._terminal_grace_deadline_monotonic - time.monotonic())
+
+    def _arm_terminal_grace_locked(self) -> None:
+        if self.terminal_grace_sec <= 0.0:
+            self._terminal_grace_deadline_monotonic = 0.0
+            return
+        self._terminal_grace_deadline_monotonic = max(
+            self._terminal_grace_deadline_monotonic,
+            time.monotonic() + self.terminal_grace_sec,
+        )
 
     def enqueue_action_chunk(self, actions: np.ndarray) -> list[int]:
         action_chunk = np.asarray(actions, dtype=np.float32)
@@ -187,6 +207,7 @@ class ManualEpisodeController:
                     else:
                         self._terminal_signal = TERMINAL_HOOK
                     self._terminal_info = dict(transition.info)
+                self._arm_terminal_grace_locked()
                 self._queue.clear()
                 self._episode_active = False
                 self._state = STATE_EPISODE_DONE
@@ -220,6 +241,7 @@ class ManualEpisodeController:
             if self._episode_active:
                 self._terminal_signal = TERMINAL_RESET
                 self._terminal_info = {"human_reset": True}
+                self._arm_terminal_grace_locked()
                 self._episode_active = False
                 self._state = STATE_RESETTING
             else:
@@ -232,6 +254,7 @@ class ManualEpisodeController:
                 self._queue.clear()
                 self._terminal_signal = TERMINAL_SUCCESS
                 self._terminal_info = {"human_success": True}
+                self._arm_terminal_grace_locked()
                 self._episode_active = False
                 self._state = STATE_EPISODE_DONE
         return self.get_meta()
@@ -242,6 +265,7 @@ class ManualEpisodeController:
                 self._queue.clear()
                 self._terminal_signal = TERMINAL_FAIL
                 self._terminal_info = {"human_fail": True}
+                self._arm_terminal_grace_locked()
                 self._episode_active = False
                 self._state = STATE_EPISODE_DONE
         return self.get_meta()
@@ -253,6 +277,7 @@ class ManualEpisodeController:
             self._queue.clear()
             self._terminal_signal = TERMINAL_TIMEOUT
             self._terminal_info = dict(info or {})
+            self._arm_terminal_grace_locked()
             self._episode_active = False
             self._state = STATE_EPISODE_DONE
         return self.get_meta()
@@ -300,6 +325,24 @@ class ManualEpisodeController:
     def _dispatch_key(self, ch: str) -> None:
         key = str(ch).strip().lower()
         if not key:
+            return
+        terminal_keys = {
+            self.keys["reset"],
+            self.keys["success"],
+            self.keys["fail"],
+        }
+        with self._lock:
+            terminal_grace_remaining = (
+                self._terminal_grace_remaining_locked()
+                if key in terminal_keys
+                else 0.0
+            )
+        if terminal_grace_remaining > 0.0:
+            self.logger.debug(
+                "Controller terminal key ignored during grace window: key=%s remaining=%.3fs",
+                key,
+                float(terminal_grace_remaining),
+            )
             return
         if key == self.keys["ready"]:
             meta = self.request_ready()

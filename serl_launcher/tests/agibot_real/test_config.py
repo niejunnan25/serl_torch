@@ -59,14 +59,24 @@ class AgiBotConfigTest(unittest.TestCase):
                     "control_mode": "camera_position",
                 },
                 "runtime": {"role": "learner"},
+                "controller": {"enabled": True},
                 "policy": {"type": "openpi", "host": "127.0.0.1", "port": 30001},
+                "backfill_policy": {
+                    "enabled": False,
+                    "host": "${policy.host}",
+                    "port": "${policy.port}",
+                    "max_pending_chunks": 2,
+                    "mode": "thread",
+                },
                 "env": {"action_dim": 14, "backend": "local"},
+                "obs": {"image_keys": ["image_rgb_0"]},
                 "residual": {
                     "alpha": 0.2,
                     "action_mask": [True] * 14,
                     "action_limits": [1.0] * 14,
                     "chunk_horizon": 50,
                 },
+                "encoder": {"use_proprio": False},
             }
         )
 
@@ -74,6 +84,38 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertFalse(parsed.offline.enabled)
         self.assertEqual(parsed.offline.pretrain_steps, 0)
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
+        self.assertFalse(parsed.backfill_policy.enabled)
+        self.assertEqual(parsed.backfill_policy.port, 30001)
+
+    def test_parse_train_cfg_requires_explicit_backfill_policy_block(self) -> None:
+        cfg = OmegaConf.create(
+            {
+                "global_seed": 0,
+                "task": {
+                    "name": "agibot_real_default",
+                    "prompt": "test prompt",
+                    "control_mode": "camera_position",
+                },
+                "runtime": {"role": "learner"},
+                "controller": {"enabled": True},
+                "policy": {"type": "openpi", "host": "127.0.0.1", "port": 30001},
+                "env": {"action_dim": 14, "backend": "local"},
+                "obs": {"image_keys": ["image_rgb_0"]},
+                "residual": {
+                    "alpha": 0.2,
+                    "action_mask": [True] * 14,
+                    "action_limits": [1.0] * 14,
+                    "chunk_horizon": 50,
+                },
+                "encoder": {"use_proprio": False},
+            }
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "backfill_policy must be declared explicitly in the train yaml",
+        ):
+            parse_train_cfg(cfg)
 
     def test_parse_train_cfg_rejects_controller_disabled(self) -> None:
         cfg = OmegaConf.load(

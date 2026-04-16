@@ -92,6 +92,9 @@ from serl_torch.examples.agibot_real.transition_assembly import (
     assemble_chunk_step_transitions,
 )
 from serl_torch.examples.agibot_real.transition_assembly import (
+    backfill_post_step_residual_obs,
+)
+from serl_torch.examples.agibot_real.transition_assembly import (
     count_executed_steps_from_infos,
 )
 from serl_torch.examples.agibot_real.transition_assembly import (
@@ -144,47 +147,14 @@ def _build_base_policy_endpoint_cfg(
 def _parse_backfill_policy_settings(
     *,
     cfg: AgiBotTrainConfig,
-    raw_cfg: DictConfig | None,
 ) -> _BackfillPolicySettings:
-    if raw_cfg is None:
-        return _BackfillPolicySettings(
-            enabled=False,
-            host=str(cfg.policy.host),
-            port=int(cfg.policy.port),
-            max_pending_chunks=2,
-            mode="thread",
-        )
-
-    backfill_cfg = raw_cfg.get("backfill_policy", None)
-    if backfill_cfg is None:
-        return _BackfillPolicySettings(
-            enabled=False,
-            host=str(cfg.policy.host),
-            port=int(cfg.policy.port),
-            max_pending_chunks=2,
-            mode="thread",
-        )
-
-    enabled = bool(backfill_cfg.get("enabled", False))
-    host = str(backfill_cfg.get("host", cfg.policy.host))
-    port = int(backfill_cfg.get("port", cfg.policy.port))
-    max_pending_chunks = int(backfill_cfg.get("max_pending_chunks", 2))
-    mode = str(backfill_cfg.get("mode", "thread")).strip().lower()
-    if max_pending_chunks <= 0:
-        raise ValueError(
-            "backfill_policy.max_pending_chunks must be positive, got "
-            f"{max_pending_chunks}"
-        )
-    if mode != "thread":
-        raise ValueError(
-            f"Unsupported backfill_policy.mode={mode!r}; only 'thread' is supported"
-        )
+    backfill_cfg = cfg.backfill_policy
     return _BackfillPolicySettings(
-        enabled=enabled,
-        host=host,
-        port=port,
-        max_pending_chunks=max_pending_chunks,
-        mode=mode,
+        enabled=bool(backfill_cfg.enabled),
+        host=str(backfill_cfg.host),
+        port=int(backfill_cfg.port),
+        max_pending_chunks=int(backfill_cfg.max_pending_chunks),
+        mode=str(backfill_cfg.mode),
     )
 
 
@@ -230,16 +200,15 @@ class _AsyncChunkAssemblyCoordinator:
         observations: list[dict[str, Any]],
         task_prompt: str,
     ) -> list[dict[str, np.ndarray]]:
-        next_residual_observations: list[dict[str, np.ndarray]] = []
-        for post_step_obs in observations:
-            _next_base_actions, next_residual_obs = infer_chunk_residual_obs(
-                obs=post_step_obs,
+        _base_action_chunks, next_residual_observations = (
+            backfill_post_step_residual_obs(
+                observations=observations,
                 task_prompt=task_prompt,
                 base_policy=self._assembly_base_policy,
                 image_keys=self.image_keys,
                 residual_alpha=self.residual_alpha,
             )
-            next_residual_observations.append(next_residual_obs)
+        )
         return next_residual_observations
 
     def _build_assembly_result(
@@ -387,7 +356,6 @@ def actor(
     *,
     run_dir: Path,
     logger: logging.Logger,
-    raw_cfg: DictConfig | None = None,
 ) -> None:
     env = create_env(cfg, logger)
     base_policy = build_agibot_base_policy(cfg, logger=logger)
@@ -408,7 +376,6 @@ def actor(
     # Replay still stores per-step transitions; this is not direct chunk replay.
     backfill_policy_settings = _parse_backfill_policy_settings(
         cfg=cfg,
-        raw_cfg=raw_cfg,
     )
     async_backfill: _AsyncChunkAssemblyCoordinator | None = None
     if backfill_policy_settings.enabled:
@@ -466,6 +433,12 @@ def actor(
 
     client.recv_network_callback(update_actor)
 
+    prepare_episode_reset_fn = getattr(env, "prepare_episode_reset", None)
+    start_episode_after_reset_fn = getattr(env, "start_episode_after_reset", None)
+    supports_staged_reset = bool(
+        callable(prepare_episode_reset_fn) and callable(start_episode_after_reset_fn)
+    )
+
     timer = Timer()
     steps_per_update = cfg.training.steps_per_update
     log_period = cfg.training.log_period
@@ -496,12 +469,21 @@ def actor(
         dynamic_ncols=True,
         leave=True,
     )
+    prefetched_reset_prepared = False
 
     try:
         while env_steps < max_env_steps and episode_id < max_episodes:
             episode_id += 1
-            obs = env.reset()
-            task_prompt = str(env.task_description)
+            if prefetched_reset_prepared:
+                with timer.context("reset_obs"):
+                    assert callable(start_episode_after_reset_fn)
+                    obs = dict(start_episode_after_reset_fn())
+                task_prompt = str(env.task_description)
+                prefetched_reset_prepared = False
+            else:
+                with timer.context("reset_env"):
+                    obs = dict(env.reset())
+                task_prompt = str(env.task_description)
 
             prefetched: PrefetchedDecisionObs | None = None
             pending_last_transition: dict[str, Any] | None = None
@@ -766,6 +748,20 @@ def actor(
                     task_prompt=task_prompt,
                 )
                 pending_tail_chunk_seq = None
+            next_reset_error: Exception | None = None
+            should_prefetch_next_reset = bool(
+                async_backfill is not None
+                and supports_staged_reset
+                and env_steps < max_env_steps
+                and episode_id < max_episodes
+            )
+            if should_prefetch_next_reset:
+                try:
+                    with timer.context("reset_env"):
+                        assert callable(prepare_episode_reset_fn)
+                        prepare_episode_reset_fn()
+                except Exception as exc:  # noqa: BLE001
+                    next_reset_error = exc
             if async_backfill is not None and last_submitted_chunk_seq is not None:
                 with timer.context("commit_replay"):
                     _commit_assembled_chunks(block_until_seq=last_submitted_chunk_seq)
@@ -804,6 +800,9 @@ def actor(
                 success=int(bool(episode_success)),
                 refresh=False,
             )
+            if next_reset_error is not None:
+                raise next_reset_error
+            prefetched_reset_prepared = bool(should_prefetch_next_reset)
             logger.info(
                 "episode=%s success=%s steps=%s return=%.3f env_steps=%s",
                 int(episode_id),
@@ -1309,7 +1308,7 @@ def main(cfg: DictConfig) -> None:
     set_global_seeds(typed_cfg.global_seed)
 
     if typed_cfg.runtime.role == "actor":
-        actor(typed_cfg, run_dir=run_dir, logger=logger, raw_cfg=cfg)
+        actor(typed_cfg, run_dir=run_dir, logger=logger)
         return
     learner(typed_cfg, run_dir=run_dir, logger=logger)
 

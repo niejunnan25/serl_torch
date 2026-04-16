@@ -1,7 +1,7 @@
 """Canonical policy-input helpers for AgiBot residual training."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -40,4 +40,13 @@ def build_agibot_policy_input(
     )
 
 
-__all__ = ["build_agibot_policy_input"]
+def build_agibot_policy_inputs(
+    observations: Sequence[dict[str, Any]],
+    prompt: str,
+) -> tuple[PolicyInput, ...]:
+    return tuple(
+        build_agibot_policy_input(obs=obs, prompt=prompt) for obs in observations
+    )
+
+
+__all__ = ["build_agibot_policy_input", "build_agibot_policy_inputs"]

@@ -176,7 +176,7 @@ task.name=agibot_real_default task.prompt='Pick up the object with the right han
 - optimized yaml：
   [../configs/train_residual_optimized.yaml](../configs/train_residual_optimized.yaml)
 - async backfill：
-  `++backfill_policy.enabled=true`
+  `backfill_policy.enabled=true`
 
 那么需要再额外起一台 dedicated backfill policy server。
 
@@ -240,10 +240,10 @@ python scripts/run_residual_training_copy.py \
   policy.type=joyra \
   policy.host=127.0.0.1 \
   policy.port=9001 \
-  ++backfill_policy.enabled=true \
-  ++backfill_policy.host=127.0.0.1 \
-  ++backfill_policy.port=9011 \
-  ++backfill_policy.max_pending_chunks=2
+  backfill_policy.enabled=true \
+  backfill_policy.host=127.0.0.1 \
+  backfill_policy.port=9011 \
+  backfill_policy.max_pending_chunks=2
 ```
 
 ### OpenPI: async dedicated backfill
@@ -298,10 +298,10 @@ python scripts/run_residual_training_copy.py \
   policy.type=openpi \
   policy.host=127.0.0.1 \
   policy.port=30001 \
-  ++backfill_policy.enabled=true \
-  ++backfill_policy.host=127.0.0.1 \
-  ++backfill_policy.port=30011 \
-  ++backfill_policy.max_pending_chunks=2
+  backfill_policy.enabled=true \
+  backfill_policy.host=127.0.0.1 \
+  backfill_policy.port=30011 \
+  backfill_policy.max_pending_chunks=2
 ```
 
 ## 一组最常用的完整命令

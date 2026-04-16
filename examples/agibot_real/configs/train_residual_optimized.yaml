@@ -8,7 +8,7 @@ task:
   hz: 30.0
   trajectory_time: null
   use_smooth_trajectory: false
-  max_episode_steps: 1500
+  max_episode_steps: 500
   reset_hook: serl_torch.examples.agibot_real.robot.reset_hooks:reset_to_task_initial_pose
   success_hook: null
 
@@ -30,6 +30,21 @@ policy:
   host: 127.0.0.1
   port: 9001
   id: joyra_office_setting
+
+backfill_policy:
+  enabled: true
+  host: ${policy.host}
+  # By default async backfill shares the main policy server so the optimized config
+  # works out of the box with a single JoyRA instance. For lower control-time
+  # contention on real robot, override this to a dedicated backfill server port.
+  port: ${policy.port}
+  # This is a backlog / staleness cap, not a speed knob. With chunk_horizon=30 and
+  # task.hz=30, each pending chunk is roughly 1 second of rollout, so 10 means the
+  # actor can tolerate about 10 seconds of lag before backpressure kicks in. If you
+  # run a dedicated backfill server on real robot, start around 4 unless profiling
+  # shows you really need more.
+  max_pending_chunks: 10
+  mode: thread
 
 robot:
   assets_root: null
@@ -59,7 +74,7 @@ obs:
   stack_horizon: 1
 
 residual:
-  alpha: 0
+  alpha: 0.1
   action_mask: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
@@ -136,9 +151,11 @@ training:
   max_update_steps: 300000
   max_episodes: 2000
   log_period: 100
+
   mixed_precision:
     enabled: true
     dtype: bfloat16
+
   torch_compile:
     # Actor path ignores this flag; learner compiles actor+critic for long-running runs.
     enabled: true

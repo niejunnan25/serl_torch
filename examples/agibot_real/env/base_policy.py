@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -68,6 +68,38 @@ def _canonicalize_action_chunk(
     )
 
 
+def canonicalize_agibot_action_chunks(
+    *,
+    raw_actions: Sequence[np.ndarray] | np.ndarray,
+    backend_type: str,
+    action_dim: int,
+    chunk_horizon: int,
+) -> list[np.ndarray]:
+    raw_actions_array = np.asarray(raw_actions, dtype=np.float32)
+    if raw_actions_array.ndim == 2:
+        return [
+            _canonicalize_action_chunk(
+                raw_actions=raw_actions_array,
+                backend_type=backend_type,
+                action_dim=action_dim,
+                chunk_horizon=chunk_horizon,
+            )
+        ]
+    if raw_actions_array.ndim != 3:
+        raise ValueError(
+            f"Expected raw batched action chunks to be rank-2 or rank-3, got {raw_actions_array.shape}"
+        )
+    return [
+        _canonicalize_action_chunk(
+            raw_actions=raw_actions_array[idx],
+            backend_type=backend_type,
+            action_dim=action_dim,
+            chunk_horizon=chunk_horizon,
+        )
+        for idx in range(int(raw_actions_array.shape[0]))
+    ]
+
+
 @dataclass(slots=True)
 class AgiBotBasePolicy:
     """Backend adapter that always exposes canonical AgiBot 14D action chunks.
@@ -83,6 +115,22 @@ class AgiBotBasePolicy:
     _description: str
     _action_dim: int
     _chunk_horizon: int
+
+    @property
+    def client(self) -> Any:
+        return self._client
+
+    @property
+    def backend_type(self) -> str:
+        return self._backend_type
+
+    @property
+    def action_dim(self) -> int:
+        return int(self._action_dim)
+
+    @property
+    def chunk_horizon(self) -> int:
+        return int(self._chunk_horizon)
 
     def infer(
         self,
@@ -161,4 +209,8 @@ def build_agibot_base_policy(
     )
 
 
-__all__ = ["AgiBotBasePolicy", "build_agibot_base_policy"]
+__all__ = [
+    "AgiBotBasePolicy",
+    "build_agibot_base_policy",
+    "canonicalize_agibot_action_chunks",
+]

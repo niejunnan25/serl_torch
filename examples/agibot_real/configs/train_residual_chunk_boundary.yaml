@@ -31,6 +31,15 @@ policy:
   port: 30001
   id: pi05_agibot
 
+backfill_policy:
+  enabled: false
+  host: ${policy.host}
+  # When enabled, point this at a dedicated backfill policy server instead of the
+  # main policy port to avoid control-time contention.
+  port: ${policy.port}
+  max_pending_chunks: 2
+  mode: thread
+
 robot:
   assets_root: null
   retargeter_urdf_path: null

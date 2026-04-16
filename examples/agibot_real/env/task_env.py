@@ -113,6 +113,7 @@ class AgiBotTaskEnv:
         )
         self._take_action_cnt = 0
         self.episode_count = 0
+        self._episode_reset_prepared = False
         self._last_obs: Optional[Dict[str, Any]] = None
         self._controller_cfg = dict(controller or {})
         self._controller_enabled = bool(self._controller_cfg.get("enabled", False))
@@ -137,6 +138,9 @@ class AgiBotTaskEnv:
                 interface=str(self._controller_cfg.get("interface", "terminal")),
                 poll_interval_sec=float(
                     self._controller_cfg.get("poll_interval_sec", 0.05)
+                ),
+                terminal_grace_sec=float(
+                    self._controller_cfg.get("terminal_grace_sec", 0.15)
                 ),
                 keys=key_cfg if isinstance(key_cfg, Mapping) else None,
                 logger=self.logger,
@@ -696,11 +700,9 @@ class AgiBotTaskEnv:
                 )
             )
 
-    def reset(
-        self,
-    ) -> Dict[str, Any]:
-        self._take_action_cnt = 0
-        self.episode_count += 1
+    def prepare_episode_reset(self) -> None:
+        if self._episode_reset_prepared:
+            return
         result = call_optional_hook(
             self._reset_hook,
             env=self,
@@ -712,12 +714,26 @@ class AgiBotTaskEnv:
             if prompt is not None:
                 self._current_instruction = str(prompt)
                 self._task_description = str(prompt)
+        self._episode_reset_prepared = True
+
+    def start_episode_after_reset(self) -> Dict[str, Any]:
+        if not self._episode_reset_prepared:
+            self.prepare_episode_reset()
+        self._take_action_cnt = 0
+        self.episode_count += 1
         obs = self._get_obs()
         if self._controller_enabled and self._controller is not None:
             self._controller.start_episode()
             self._controller.set_latest_obs(obs)
             self._controller.transition_after_reset()
+        self._episode_reset_prepared = False
         return obs
+
+    def reset(
+        self,
+    ) -> Dict[str, Any]:
+        self.prepare_episode_reset()
+        return self.start_episode_after_reset()
 
     def step(
         self,

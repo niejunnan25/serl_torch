@@ -61,6 +61,15 @@ class PolicyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BackfillPolicyConfig:
+    enabled: bool
+    host: str
+    port: int
+    max_pending_chunks: int
+    mode: str
+
+
+@dataclass(frozen=True, slots=True)
 class RobotConfig:
     assets_root: str | None
     retargeter_urdf_path: str | None
@@ -257,6 +266,7 @@ class AgiBotTrainConfig:
     runtime: RuntimeConfig
     wandb: WandbConfig
     policy: PolicyConfig
+    backfill_policy: BackfillPolicyConfig
     robot: RobotConfig
     controller: ControllerConfig
     env: EnvConfig
@@ -311,6 +321,30 @@ def _required_str(value: Any, field_name: str) -> str:
     if resolved is None:
         raise ValueError(f"{field_name} must be a non-empty string")
     return resolved
+
+
+def _required_mapping(value: Any, field_name: str) -> DictConfig | dict[str, Any]:
+    if value is None:
+        raise ValueError(
+            f"{field_name} must be declared explicitly in the train yaml"
+        )
+    if not isinstance(value, (DictConfig, dict)):
+        raise ValueError(
+            f"{field_name} must be a mapping, got {type(value).__name__}"
+        )
+    return value
+
+
+def _required_mapping_key(
+    mapping: DictConfig | dict[str, Any],
+    key: str,
+    field_name: str,
+) -> Any:
+    if key not in mapping:
+        raise ValueError(
+            f"{field_name} must be declared explicitly in the train yaml"
+        )
+    return mapping[key]
 
 
 def _int_value(value: Any, field_name: str) -> int:
@@ -571,6 +605,60 @@ def _parse_robot_cfg(cfg: DictConfig) -> RobotConfig:
         retargeter_camera_extrinsic_path=_optional_str(
             robot_cfg.get("retargeter_camera_extrinsic_path", None)
         ),
+    )
+
+
+def _parse_backfill_policy_cfg(
+    cfg: DictConfig,
+    *,
+    policy: PolicyConfig,
+) -> BackfillPolicyConfig:
+    backfill_cfg = _required_mapping(
+        cfg.get("backfill_policy", None),
+        "backfill_policy",
+    )
+    mode = _parse_choice(
+        _required_mapping_key(
+            backfill_cfg,
+            "mode",
+            "backfill_policy.mode",
+        ),
+        "backfill_policy.mode",
+        allowed=("thread",),
+    )
+    return BackfillPolicyConfig(
+        enabled=bool(
+            _required_mapping_key(
+                backfill_cfg,
+                "enabled",
+                "backfill_policy.enabled",
+            )
+        ),
+        host=_required_str(
+            _required_mapping_key(
+                backfill_cfg,
+                "host",
+                "backfill_policy.host",
+            ),
+            "backfill_policy.host",
+        ),
+        port=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "port",
+                "backfill_policy.port",
+            ),
+            "backfill_policy.port",
+        ),
+        max_pending_chunks=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "max_pending_chunks",
+                "backfill_policy.max_pending_chunks",
+            ),
+            "backfill_policy.max_pending_chunks",
+        ),
+        mode=mode,
     )
 
 
@@ -1067,6 +1155,8 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
     runtime = _parse_runtime_cfg(cfg)
+    policy = _parse_policy_cfg(cfg)
+    backfill_policy = _parse_backfill_policy_cfg(cfg, policy=policy)
     controller = _parse_controller_cfg(cfg)
     _validate_canonical_controller_cfg(controller, context="train")
     obs = _parse_obs_cfg(cfg)
@@ -1083,7 +1173,8 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         task=task,
         runtime=runtime,
         wandb=_parse_wandb_cfg(cfg, task=task),
-        policy=_parse_policy_cfg(cfg),
+        policy=policy,
+        backfill_policy=backfill_policy,
         robot=_parse_robot_cfg(cfg),
         controller=controller,
         env=env,
@@ -1163,6 +1254,7 @@ __all__ = [
     "AgiBotEvalConfig",
     "AgiBotRunConfig",
     "AgiBotTrainConfig",
+    "BackfillPolicyConfig",
     "CheckpointConfig",
     "ControllerConfig",
     "ControllerKeysConfig",

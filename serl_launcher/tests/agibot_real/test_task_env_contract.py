@@ -13,6 +13,9 @@ from serl_torch.examples.agibot_real.env.controller import TERMINAL_HOOK
 from serl_torch.examples.agibot_real.env.controller import TERMINAL_RESET
 from serl_torch.examples.agibot_real.env.controller import TERMINAL_SUCCESS
 from serl_torch.examples.agibot_real.env.controller import TERMINAL_TIMEOUT
+from serl_torch.examples.agibot_real.env.controller import ManualEpisodeController
+from serl_torch.examples.agibot_real.env.controller import STATE_EPISODE_DONE
+from serl_torch.examples.agibot_real.env.controller import STATE_WAIT_READY
 from serl_torch.examples.agibot_real.env.task_env import AgiBotTaskEnv
 
 
@@ -127,6 +130,36 @@ class AgiBotTaskEnvContractTest(unittest.TestCase):
         )
         self.assertTrue(overridden["info"]["human_success"])
         self.assertTrue(overridden["info"]["success"])
+
+
+class ManualEpisodeControllerContractTest(unittest.TestCase):
+    def test_terminal_grace_ignores_immediate_reset_after_success(self) -> None:
+        controller = ManualEpisodeController(
+            enabled=True,
+            terminal_grace_sec=10.0,
+        )
+        controller.start_episode()
+        controller.mark_success()
+
+        controller._dispatch_key(controller.keys["reset"])
+
+        meta = controller.get_meta()
+        self.assertEqual(meta["state"], STATE_EPISODE_DONE)
+        self.assertTrue(meta["terminal_grace_active"])
+        self.assertEqual(meta["terminal_signal"], TERMINAL_SUCCESS)
+
+    def test_zero_terminal_grace_preserves_previous_reset_rearm_behavior(self) -> None:
+        controller = ManualEpisodeController(
+            enabled=True,
+            terminal_grace_sec=0.0,
+        )
+        controller.start_episode()
+        controller.mark_success()
+
+        controller._dispatch_key(controller.keys["reset"])
+
+        meta = controller.get_meta()
+        self.assertEqual(meta["state"], STATE_WAIT_READY)
 
 
 if __name__ == "__main__":

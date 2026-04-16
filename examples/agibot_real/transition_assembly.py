@@ -7,6 +7,10 @@ from typing import Any
 
 import numpy as np
 
+from serl_torch.examples.agibot_real.env.base_policy import (
+    canonicalize_agibot_action_chunks,
+)
+from serl_torch.examples.agibot_real.env.policy_input import build_agibot_policy_inputs
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_obs,
 )
@@ -137,6 +141,13 @@ def infer_chunk_residual_obs(
     return base_actions, residual_obs
 
 
+def _supports_batched_backfill(base_policy: Any) -> bool:
+    backend_type = getattr(base_policy, "backend_type", None)
+    client = getattr(base_policy, "client", None)
+    infer_many = getattr(client, "infer_many", None)
+    return bool(backend_type == "joyra" and callable(infer_many))
+
+
 class AgiBotTransitionAssembler:
     def __init__(
         self,
@@ -232,6 +243,34 @@ def backfill_post_step_residual_obs(
     image_keys: tuple[str, ...],
     residual_alpha: float,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
+    if not observations:
+        return [], []
+    if _supports_batched_backfill(base_policy):
+        policy_inputs = build_agibot_policy_inputs(
+            observations=observations,
+            prompt=task_prompt,
+        )
+        raw_action_chunks, _batch_info = base_policy.client.infer_many(policy_inputs)
+        base_action_chunks = canonicalize_agibot_action_chunks(
+            raw_actions=raw_action_chunks,
+            backend_type=str(base_policy.backend_type),
+            action_dim=int(base_policy.action_dim),
+            chunk_horizon=int(base_policy.chunk_horizon),
+        )
+        residual_observations = [
+            build_chunk_residual_obs(
+                obs=post_step_obs,
+                base_actions=base_actions,
+                image_keys=image_keys,
+                residual_alpha=residual_alpha,
+            )
+            for post_step_obs, base_actions in zip(
+                observations,
+                base_action_chunks,
+                strict=True,
+            )
+        ]
+        return base_action_chunks, residual_observations
     base_action_chunks: list[np.ndarray] = []
     residual_observations: list[dict[str, np.ndarray]] = []
     for post_step_obs in observations:
