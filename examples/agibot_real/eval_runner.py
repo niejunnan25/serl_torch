@@ -31,6 +31,7 @@ from serl_torch.examples.agibot_real.residual_observation import (
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_sample_obs,
 )
+from serl_torch.examples.agibot_real.torch_compile import maybe_enable_torch_compile
 
 
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
@@ -151,6 +152,11 @@ def run_eval(
         agent,
         dict(checkpoint_payload),
         load_optimizers=False,
+    )
+    agent = maybe_enable_torch_compile(
+        agent,
+        compile_cfg=cfg.training.torch_compile,
+        logger=logger,
     )
     checkpoint_step = (
         int(checkpoint_payload["step"])

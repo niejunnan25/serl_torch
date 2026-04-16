@@ -41,16 +41,48 @@ def random_crop(img, rng=None, *, padding: int):
 def batched_random_crop(img, rng=None, *, padding: int, num_batch_dims: int = 1):
     img = _to_tensor(img)
     original_shape = img.shape
+    if int(num_batch_dims) < 0:
+        raise ValueError(f"num_batch_dims must be non-negative, got {num_batch_dims}")
+    if img.ndim != int(num_batch_dims) + 3:
+        raise ValueError(
+            "batched_random_crop expects batch dims followed by HWC image dims, "
+            f"got shape {tuple(img.shape)} with num_batch_dims={num_batch_dims}"
+        )
+
     flat = img.reshape(-1, *img.shape[num_batch_dims:])
+    if flat.shape[0] == 0:
+        return img.clone()
+
+    h, w, _c = flat.shape[1:]
     generator = _as_generator(rng, device=img.device.type)
+    padding = int(padding)
+    if padding < 0:
+        raise ValueError(f"padding must be non-negative, got {padding}")
 
-    crops = []
-    for i in range(flat.shape[0]):
-        sample_seed = int(torch.randint(0, 2**31 - 1, (1,), generator=generator, device=img.device))
-        sample_generator = _as_generator(sample_seed, device=img.device.type)
-        crops.append(random_crop(flat[i], sample_generator, padding=padding))
-
-    out = torch.stack(crops, dim=0).reshape(original_shape)
+    padded = F.pad(
+        flat.permute(0, 3, 1, 2),
+        pad=(padding, padding, padding, padding),
+        mode="replicate",
+    ).permute(0, 2, 3, 1)
+    n = int(flat.shape[0])
+    y = torch.randint(
+        0,
+        2 * padding + 1,
+        (n,),
+        generator=generator,
+        device=img.device,
+    )
+    x = torch.randint(
+        0,
+        2 * padding + 1,
+        (n,),
+        generator=generator,
+        device=img.device,
+    )
+    rows = y[:, None] + torch.arange(h, device=img.device)[None, :]
+    cols = x[:, None] + torch.arange(w, device=img.device)[None, :]
+    batch = torch.arange(n, device=img.device)[:, None, None]
+    out = padded[batch, rows[:, :, None], cols[:, None, :], :].reshape(original_shape)
     return out
 
 

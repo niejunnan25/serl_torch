@@ -119,8 +119,15 @@ training:
   max_update_steps: 600000
   log_period: 100
   mixed_precision:
-    enabled: false
+    enabled: true
     dtype: bfloat16
+  torch_compile:
+    enabled: false
+    target: actor_critic
+    backend: inductor
+    mode: default
+    fullgraph: true
+    dynamic: false
   checkpoint:
     every_steps: 2500
     keep: 0

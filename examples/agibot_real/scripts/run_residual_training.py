@@ -25,6 +25,7 @@ from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
+from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.common.training_observability import (
     configure_learner_wandb_metrics,
@@ -77,6 +78,7 @@ from serl_torch.examples.agibot_real.residual_observation import (
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_sample_obs,
 )
+from serl_torch.examples.agibot_real.torch_compile import maybe_enable_torch_compile
 
 
 def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -103,6 +105,11 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
+    if bool(cfg.training.torch_compile.enabled):
+        logger.info(
+            "training.torch_compile.enabled=true is ignored on actor; compile applies "
+            "to learner updates only"
+        )
 
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
     client = TrainerClient(
@@ -467,6 +474,11 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
+    agent = maybe_enable_torch_compile(
+        agent,
+        compile_cfg=cfg.training.torch_compile,
+        logger=logger,
+    )
     observation_space = build_chunk_residual_observation_space(
         sample_obs=sample_obs,
         image_keys=image_keys,
@@ -695,7 +707,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             0 if offline_replay_buffer is None else int(len(offline_replay_buffer)),
         )
         server.publish_network(
-            snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
+            snapshot_actor_network_payload(agent, step=int(update_steps))
         )
         initial_network_published = True
         logger.info(
@@ -739,7 +751,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
 
     if not initial_network_published:
         server.publish_network(
-            snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
+            snapshot_actor_network_payload(agent, step=int(update_steps))
         )
         logger.info(
             "publish network: step=%s env_steps=%s reason=initial",
@@ -761,7 +773,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
 
             if update_steps % steps_per_update == 0:
                 server.publish_network(
-                    snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
+                    snapshot_actor_network_payload(agent, step=int(update_steps))
                 )
                 logger.info(
                     "publish network: step=%s env_steps=%s reason=periodic",

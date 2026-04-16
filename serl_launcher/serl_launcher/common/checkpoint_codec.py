@@ -5,6 +5,9 @@ from typing import Any, Dict, Mapping
 
 import torch
 
+from serl_launcher.common.torch_module_compat import load_module_state_dict
+from serl_launcher.common.torch_module_compat import module_state_dict
+
 
 def _clone_to_cpu_tree(value: Any) -> Any:
     if isinstance(value, torch.Tensor):
@@ -26,11 +29,11 @@ def snapshot_torch_train_state_payload(
     return {
         "step": int(step),
         "params": {
-            name: _clone_to_cpu_tree(module.state_dict())
+            name: _clone_to_cpu_tree(module_state_dict(module))
             for name, module in train_state.modules.items()
         },
         "target_params": {
-            name: _clone_to_cpu_tree(module.state_dict())
+            name: _clone_to_cpu_tree(module_state_dict(module))
             for name, module in train_state.target_modules.items()
         },
         "optimizer": {
@@ -48,10 +51,14 @@ def apply_checkpoint_payload_to_train_state(
 ) -> None:
     for name, state_dict in dict(payload.get("params", {})).items():
         if name in train_state.modules:
-            train_state.modules[name].load_state_dict(state_dict, strict=True)
+            load_module_state_dict(train_state.modules[name], state_dict, strict=True)
     for name, state_dict in dict(payload.get("target_params", {})).items():
         if name in train_state.target_modules:
-            train_state.target_modules[name].load_state_dict(state_dict, strict=True)
+            load_module_state_dict(
+                train_state.target_modules[name],
+                state_dict,
+                strict=True,
+            )
     if load_optimizers:
         for name, optimizer_state in dict(payload.get("optimizer", {})).items():
             if name in train_state.optimizers:
@@ -66,6 +73,24 @@ def snapshot_agent_checkpoint_payload(
     step: int,
 ) -> Dict[str, Any]:
     return snapshot_torch_train_state_payload(agent.state, step=int(step))
+
+
+def snapshot_actor_network_payload(
+    agent: Any,
+    *,
+    step: int,
+) -> Dict[str, Any]:
+    """Build a lightweight learner->actor payload containing actor weights only."""
+
+    actor_module = agent.state.modules.get("actor")
+    if actor_module is None:
+        raise KeyError("Cannot snapshot actor network payload: missing 'actor' module")
+    return {
+        "step": int(step),
+        "params": {
+            "actor": _clone_to_cpu_tree(module_state_dict(actor_module)),
+        },
+    }
 
 
 def apply_checkpoint_payload_to_agent(

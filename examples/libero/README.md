@@ -28,6 +28,12 @@
 
 `scripts/process_eval_queue.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
 
+另外当前还有一个实验入口：
+
+- [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
+  用于 `chunk execute -> post-hoc step transition assembly -> step-window replay`
+  这条 copy 实验线，以及 dedicated backfill policy server 的吞吐实验。
+
 ## 目录结构
 
 - [configs/train_residual.yaml](configs/train_residual.yaml)
@@ -38,6 +44,8 @@
   typed config 定义与解析
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
   actor / learner 共用训练入口，通过 `runtime.role=actor|learner` 切角色
+- [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
+  copy 实验线训练入口，actor 支持 `env.step_chunk(...)`、post-hoc assembly 和 async backfill
 - [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
   离线数据准备入口，默认也读取 `configs/train_residual.yaml`
 - [scripts/serve_env.py](scripts/serve_env.py)
@@ -84,6 +92,44 @@
 相关讨论可以看：
 
 - [docs/chunk_residual_mdp_discussion.md](docs/chunk_residual_mdp_discussion.md)
+
+### `run_residual_training_copy.py` 这条实验线是什么
+
+`run_residual_training_copy.py` 和 canonical 的
+[scripts/run_residual_training.py](scripts/run_residual_training.py) 最大的区别在 actor 数据流：
+
+- canonical 版本：
+  `step -> 立刻补 next_residual_obs -> 立刻写 step transition`
+- copy 版本：
+  `step_chunk -> 收集 raw chunk -> post-hoc 组装 step transition -> 写 replay`
+
+所以 copy 版本里：
+
+- env 执行单元是 chunk
+- replay 存储单元仍然是 step transition
+- learner 仍然从 step replay 采样 chunk window
+
+也就是说，copy 版本不是 direct chunk replay；它只是把 transition 的组装时机，从 inline step-wise assembly 改成了 post-hoc chunk assembly。
+
+当前 copy 版本支持两种模式：
+
+- 默认同步模式：
+  不传 `backfill_policy.*`，actor 在 `step_chunk(...)` 后同步完成整段 assembly
+- async backfill 模式：
+  传 `++backfill_policy.enabled=true` 后，actor 只负责控制推进，chunk 内 prefix 的 backfill 和 replay assembly 由后台线程完成；如果再配一个 dedicated backfill policy server，可以把这条后处理路径从主 decision policy 服务上分流出去
+
+当前 async copy 版本还用了一个 `tail handoff` 机制：
+
+- nonterminal chunk 的最后一个 `next_observations`
+- 直接复用下一轮 actor 真正算出来的 `decision_obs`
+
+这样可以保证 chunk 边界上：
+
+```text
+chunk n 最后一步 next_observations
+==
+chunk n+1 第一步 observations
+```
 
 ## 支持的 backend
 
@@ -397,6 +443,120 @@ conda run -n serl_torch python scripts/run_residual_training.py \
   libero_datasets_root=/vla/users/niejunnan/datasets \
   encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
 ```
+
+### 5.1 启动 copy 实验线
+
+如果你要跑 `run_residual_training_copy.py`，建议把它视为一条单独的实验线。最常见的是两种用法：
+
+- 同步 copy：
+  使用 `env.step_chunk(...)`，但 actor 仍在本进程同步完成 post-hoc assembly
+- async dedicated backfill：
+  actor 主线程只负责控制推进，后台线程负责 assembly，并额外起一个 second policy server 专门服务 backfill
+
+#### 最小同步 copy 启动方式
+
+learner：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+conda run -n serl_torch python scripts/run_residual_training_copy.py \
+  --config-name train_residual_libero_spatial_task4 \
+  runtime.role=learner \
+  policy.port=30101 \
+  env.remote.port=30100 \
+  training.async_eval.enabled=false \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+actor：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+conda run -n serl_torch python scripts/run_residual_training_copy.py \
+  --config-name train_residual_libero_spatial_task4 \
+  runtime.role=actor \
+  policy.port=30101 \
+  env.remote.port=30100 \
+  training.async_eval.enabled=false \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+这时 copy actor 的语义是：
+
+```text
+chunk execute -> synchronous post-hoc step transition assembly -> step-window replay
+```
+
+#### async dedicated backfill 启动方式
+
+除了主 decision policy server 外，再额外起一个 backfill policy server。最简单的做法是让两个 server 使用同一个 checkpoint，只是监听不同端口。
+
+主 decision policy server：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch
+bash examples/libero/tools/serve_openpi_10000_policy.sh \
+  --gpu-id 6 \
+  --port 30101
+```
+
+backfill policy server：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch
+bash examples/libero/tools/serve_openpi_10000_policy.sh \
+  --gpu-id 7 \
+  --port 30102
+```
+
+learner 仍然不需要额外改动，继续只连主训练端口：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+conda run -n serl_torch python scripts/run_residual_training_copy.py \
+  --config-name train_residual_libero_spatial_task4 \
+  runtime.role=learner \
+  policy.port=30101 \
+  env.remote.port=30100 \
+  training.async_eval.enabled=false \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+actor 额外打开 `backfill_policy`：
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
+conda run -n serl_torch python scripts/run_residual_training_copy.py \
+  --config-name train_residual_libero_spatial_task4 \
+  runtime.role=actor \
+  policy.port=30101 \
+  env.remote.port=30100 \
+  training.async_eval.enabled=false \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets \
+  ++backfill_policy.enabled=true \
+  ++backfill_policy.host=127.0.0.1 \
+  ++backfill_policy.port=30102 \
+  ++backfill_policy.max_pending_chunks=2
+```
+
+这时 copy actor 的语义是：
+
+```text
+chunk execute
+-> async prefix backfill
+-> tail handoff from next chunk decision obs
+-> ordered step transition commit
+-> step-window replay
+```
+
+使用这条模式时有两个实践约束：
+
+- `policy.port` 和 `backfill_policy.port` 最好指向两个不同的服务，否则后台 assembly 会和主 decision 路径抢同一个推理服务
+- `backfill_policy` 服务最好和主 decision 服务使用同一份 checkpoint；否则 replay 里的 residual observation 分布会和 actor 实际控制分布偏离
 
 ## 6. actor / learner 必须对齐的配置
 

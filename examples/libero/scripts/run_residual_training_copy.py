@@ -3,12 +3,16 @@ from __future__ import annotations
 """Reference-style LIBERO residual DRQ training script."""
 
 from collections import deque
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import json
 import logging
 import sys
 import time
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 from typing import Any
 
 from agentlace.data.data_store import QueuedDataStore
@@ -19,14 +23,12 @@ import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
-import torch
 from tqdm.auto import tqdm
 
 from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
-from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.async_eval import append_async_eval_checkpoint_index
 from serl_launcher.async_eval import save_async_eval_checkpoint_payload
@@ -68,78 +70,322 @@ from serl_torch.examples.libero.async_eval import start_async_eval_worker
 from serl_torch.examples.libero.async_eval import summarize_async_eval_results
 from serl_torch.examples.libero.async_eval import wait_for_async_eval_worker
 from serl_torch.examples.libero.env.factory import create_env
-from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.offline_data import load_prepared_offline_replay
 from serl_torch.examples.libero.offline_data import resolve_and_validate_prepared_paths
-from serl_torch.examples.libero.residual_observation import (
-    build_chunk_residual_obs,
-)
 from serl_torch.examples.libero.residual_observation import (
     build_chunk_residual_observation_space,
 )
 from serl_torch.examples.libero.residual_observation import (
     build_chunk_residual_sample_obs,
 )
-from serl_torch.examples.libero.residual_observation import (
-    prepare_base_actions_chunk,
+from serl_torch.examples.libero.transition_assembly import (
+    AssemblyResult,
 )
+from serl_torch.examples.libero.transition_assembly import (
+    LiberoTransitionAssembler,
+)
+from serl_torch.examples.libero.transition_assembly import (
+    PrefetchedDecisionObs,
+)
+from serl_torch.examples.libero.transition_assembly import RawChunkRecord
+from serl_torch.examples.libero.transition_assembly import (
+    assemble_chunk_step_transitions,
+)
+from serl_torch.examples.libero.transition_assembly import infer_chunk_residual_obs
 
 
-def _maybe_enable_torch_compile(
-    agent: Any,
+@dataclass(frozen=True)
+class _BackfillPolicySettings:
+    enabled: bool
+    host: str
+    port: int
+    max_pending_chunks: int
+    mode: str
+
+
+@dataclass
+class _PendingChunkAssembly:
+    chunk_seq: int
+    raw: RawChunkRecord
+    backfill_future: Future[list[dict[str, np.ndarray]]]
+    expects_tail_handoff: bool
+    tail_next_residual_obs: dict[str, np.ndarray] | None = None
+
+
+def _copy_residual_observation(
+    observation: dict[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    return {key: np.array(value, copy=True) for key, value in observation.items()}
+
+
+def _build_policy_endpoint_cfg(
+    cfg: LiberoTrainConfig,
+    *,
+    host: str,
+    port: int,
+) -> Any:
+    return SimpleNamespace(
+        policy=SimpleNamespace(
+            type=str(cfg.policy.type),
+            host=str(host),
+            port=int(port),
+        ),
+        env=SimpleNamespace(
+            action_dim=int(cfg.env.action_dim),
+        ),
+    )
+
+
+def _parse_backfill_policy_settings(
     *,
     cfg: LiberoTrainConfig,
-    logger: logging.Logger,
-) -> Any:
-    compile_cfg = cfg.training.torch_compile
-    if not bool(compile_cfg.enabled):
-        return agent
-    if not hasattr(torch, "compile"):
-        raise RuntimeError(
-            "training.torch_compile.enabled=true but torch.compile is unavailable "
-            "in this PyTorch build"
+    raw_cfg: DictConfig | None,
+) -> _BackfillPolicySettings:
+    if raw_cfg is None:
+        return _BackfillPolicySettings(
+            enabled=False,
+            host=str(cfg.policy.host),
+            port=int(cfg.policy.port),
+            max_pending_chunks=2,
+            mode="thread",
         )
 
-    target = str(compile_cfg.target)
-    if target not in {"critic", "actor_critic"}:
+    backfill_cfg = raw_cfg.get("backfill_policy", None)
+    if backfill_cfg is None:
+        return _BackfillPolicySettings(
+            enabled=False,
+            host=str(cfg.policy.host),
+            port=int(cfg.policy.port),
+            max_pending_chunks=2,
+            mode="thread",
+        )
+
+    enabled = bool(backfill_cfg.get("enabled", False))
+    host = str(backfill_cfg.get("host", cfg.policy.host))
+    port = int(backfill_cfg.get("port", cfg.policy.port))
+    max_pending_chunks = int(backfill_cfg.get("max_pending_chunks", 2))
+    mode = str(backfill_cfg.get("mode", "thread")).strip().lower()
+    if max_pending_chunks <= 0:
         raise ValueError(
-            "training.torch_compile.target must be one of {'critic', 'actor_critic'}, "
-            f"got {target!r}"
+            "backfill_policy.max_pending_chunks must be positive, got "
+            f"{max_pending_chunks}"
+        )
+    if mode != "thread":
+        raise ValueError(
+            f"Unsupported backfill_policy.mode={mode!r}; only 'thread' is supported"
         )
 
-    compile_kwargs = {
-        "backend": str(compile_cfg.backend),
-        "mode": str(compile_cfg.mode),
-        "fullgraph": bool(compile_cfg.fullgraph),
-        "dynamic": bool(compile_cfg.dynamic),
-    }
-    logger.info(
-        "enable torch.compile: target=%s backend=%s mode=%s fullgraph=%s dynamic=%s",
-        target,
-        compile_kwargs["backend"],
-        compile_kwargs["mode"],
-        compile_kwargs["fullgraph"],
-        compile_kwargs["dynamic"],
+    return _BackfillPolicySettings(
+        enabled=enabled,
+        host=host,
+        port=port,
+        max_pending_chunks=max_pending_chunks,
+        mode=mode,
     )
 
-    agent.state.modules["critic"] = torch.compile(
-        agent.state.modules["critic"],
-        **compile_kwargs,
-    )
-    if "critic" in agent.state.target_modules:
-        agent.state.target_modules["critic"] = torch.compile(
-            agent.state.target_modules["critic"],
-            **compile_kwargs,
+
+class _AsyncChunkAssemblyCoordinator:
+    def __init__(
+        self,
+        *,
+        cfg: LiberoTrainConfig,
+        logger: logging.Logger,
+        settings: _BackfillPolicySettings,
+    ) -> None:
+        self.logger = logger
+        self.chunk_horizon = int(cfg.residual.chunk_horizon)
+        self.image_keys = tuple(cfg.obs.image_keys)
+        self.residual_alpha = float(cfg.residual.alpha)
+        self._assembly_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="libero-backfill-assembly",
         )
-    if target == "actor_critic":
-        agent.state.modules["actor"] = torch.compile(
-            agent.state.modules["actor"],
-            **compile_kwargs,
+        endpoint_cfg = _build_policy_endpoint_cfg(
+            cfg,
+            host=settings.host,
+            port=settings.port,
         )
-    return agent
+        self._assembly_policy_client = build_policy_client(endpoint_cfg, logger=logger)
+        self._pending: dict[int, _PendingChunkAssembly] = {}
+        self._next_submit_chunk_seq = 0
+        self._next_commit_chunk_seq = 0
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    @property
+    def next_commit_chunk_seq(self) -> int:
+        return int(self._next_commit_chunk_seq)
+
+    def _backfill_residual_observations(
+        self,
+        *,
+        observations: list[dict[str, Any]],
+        task_prompt: str,
+    ) -> list[dict[str, np.ndarray]]:
+        next_residual_observations: list[dict[str, np.ndarray]] = []
+        for post_step_obs in observations:
+            _next_base_actions, next_residual_obs = infer_chunk_residual_obs(
+                obs=post_step_obs,
+                task_prompt=task_prompt,
+                policy_client=self._assembly_policy_client,
+                chunk_horizon=self.chunk_horizon,
+                image_keys=self.image_keys,
+                residual_alpha=self.residual_alpha,
+            )
+            next_residual_observations.append(next_residual_obs)
+        return next_residual_observations
+
+    def _build_assembly_result(
+        self,
+        *,
+        raw: RawChunkRecord,
+        next_residual_observations: list[dict[str, np.ndarray]],
+    ) -> AssemblyResult:
+        transitions = assemble_chunk_step_transitions(
+            episode_id=int(raw.episode_id),
+            episode_step_start=int(raw.episode_step_start),
+            residual_obs_before_chunk=raw.residual_obs_before_chunk,
+            executed_actions=raw.action_chunk,
+            rewards=raw.rewards,
+            dones=raw.dones,
+            infos=raw.infos,
+            next_residual_observations=next_residual_observations,
+        )
+        return AssemblyResult(
+            transitions=transitions,
+            prefetched=None,
+            next_obs=dict(raw.final_obs),
+            episode_done=bool(raw.chunk_done or raw.chunk_truncated),
+            env_steps_delta=int(raw.executed_steps),
+            episode_steps_delta=int(raw.executed_steps),
+            episode_return_delta=float(raw.reward_sum),
+            episode_success=any(bool(info.get("env_done", False)) for info in raw.infos),
+            last_info=dict(raw.chunk_info),
+        )
+
+    def submit_chunk(
+        self,
+        *,
+        raw: RawChunkRecord,
+        task_prompt: str,
+        expect_tail_handoff: bool,
+    ) -> int:
+        chunk_seq = int(self._next_submit_chunk_seq)
+        self._next_submit_chunk_seq += 1
+        observations_to_backfill = (
+            list(raw.post_step_observations[:-1])
+            if bool(expect_tail_handoff)
+            else list(raw.post_step_observations)
+        )
+        backfill_future = self._assembly_executor.submit(
+            self._backfill_residual_observations,
+            observations=observations_to_backfill,
+            task_prompt=task_prompt,
+        )
+        self._pending[chunk_seq] = _PendingChunkAssembly(
+            chunk_seq=chunk_seq,
+            raw=raw,
+            backfill_future=backfill_future,
+            expects_tail_handoff=bool(expect_tail_handoff),
+        )
+        return chunk_seq
+
+    def provide_tail(
+        self,
+        *,
+        chunk_seq: int,
+        decision_obs: PrefetchedDecisionObs,
+    ) -> None:
+        pending = self._pending.get(int(chunk_seq))
+        if pending is None:
+            raise KeyError(f"Unknown pending chunk_seq={chunk_seq}")
+        if not pending.expects_tail_handoff:
+            raise ValueError(
+                f"Chunk {chunk_seq} does not expect a tail handoff"
+            )
+        if pending.tail_next_residual_obs is not None:
+            raise ValueError(f"Chunk {chunk_seq} tail handoff already provided")
+        pending.tail_next_residual_obs = _copy_residual_observation(
+            decision_obs.residual_obs
+        )
+
+    def finalize_tail_with_fallback(
+        self,
+        *,
+        chunk_seq: int,
+        task_prompt: str,
+    ) -> None:
+        pending = self._pending.get(int(chunk_seq))
+        if pending is None or not pending.expects_tail_handoff:
+            return
+        if pending.tail_next_residual_obs is not None:
+            return
+        _tail_base_actions, tail_residual_obs = infer_chunk_residual_obs(
+            obs=pending.raw.post_step_observations[-1],
+            task_prompt=task_prompt,
+            policy_client=self._assembly_policy_client,
+            chunk_horizon=self.chunk_horizon,
+            image_keys=self.image_keys,
+            residual_alpha=self.residual_alpha,
+        )
+        pending.tail_next_residual_obs = tail_residual_obs
+
+    def pop_committable(
+        self,
+        *,
+        block_until_seq: int | None = None,
+    ) -> list[AssemblyResult]:
+        assembled_chunks: list[AssemblyResult] = []
+        while int(self._next_commit_chunk_seq) in self._pending:
+            next_seq = int(self._next_commit_chunk_seq)
+            pending = self._pending[next_seq]
+            if block_until_seq is not None and next_seq <= int(block_until_seq):
+                next_residual_observations = pending.backfill_future.result()
+            elif pending.backfill_future.done():
+                next_residual_observations = pending.backfill_future.result()
+            else:
+                break
+            if pending.expects_tail_handoff:
+                if pending.tail_next_residual_obs is None:
+                    if block_until_seq is not None and next_seq <= int(block_until_seq):
+                        raise RuntimeError(
+                            f"Chunk {next_seq} is missing tail handoff during blocking commit"
+                        )
+                    break
+                next_residual_observations = list(next_residual_observations) + [
+                    _copy_residual_observation(pending.tail_next_residual_obs)
+                ]
+            assembled_chunk = self._build_assembly_result(
+                raw=pending.raw,
+                next_residual_observations=next_residual_observations,
+            )
+            assembled_chunks.append(assembled_chunk)
+            self._pending.pop(next_seq, None)
+            self._next_commit_chunk_seq += 1
+        return assembled_chunks
+
+    def close(self) -> None:
+        self._assembly_executor.shutdown(wait=True, cancel_futures=False)
+        close_fn = getattr(self._assembly_policy_client, "close", None)
+        if callable(close_fn):
+            try:
+                close_fn()
+            except Exception:  # noqa: BLE001
+                self.logger.debug(
+                    "ignored backfill policy client close error",
+                    exc_info=True,
+                )
 
 
-def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+def actor(
+    cfg: LiberoTrainConfig,
+    *,
+    run_dir: Path,
+    logger: logging.Logger,
+    raw_cfg: DictConfig | None = None,
+) -> None:
     env = create_env(cfg, logger)
     task_prompt = str(env.task_description)
     policy_client = build_policy_client(cfg, logger=logger)
@@ -152,6 +398,33 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
 
     residual_alpha = residual_action_spec.alpha
+    transition_assembler = LiberoTransitionAssembler(
+        policy_client=policy_client,
+        chunk_horizon=chunk_horizon,
+        image_keys=image_keys,
+        residual_alpha=residual_alpha,
+    )
+    # Copy actor dataflow:
+    # chunk execute -> post-hoc step transition assembly -> step-window replay.
+    # Replay still stores per-step transitions; this is not direct chunk replay.
+    backfill_policy_settings = _parse_backfill_policy_settings(
+        cfg=cfg,
+        raw_cfg=raw_cfg,
+    )
+    async_backfill: _AsyncChunkAssemblyCoordinator | None = None
+    if backfill_policy_settings.enabled:
+        async_backfill = _AsyncChunkAssemblyCoordinator(
+            cfg=cfg,
+            logger=logger,
+            settings=backfill_policy_settings,
+        )
+        logger.info(
+            "Async backfill enabled: mode=%s endpoint=%s:%s max_pending_chunks=%s",
+            backfill_policy_settings.mode,
+            backfill_policy_settings.host,
+            int(backfill_policy_settings.port),
+            int(backfill_policy_settings.max_pending_chunks),
+        )
 
     sample_obs = build_chunk_residual_sample_obs(
         action_dim=action_dim,
@@ -167,11 +440,6 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
-    if bool(cfg.training.torch_compile.enabled):
-        logger.info(
-            "training.torch_compile.enabled=true is ignored on actor; compile applies "
-            "to learner updates only"
-        )
 
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
     client = TrainerClient(
@@ -202,6 +470,7 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     env_seed = cfg.env.seed
 
     env_steps = 0
+    committed_env_steps = 0
     episode_id = 0
     success_count = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
@@ -225,39 +494,65 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         leave=True,
     )
 
+    def _commit_assembled_chunks(*, block_until_seq: int | None = None) -> None:
+        nonlocal committed_env_steps
+        if async_backfill is None:
+            return
+        assembled_chunks = async_backfill.pop_committable(block_until_seq=block_until_seq)
+        for assembled_chunk in assembled_chunks:
+            for transition in assembled_chunk.transitions:
+                data_store.insert(transition)
+            for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
+                next_committed_env_step = int(committed_env_steps + step_offset)
+                if next_committed_env_step % steps_per_update == 0:
+                    client.update()
+            committed_env_steps += int(assembled_chunk.env_steps_delta)
+
     try:
         while env_steps < max_env_steps:
             episode_id += 1
             reset_seed = env_seed
             init_episode_idx = episode_id - 1
             obs = env.reset(seed=reset_seed, init_episode_idx=init_episode_idx)
-            prefetched = None
+            prefetched: PrefetchedDecisionObs | None = None
+            last_submitted_chunk_seq: int | None = None
+            pending_tail_chunk_seq: int | None = None
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
 
             while env_steps < max_env_steps:
+                _commit_assembled_chunks()
                 timer.tick("total")
                 with timer.context("sample_actions"):
-                    if prefetched is None:
-                        base_policy_input = build_libero_policy_input(obs, task_prompt)
-
-                        base_actions, _ = policy_client.infer(base_policy_input)
-                        base_actions = prepare_base_actions_chunk(
-                            base_actions=base_actions,
-                            chunk_horizon=chunk_horizon,
-                        )
-
-                        residual_obs = build_chunk_residual_obs(
+                    # In async mode the actor owns control flow end-to-end while
+                    # background workers assemble completed chunks. The current
+                    # chunk's decision observation is handed back to the previous
+                    # chunk as its final next_observation to preserve continuity.
+                    if async_backfill is not None:
+                        decision_obs = transition_assembler.infer_decision_obs(
                             obs=obs,
-                            base_actions=base_actions,
-                            image_keys=image_keys,
-                            residual_alpha=residual_alpha,
+                            task_prompt=task_prompt,
                         )
+                        if pending_tail_chunk_seq is not None:
+                            async_backfill.provide_tail(
+                                chunk_seq=int(pending_tail_chunk_seq),
+                                decision_obs=decision_obs,
+                            )
+                            pending_tail_chunk_seq = None
+                        base_actions = decision_obs.base_actions
+                        residual_obs = decision_obs.residual_obs
+                    elif prefetched is None:
+                        decision_obs = transition_assembler.infer_decision_obs(
+                            obs=obs,
+                            task_prompt=task_prompt,
+                        )
+                        base_actions = decision_obs.base_actions
+                        residual_obs = decision_obs.residual_obs
                     else:
-                        base_actions = prefetched["base_actions"]
-                        residual_obs = prefetched["residual_obs"]
+                        base_actions = prefetched.base_actions
+                        residual_obs = prefetched.residual_obs
                         prefetched = None
 
                     residual_actions = agent.sample_action(residual_obs, deterministic=False)
@@ -269,68 +564,96 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
 
                 episode_done = False
                 should_log_timer = False
+                remaining_env_steps = max(0, int(max_env_steps - env_steps))
+                if remaining_env_steps <= 0:
+                    timer.tock("total")
+                    break
 
-                for action in final_actions:
+                action_chunk = np.asarray(final_actions, dtype=np.float32)[
+                    :remaining_env_steps
+                ]
 
-                    if env_steps >= max_env_steps:
-                        break
+                with timer.context("step_env"):
+                    chunk_result = env.step_chunk(action_chunk)
 
-                    with timer.context("step_env"):
-                        next_obs, reward, done, truncated, info = env.step(action)
-
+                raw_chunk = RawChunkRecord.from_step_chunk_result(
+                    episode_id=int(episode_id),
+                    episode_step_start=int(episode_steps),
+                    residual_obs_before_chunk=residual_obs,
+                    action_chunk=action_chunk,
+                    chunk_result=chunk_result,
+                )
+                if async_backfill is None:
                     with timer.context("build_decision_obs"):
-                        next_base_policy_input = build_libero_policy_input(
-                            next_obs, task_prompt
-                        )
-                        next_base_actions, _ = policy_client.infer(next_base_policy_input)
-                        next_base_actions = prepare_base_actions_chunk(
-                            base_actions=next_base_actions,
-                            chunk_horizon=chunk_horizon,
+                        assembled_chunk = transition_assembler.process_chunk(
+                            raw=raw_chunk,
+                            task_prompt=task_prompt,
                         )
 
-                        next_residual_obs = build_chunk_residual_obs(
-                            obs=next_obs,
-                            base_actions=next_base_actions,
-                            image_keys=image_keys,
-                            residual_alpha=residual_alpha,
+                    for transition in assembled_chunk.transitions:
+                        data_store.insert(transition)
+
+                    for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
+                        next_env_step = int(env_steps + step_offset)
+                        if next_env_step % steps_per_update == 0:
+                            client.update()
+                        if next_env_step % log_period == 0:
+                            should_log_timer = True
+
+                    last_info = dict(assembled_chunk.last_info)
+                    env_steps += int(assembled_chunk.env_steps_delta)
+                    progress_bar.update(int(assembled_chunk.env_steps_delta))
+                    episode_steps += int(assembled_chunk.episode_steps_delta)
+                    episode_return += float(assembled_chunk.episode_return_delta)
+                    episode_success = bool(
+                        episode_success or assembled_chunk.episode_success
+                    )
+                    obs = dict(assembled_chunk.next_obs)
+                    episode_done = bool(assembled_chunk.episode_done)
+                    prefetched = assembled_chunk.prefetched
+                else:
+                    next_env_steps = int(env_steps + raw_chunk.executed_steps)
+                    expect_tail_handoff = (
+                        not bool(raw_chunk.chunk_done or raw_chunk.chunk_truncated)
+                        and next_env_steps < int(max_env_steps)
+                    )
+                    with timer.context("build_decision_obs"):
+                        last_submitted_chunk_seq = async_backfill.submit_chunk(
+                            raw=raw_chunk,
+                            task_prompt=task_prompt,
+                            expect_tail_handoff=expect_tail_handoff,
                         )
+                    pending_tail_chunk_seq = (
+                        int(last_submitted_chunk_seq) if expect_tail_handoff else None
+                    )
 
-                    env_done = bool(info.get("env_done", False))
-                    episode_done = bool(done or truncated)
-                    transition = {
-                        "episode_id": int(episode_id),
-                        "episode_step": int(episode_steps),
-                        "observations": residual_obs,
-                        "actions": np.asarray(action, dtype=np.float32).reshape(-1),
-                        "next_observations": next_residual_obs,
-                        "rewards": float(reward),
-                        "masks": float(0.0 if env_done else 1.0),
-                        "dones": episode_done,
-                    }
-                    data_store.insert(transition)
+                    env_steps += int(raw_chunk.executed_steps)
+                    progress_bar.update(int(raw_chunk.executed_steps))
+                    episode_steps += int(raw_chunk.executed_steps)
+                    episode_return += float(raw_chunk.reward_sum)
+                    episode_success = bool(
+                        episode_success
+                        or any(bool(info.get("env_done", False)) for info in raw_chunk.infos)
+                    )
+                    last_info = dict(raw_chunk.chunk_info)
+                    obs = dict(raw_chunk.final_obs)
+                    episode_done = bool(raw_chunk.chunk_done or raw_chunk.chunk_truncated)
+                    prefetched = None
 
-                    last_info = dict(info)
-                    env_steps += 1
-                    progress_bar.update(1)
-                    episode_steps += 1
-                    episode_return += float(reward)
-                    episode_success = bool(episode_success or env_done)
-                    obs = dict(next_obs)
+                    for step_offset in range(1, int(raw_chunk.executed_steps) + 1):
+                        next_env_step = int(env_steps - int(raw_chunk.executed_steps) + step_offset)
+                        if next_env_step % log_period == 0:
+                            should_log_timer = True
 
-                    prefetched = {
-                        "base_actions": next_base_actions,
-                        "residual_obs": next_residual_obs,
-                    }
-
-                    residual_obs = next_residual_obs
-
-                    if env_steps % steps_per_update == 0:
-                        client.update()
-
-                    if env_steps % log_period == 0:
-                        should_log_timer = True
-                    if episode_done or env_steps >= max_env_steps:
-                        break
+                    _commit_assembled_chunks()
+                    while (
+                        async_backfill.pending_count
+                        > int(backfill_policy_settings.max_pending_chunks)
+                    ):
+                        with timer.context("commit_replay"):
+                            _commit_assembled_chunks(
+                                block_until_seq=async_backfill.next_commit_chunk_seq
+                            )
 
                 timer.tock("total")
 
@@ -349,6 +672,15 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 if episode_done:
                     break
 
+            if async_backfill is not None and pending_tail_chunk_seq is not None:
+                async_backfill.finalize_tail_with_fallback(
+                    chunk_seq=int(pending_tail_chunk_seq),
+                    task_prompt=task_prompt,
+                )
+                pending_tail_chunk_seq = None
+            if async_backfill is not None and last_submitted_chunk_seq is not None:
+                with timer.context("commit_replay"):
+                    _commit_assembled_chunks(block_until_seq=last_submitted_chunk_seq)
             client.update()
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
@@ -403,24 +735,30 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2)
+        # The episode boundary update above already flushes rollout data. Calling
+        # TrainerClient.update() again during shutdown can block short smoke runs
+        # if the paired learner has already exited.
         try:
-            client.update()
+            client.stop()
         except Exception:  # noqa: BLE001
             pass
         try:
             progress_bar.close()
         except Exception:  # noqa: BLE001
             pass
-        try:
-            env.close(clear_cache=False)
-        except Exception:  # noqa: BLE001
-            pass
+        if str(cfg.env.backend) != "remote":
+            try:
+                env.close(clear_cache=False)
+            except Exception:  # noqa: BLE001
+                pass
         policy_client_close = getattr(policy_client, "close", None)
         if callable(policy_client_close):
             try:
                 policy_client_close()
             except Exception:  # noqa: BLE001
                 pass
+        if async_backfill is not None:
+            async_backfill.close()
 
 
 def learner(
@@ -449,7 +787,6 @@ def learner(
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
-    agent = _maybe_enable_torch_compile(agent, cfg=cfg, logger=logger)
     observation_space = build_chunk_residual_observation_space(
         sample_obs=sample_obs,
         image_keys=image_keys,
@@ -753,7 +1090,7 @@ def learner(
             0 if offline_replay_buffer is None else int(len(offline_replay_buffer)),
         )
         server.publish_network(
-            snapshot_actor_network_payload(agent, step=int(update_steps))
+            snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
         )
         initial_network_published = True
         logger.info(
@@ -797,7 +1134,7 @@ def learner(
 
     if not initial_network_published:
         server.publish_network(
-            snapshot_actor_network_payload(agent, step=int(update_steps))
+            snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
         )
         logger.info(
             "publish network: step=%s env_steps=%s reason=initial",
@@ -821,7 +1158,7 @@ def learner(
 
             if update_steps % steps_per_update == 0:
                 server.publish_network(
-                    snapshot_actor_network_payload(agent, step=int(update_steps))
+                    snapshot_agent_checkpoint_payload(agent, step=int(update_steps))
                 )
                 logger.info(
                     "publish network: step=%s env_steps=%s reason=periodic",
@@ -1028,7 +1365,7 @@ def main(cfg: DictConfig) -> None:
     set_global_seeds(typed_cfg.global_seed)
 
     if typed_cfg.runtime.role == "actor":
-        actor(typed_cfg, run_dir=run_dir, logger=logger)
+        actor(typed_cfg, run_dir=run_dir, logger=logger, raw_cfg=cfg)
         return
     learner(typed_cfg, run_dir=run_dir, logger=logger)
 

@@ -199,6 +199,16 @@ class MixedPrecisionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TorchCompileConfig:
+    enabled: bool
+    target: str
+    backend: str
+    mode: str
+    fullgraph: bool
+    dynamic: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CheckpointConfig:
     every_steps: int
     keep: int
@@ -215,12 +225,14 @@ class TrainingConfig:
     max_episodes: int
     log_period: int
     mixed_precision: MixedPrecisionConfig
+    torch_compile: TorchCompileConfig
     checkpoint: CheckpointConfig
 
 
 @dataclass(frozen=True, slots=True)
 class EvalTrainingConfig:
     mixed_precision: MixedPrecisionConfig
+    torch_compile: TorchCompileConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -905,9 +917,36 @@ def _parse_offline_cfg(cfg: DictConfig) -> OfflineConfig:
     )
 
 
+def _parse_torch_compile_cfg(
+    torch_compile_cfg: Any,
+    *,
+    field_prefix: str,
+) -> TorchCompileConfig:
+    target = _parse_choice(
+        torch_compile_cfg.get("target", "actor_critic"),
+        f"{field_prefix}.target",
+        allowed=("critic", "actor_critic"),
+    )
+    return TorchCompileConfig(
+        enabled=bool(torch_compile_cfg.get("enabled", False)),
+        target=target,
+        backend=_required_str(
+            torch_compile_cfg.get("backend", "inductor"),
+            f"{field_prefix}.backend",
+        ),
+        mode=_required_str(
+            torch_compile_cfg.get("mode", "default"),
+            f"{field_prefix}.mode",
+        ),
+        fullgraph=bool(torch_compile_cfg.get("fullgraph", True)),
+        dynamic=bool(torch_compile_cfg.get("dynamic", False)),
+    )
+
+
 def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", {})
+    torch_compile_cfg = training_cfg.get("torch_compile", {})
     checkpoint_cfg = training_cfg.get("checkpoint", {})
     return TrainingConfig(
         training_starts=_nonnegative_int(
@@ -945,6 +984,10 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
                 "training.mixed_precision.dtype",
             ),
         ),
+        torch_compile=_parse_torch_compile_cfg(
+            torch_compile_cfg,
+            field_prefix="training.torch_compile",
+        ),
         checkpoint=CheckpointConfig(
             every_steps=_nonnegative_int(
                 checkpoint_cfg.get("every_steps", 0),
@@ -965,6 +1008,7 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
 def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", {})
+    torch_compile_cfg = training_cfg.get("torch_compile", {})
     return EvalTrainingConfig(
         mixed_precision=MixedPrecisionConfig(
             enabled=bool(mixed_precision_cfg.get("enabled", False)),
@@ -972,7 +1016,11 @@ def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
                 mixed_precision_cfg.get("dtype", "bfloat16"),
                 "training.mixed_precision.dtype",
             ),
-        )
+        ),
+        torch_compile=_parse_torch_compile_cfg(
+            torch_compile_cfg,
+            field_prefix="training.torch_compile",
+        ),
     )
 
 
@@ -1141,6 +1189,7 @@ __all__ = [
     "RuntimeRole",
     "SacConfig",
     "TaskConfig",
+    "TorchCompileConfig",
     "TrainingConfig",
     "WandbConfig",
     "cfg_to_log_payload",

@@ -98,8 +98,15 @@ sac:
 
 training:
   mixed_precision:
-    enabled: false
+    enabled: true
     dtype: bfloat16
+  torch_compile:
+    enabled: false
+    target: actor_critic
+    backend: inductor
+    mode: default
+    fullgraph: true
+    dynamic: false
 
 eval:
   episodes: 10

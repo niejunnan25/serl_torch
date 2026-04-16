@@ -4,26 +4,14 @@ libero_config_dir: null
 libero_datasets_root: null
 
 task:
-  suite_name: libero_10
-  task_id: 8
-
-runtime:
-  role: actor
-  trainer_host: 127.0.0.1
-  trainer_port: 5688
-  broadcast_port: 5689
-  data_store_queue_size: 2000
-
-wandb:
-  project: libero
-  exp_name: ${task.suite_name}_task_${task.task_id}_residual
-  group: residual
-  debug: false
+  suite_name: libero_spatial
+  task_id: 4
 
 policy:
   type: openpi
   host: localhost
   port: 30001
+  id: null
 
 env:
   action_dim: 7
@@ -92,32 +80,7 @@ sac:
     cosine_decay_steps: null
     grad_clip_norm: 1.0
 
-replay:
-  capacity: 250000
-  batch_size: 128
-
-offline:
-  enabled: false
-  prepared_path: data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
-  ratio: 0.5
-  capacity: 50000
-  load_max_episodes: null
-  load_max_transitions: null
-  pretrain_steps: 0
-
-  prepare:
-    raw_dataset_path: null
-    output_root: data/residual/offline_data
-    expert_reference_scale: 1.0
-    clip_residual_to_unit: true
-
 training:
-  training_starts: 1000
-  steps_per_update: 30
-  critic_actor_ratio: 4
-  max_env_steps: 300000
-  max_update_steps: 300000
-  log_period: 100
   mixed_precision:
     enabled: true
     dtype: bfloat16
@@ -128,40 +91,22 @@ training:
     mode: default
     fullgraph: true
     dynamic: false
-  checkpoint:
-    every_steps: 2500
-    keep: 0
-    dir: checkpoints
-  async_eval:
-    enabled: false
-    every_episodes: 20
-    episodes: 10
-    start_episode_idx: 0
-    max_env_steps_per_episode: null
-    deterministic: true
-    poll_interval_sec: 5.0
-    queue_file: async_eval_queue.jsonl
-    summary_jsonl: async_eval_results.jsonl
-    worker_log_file: async_eval_worker.log
-    checkpoint:
-      dir: async_eval_checkpoints
-      # Must stay 0 for now so queued eval checkpoints are never deleted before processing.
-      keep: 0
-    env:
-      # Async eval must use a dedicated remote env server and must not share the
-      # training actor's env.remote.host/port pair.
-      backend: remote
-      remote:
-        host: 127.0.0.1
-        port: 30010
-        timeout_sec: 180.0
+
+eval:
+  episodes: 10
+  start_episode_idx: 0
+  max_env_steps_per_episode: null
+  deterministic: true
+  checkpoint_path: null
+  checkpoint_step: null
 
 logging:
+  episode_log_file: episode_logs.jsonl
   summary_file: summary.json
 
 launch:
-  output_root: outputs/libero
+  output_root: outputs/libero_optimized
 
 hydra:
   run:
-    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${launch.output_root}/eval_residual/${task.suite_name}_task_${task.task_id}/${now:%Y-%m-%d_%H-%M-%S}

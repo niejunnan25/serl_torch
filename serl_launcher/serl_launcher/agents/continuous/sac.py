@@ -1,5 +1,5 @@
 import copy
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any, FrozenSet, Mapping, Optional, Tuple
 
@@ -414,6 +414,23 @@ class SACAgent:
             device_type="cuda",
             dtype=_AUTOCAST_TORCH_DTYPES[mixed_precision_cfg["dtype"]],
         )
+
+    @staticmethod
+    @contextmanager
+    def _temporarily_freeze_params(module: Optional[nn.Module]):
+        if module is None:
+            yield
+            return
+
+        params = list(module.parameters())
+        previous_requires_grad = [param.requires_grad for param in params]
+        for param in params:
+            param.requires_grad_(False)
+        try:
+            yield
+        finally:
+            for param, requires_grad in zip(params, previous_requires_grad):
+                param.requires_grad_(requires_grad)
 
     def forward_critic(
         self, observations: Data, actions: torch.Tensor, train: bool = True
@@ -933,12 +950,16 @@ class SACAgent:
             info.update(critic_info)
 
         if "actor" in networks_to_update:
-            self.state.zero_grad(["actor"])
-            with self._autocast_context():
-                actor_loss, actor_info = self.policy_loss_fn(batch)
-            actor_loss.backward()
-            self.state.optimizer_step("actor")
-            info.update(actor_info)
+            # Actor loss needs dQ/da through the critic, but critic parameters are
+            # not stepped by the actor optimizer. Freezing them avoids computing
+            # unused critic parameter gradients while keeping the action gradient.
+            with self._temporarily_freeze_params(self.state.modules.get("critic")):
+                self.state.zero_grad(["actor"])
+                with self._autocast_context():
+                    actor_loss, actor_info = self.policy_loss_fn(batch)
+                actor_loss.backward()
+                self.state.optimizer_step("actor")
+                info.update(actor_info)
 
         if "temperature" in networks_to_update:
             self.state.zero_grad(["temperature"])

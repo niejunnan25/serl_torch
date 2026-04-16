@@ -6,6 +6,9 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 import torch
 import torch.nn as nn
 
+from serl_launcher.common.torch_module_compat import load_module_state_dict
+from serl_launcher.common.torch_module_compat import module_state_dict
+
 
 def nonpytree_field(**kwargs):
     return field(**kwargs)
@@ -77,18 +80,21 @@ class TorchRLTrainState:
 
     @property
     def params(self) -> Dict[str, Dict[str, torch.Tensor]]:
-        return {name: _clone_state_dict(module.state_dict()) for name, module in self.modules.items()}
+        return {
+            name: _clone_state_dict(module_state_dict(module))
+            for name, module in self.modules.items()
+        }
 
     @params.setter
     def params(self, params: Mapping[str, Mapping[str, torch.Tensor]]):
         for name, state_dict in params.items():
             if name in self.modules:
-                self.modules[name].load_state_dict(state_dict, strict=True)
+                load_module_state_dict(self.modules[name], state_dict, strict=True)
 
     @property
     def target_params(self) -> Dict[str, Dict[str, torch.Tensor]]:
         return {
-            name: _clone_state_dict(module.state_dict())
+            name: _clone_state_dict(module_state_dict(module))
             for name, module in self.target_modules.items()
         }
 
@@ -96,7 +102,11 @@ class TorchRLTrainState:
     def target_params(self, params: Mapping[str, Mapping[str, torch.Tensor]]):
         for name, state_dict in params.items():
             if name in self.target_modules:
-                self.target_modules[name].load_state_dict(state_dict, strict=True)
+                load_module_state_dict(
+                    self.target_modules[name],
+                    state_dict,
+                    strict=True,
+                )
 
     def target_update(self, tau: float):
         with torch.no_grad():
@@ -143,7 +153,7 @@ def soft_update(target: nn.Module, source: nn.Module, tau: float):
 
 
 def hard_update(target: nn.Module, source: nn.Module):
-    target.load_state_dict(source.state_dict())
+    load_module_state_dict(target, module_state_dict(source))
 
 
 def replace_dataclass(instance, **kwargs):
