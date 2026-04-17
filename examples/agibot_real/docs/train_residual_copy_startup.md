@@ -98,7 +98,7 @@ source robot/service/env.sh
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda activate serl_torch
+conda activate robot
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 python examples/agibot_real/scripts/run_residual_training_copy.py \
   runtime.role=actor \
