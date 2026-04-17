@@ -166,7 +166,7 @@ Episode 100, global_env_step = 16,490, global_policy_step = 10,321
 sac:
   encoder_type: resnet
   resnet:
-    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings

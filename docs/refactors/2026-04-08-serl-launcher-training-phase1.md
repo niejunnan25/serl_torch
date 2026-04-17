@@ -2,20 +2,20 @@
 
 ## Goal
 - Start reducing the overload in
-  [serl_launcher/serl_launcher/residual/runtime/](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime)
+  [serl_launcher/serl_launcher/residual/runtime/](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime)
   by moving the cleanest files into better-scoped top-level packages.
 
 ## Changes
 - Added:
-  - [serl_launcher/serl_launcher/training/__init__.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/training/__init__.py)
-  - [serl_launcher/serl_launcher/residual/algorithms/__init__.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/algorithms/__init__.py)
+  - [serl_launcher/serl_launcher/training/__init__.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/training/__init__.py)
+  - [serl_launcher/serl_launcher/residual/algorithms/__init__.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/algorithms/__init__.py)
 - Moved training infrastructure:
-  - `residual/runtime/checkpoint.py` -> [training/checkpoint.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/training/checkpoint.py)
-  - `residual/runtime/profiling.py` -> [training/profiling.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/training/profiling.py)
-  - `residual/runtime/replay_batch.py` -> [training/replay_batch.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/training/replay_batch.py)
+  - `residual/runtime/checkpoint.py` -> [training/checkpoint.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/training/checkpoint.py)
+  - `residual/runtime/profiling.py` -> [training/profiling.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/training/profiling.py)
+  - `residual/runtime/replay_batch.py` -> [training/replay_batch.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/training/replay_batch.py)
 - Moved residual algorithm layer:
-  - `residual/runtime/algorithm.py` -> [residual/algorithms/base.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/algorithms/base.py)
-  - `residual/runtime/sac_algorithm.py` -> [residual/algorithms/sac.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/algorithms/sac.py)
+  - `residual/runtime/algorithm.py` -> [residual/algorithms/base.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/algorithms/base.py)
+  - `residual/runtime/sac_algorithm.py` -> [residual/algorithms/sac.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/algorithms/sac.py)
 - Updated all Python imports to the new locations.
 
 ## Why these files first

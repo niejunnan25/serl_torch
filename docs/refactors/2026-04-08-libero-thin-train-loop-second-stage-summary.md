@@ -29,7 +29,7 @@ Commit:
 Main result:
 
 - introduced shared actor runtime context/state helpers
-- extracted base-only warmup into [actor_warmup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py)
+- extracted base-only warmup into [actor_warmup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py)
 
 ### Phase 2
 
@@ -39,8 +39,8 @@ Commit:
 
 Main result:
 
-- moved actor-side setup ownership into [actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
-- reduced [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py) from about `3388` lines to about `2471` lines
+- moved actor-side setup ownership into [actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
+- reduced [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py) from about `3388` lines to about `2471` lines
 
 ### Phase 3
 
@@ -51,37 +51,37 @@ Commit:
 Main result:
 
 - moved the large actor phase/episode execution path into
-  [actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
-- reduced [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py) to a thin builder + dispatch wrapper
+  [actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
+- reduced [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py) to a thin builder + dispatch wrapper
 
 ## Final Structure
 
 ### Thin entrypoints
 
-- [train_residual_sac.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/train_residual_sac.py)
-- [run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py)
+- [train_residual_sac.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_sac.py)
+- [run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py)
 
 ### LIBERO environment binding
 
-- [runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
-- [obs_adapter.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/obs_adapter.py)
-- [policy_adapter.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/policy_adapter.py)
+- [runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
+- [obs_adapter.py](/home/hello/codebase/serl_torch/examples/libero/runtime/obs_adapter.py)
+- [policy_adapter.py](/home/hello/codebase/serl_torch/examples/libero/runtime/policy_adapter.py)
 
 ### Residual runtime layers
 
-- [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
+- [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
   - thin actor runtime entrypoint
-- [actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
+- [actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
   - actor-side runtime/session construction
-- [actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
+- [actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
   - actor phase/episode execution loop
-- [actor_warmup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py)
+- [actor_warmup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py)
   - base-only warmup path
-- [actor_support.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
+- [actor_support.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
   - shared actor runtime state/support helpers
-- [agentlace_bridge.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py)
+- [agentlace_bridge.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py)
   - actor/learner communication layer
-- [learner_service.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py)
+- [learner_service.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py)
   - learner-side runtime service
 
 ## Validation
@@ -109,7 +109,7 @@ easier to reason about than the previous single large training script.
 
 Not required for this stage, but reasonable future follow-ups:
 
-- split [actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py) further into per-phase or per-step helpers
+- split [actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py) further into per-phase or per-step helpers
 - continue reducing setup-era unused imports inside extracted modules
 - mirror the same style more aggressively on the learner side if another round
   of slimming is wanted later

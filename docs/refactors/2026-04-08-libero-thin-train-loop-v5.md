@@ -18,7 +18,7 @@ This version moves actor-side runtime setup ownership into
 
 Added:
 
-- [actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
+- [actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
 
 This module now owns the large initialization path that previously lived at the
 top of `actor_runtime.py`, including:
@@ -35,7 +35,7 @@ top of `actor_runtime.py`, including:
 
 Updated:
 
-- [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
+- [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
 
 `run_residual_actor_loop(...)` now starts from:
 

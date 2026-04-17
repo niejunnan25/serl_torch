@@ -29,10 +29,10 @@
 
 当前关键文件：
 
-- [run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
-- [chunk_window_replay.py](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/residual/chunk_window_replay.py)
-- [step_window_replay_buffer.py](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/data/step_window_replay_buffer.py)
-- [data_store.py](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/data/data_store.py)
+- [run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
+- [chunk_window_replay.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/chunk_window_replay.py)
+- [step_window_replay_buffer.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/step_window_replay_buffer.py)
+- [data_store.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/data_store.py)
 
 ## 2. 当前 actor 侧的数据流
 
@@ -47,8 +47,8 @@ actor 会创建：
 
 对应位置：
 
-- [run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L82)
-- [run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L107)
+- [run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L82)
+- [run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L107)
 
 这里要特别区分两条不同的 actor -> learner 通道：
 
@@ -83,10 +83,10 @@ actor 会创建：
 
 关键代码：
 
-- chunk 起点决策：[run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L210)
-- chunk 执行：[run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L240)
-- backfill：[run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L154)
-- step transition 组装：[run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L303)
+- chunk 起点决策：[run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L210)
+- chunk 执行：[run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L240)
+- backfill：[run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L154)
+- step transition 组装：[run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L303)
 
 ## 3. 当前“每 15 步回填一次 transition”到底是什么意思
 
@@ -127,15 +127,15 @@ actor 会创建：
 
 learner 会创建 replay：
 
-- [create_chunk_replay_buffer()](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/residual/chunk_window_replay.py#L17)
+- [create_chunk_replay_buffer()](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/chunk_window_replay.py#L17)
 
 但这个函数名带有误导性。它实际创建的是：
 
-- [MemoryEfficientStepWindowReplayBufferDataStore](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/data/data_store.py#L194)
+- [MemoryEfficientStepWindowReplayBufferDataStore](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/data_store.py#L194)
 
 然后通过：
 
-- [register_data_store("actor_env", replay_buffer)](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L561)
+- [register_data_store("actor_env", replay_buffer)](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L561)
 
 把 learner 本地 replay 注册成 actor 这条 agentlace 数据流的接收端。
 
@@ -170,7 +170,7 @@ replay 里存的是 step transition，不是 macro chunk。
 
 对应代码：
 
-- [step_window_replay_buffer.py](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/data/step_window_replay_buffer.py#L181)
+- [step_window_replay_buffer.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/step_window_replay_buffer.py#L181)
 
 ### 4.3 learner 怎么从 step replay 变成 chunk 训练样本
 
@@ -190,7 +190,7 @@ replay 里存的是 step transition，不是 macro chunk。
 
 对应代码：
 
-- [step_window_replay_buffer.py](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/data/step_window_replay_buffer.py#L201)
+- [step_window_replay_buffer.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/step_window_replay_buffer.py#L201)
 
 也就是说：
 
@@ -199,7 +199,7 @@ replay 里存的是 step transition，不是 macro chunk。
 
 ## 5. 为什么 `chunk_replay.py` 这个名字不够准
 
-当前 [chunk_window_replay.py](/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher/serl_launcher/residual/chunk_window_replay.py) 做的事情不是：
+当前 [chunk_window_replay.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/chunk_window_replay.py) 做的事情不是：
 
 - “actor 直接产出一个 chunk transition，再存进 chunk replay”
 
@@ -259,12 +259,12 @@ replay 里存的是 step transition，不是 macro chunk。
 
 对应代码：
 
-- [_flush_pending_last_transition()](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L187)
-- [_finalize_pending_last_transition()](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L194)
+- [_flush_pending_last_transition()](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L187)
+- [_finalize_pending_last_transition()](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py#L194)
 
 ## 7. 为什么可以引入 `TransitionAssembler`
 
-当前 [run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py) 的 actor 主循环同时承担了 4 类职责：
+当前 [run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py) 的 actor 主循环同时承担了 4 类职责：
 
 - 真机执行
 - post-step obs backfill

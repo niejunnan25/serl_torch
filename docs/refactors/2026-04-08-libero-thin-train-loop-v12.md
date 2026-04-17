@@ -6,7 +6,7 @@ Make actor-side runtime execution depend on `ResidualRuntimeBindings` at access 
 
 ## Changes
 
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_support.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py) with protocol-backed helper accessors:
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_support.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py) with protocol-backed helper accessors:
   - `runtime_image_keys(...)`
   - `runtime_obs_cache(...)`
   - `runtime_task_key(...)`
@@ -15,17 +15,17 @@ Make actor-side runtime execution depend on `ResidualRuntimeBindings` at access 
   - `build_step_core(...)`
   - `build_step_obs_profiled(...)`
 - These helpers now route actor hot paths through `ctx.bindings` instead of duplicated values stored in `ctx.values`.
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py) so `ActorRuntimeContext` no longer caches these binding-derived fields:
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py) so `ActorRuntimeContext` no longer caches these binding-derived fields:
   - `image_keys`
   - `obs_cache`
   - `task_key`
   - `data_config`
   - `build_residual_step_obs_profiled`
   - `build_residual_step_core`
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_warmup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py) to use the new helper layer for:
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_warmup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py) to use the new helper layer for:
   - observation-cache reset
   - profiled residual observation assembly
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py) so rollout execution also uses the helper layer instead of copied binding state.
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py) so rollout execution also uses the helper layer instead of copied binding state.
 
 ## Why This Helps
 
@@ -44,10 +44,10 @@ Make actor-side runtime execution depend on `ResidualRuntimeBindings` at access 
 ## Self Review
 
 - Ran `python -m py_compile` on:
-  - [actor_support.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
-  - [actor_warmup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py)
-  - [actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
-  - [actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
+  - [actor_support.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
+  - [actor_warmup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py)
+  - [actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
+  - [actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
 - Ran `git diff --check`.
 - Verified there are no remaining actor-runtime references to the removed cached fields:
   - `ctx.image_keys`

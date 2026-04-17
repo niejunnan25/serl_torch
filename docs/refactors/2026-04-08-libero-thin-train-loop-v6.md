@@ -14,7 +14,7 @@ becomes a real builder + dispatch wrapper.
 
 Added:
 
-- [actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
+- [actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
 
 This module now owns the large actor-side execution path, including:
 
@@ -30,7 +30,7 @@ This module now owns the large actor-side execution path, including:
 
 Updated:
 
-- [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
+- [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
 
 `run_residual_actor_loop(...)` is now reduced to:
 

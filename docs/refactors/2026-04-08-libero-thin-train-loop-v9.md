@@ -6,18 +6,18 @@ Complete the first post-thin-loop phase: remove direct OpenPI concrete imports f
 
 ## Changes
 
-- Added policy-side runtime contracts in [serl_launcher/serl_launcher/policy/base.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/policy/base.py):
+- Added policy-side runtime contracts in [serl_launcher/serl_launcher/policy/base.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/base.py):
   - `PolicyInferResult`
   - `PolicyPrefetcher`
-- Added [serl_launcher/serl_launcher/policy/factory.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/policy/factory.py) with:
+- Added [serl_launcher/serl_launcher/policy/factory.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/factory.py) with:
   - `resolve_policy_backend_type(...)`
   - `build_policy_client(...)`
   - `build_policy_prefetcher(...)`
   - `build_policy_backend_info(...)`
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py) to build the chunk policy client and prefetcher through the factory instead of importing OpenPI concrete classes.
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py) to use `ctx.policy_client` and `ctx.policy_prefetcher`.
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_warmup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py) to use the same generic policy handles.
-- Fixed the small trailing-newline-only diff in [serl_launcher/serl_launcher/residual/runtime/actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py).
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py) to build the chunk policy client and prefetcher through the factory instead of importing OpenPI concrete classes.
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py) to use `ctx.policy_client` and `ctx.policy_prefetcher`.
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_warmup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_warmup.py) to use the same generic policy handles.
+- Fixed the small trailing-newline-only diff in [serl_launcher/serl_launcher/residual/runtime/actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py).
 
 ## Why This Helps
 

@@ -1,12 +1,12 @@
 # AgiBot Real Residual RL
 
-`examples/agibot_real/` 当前推荐的真机 residual-RL 主线是：
+`examples/agibot_real/` 当前推荐的真机 residual-RL copy 主线是：
 
-- 配置: [configs/train_residual_optimized.yaml](configs/train_residual_optimized.yaml)
+- 配置: [configs/train_residual_copy.yaml](configs/train_residual_copy.yaml)
 - 训练入口: [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
 
 这份 README 只围绕这条主线来写。
-如果你现在在看 `run_residual_training.py`、旧 wrapper、或者更早的文档，请把它们当成历史参考，而不是当前 canonical 流程。
+如果你现在在看 `run_residual_training.py`、旧 wrapper、或者更早的 optimized 文档，请把它们当成历史参考或 legacy baseline，而不是当前推荐流程。
 
 如果你想先看仓库整体结构，请回到 [../../README.md](../../README.md)。
 
@@ -19,7 +19,7 @@
 - 训练数据仍然按 per-step transition 写入 replay，不是直接存 chunk
 - base policy 当前推荐用 JoyRA
 - copy 训练线支持 chunk 级 batched backfill
-- 默认 optimized 配置已经启用 async backfill
+- 默认 copy 配置已经启用 `split_queue` transport 和 async backfill
 - 如果再切到 dedicated backfill server，可以进一步降低控制时延竞争
 
 这条线和旧版本最大的区别是：
@@ -42,9 +42,10 @@
 
 ### 默认异步 backfill
 
-这是当前默认 `train_residual_optimized.yaml` 的行为，因为：
+这是当前默认 [train_residual_copy.yaml](configs/train_residual_copy.yaml) 的行为，因为：
 
 - `policy.type=joyra`
+- `runtime.trainer_transport.mode=split_queue`
 - `backfill_policy.enabled=true`
 - `backfill_policy.port=${policy.port}`
 
@@ -55,13 +56,25 @@
 - 默认情况下，这些 batch backfill 请求也打到主 policy server
 - staged reset 已经会生效，因为 async coordinator 已经存在
 
+这里要特别区分：
+
+- `batched backfill`
+  指一个 chunk 内的多个 `post_step_observations` 会被打包成一次 `infer_many(...)` 请求
+- `async backfill coordinator`
+  指 backfill 这条链路在 actor 主线程之外异步推进
+- `parallel inference`
+  指主控制推理和 backfill 推理是否真的落到两个独立 server / GPU 上并行执行
+
+当前默认配置只有前两者，不自动拥有第三者。
+原因是 JoyRA server 虽然支持 batch 请求，但单个 server 进程里的推理调用仍然是同步执行的；如果主控制和 backfill 共用同一个 JoyRA server，它们本质上还是在争同一个推理执行点。
+
 所以要区分两件事：
 
 - `batched backfill`
 - `async backfill coordinator`
 - `dedicated backfill server`
 
-前两者在当前默认 optimized 配置里已经有了。
+前两者在当前默认 copy 配置里已经有了。
 第三者只有在你把 `backfill_policy.port` 指到单独的 JoyRA server 时才会启用。
 
 如果你显式把 `backfill_policy.enabled=false`，copy 训练线才会退回同步 batched backfill fallback：
@@ -83,6 +96,21 @@
   回填全部 `H` 个 `post_step_observations`
 - replay commit 按 chunk seq 严格顺序进行
 
+这里的并行语义也要说清楚：
+
+- 对单个 chunk 的 backfill 来说，当前是 `1 个 chunk -> 1 次 batched infer_many RPC`
+- 对 actor 进程来说，当前只会有 1 条后台 backfill 流，因为 `_AsyncChunkAssemblyCoordinator` 的执行器是 `max_workers=1`
+- 对系统来说，只有当你把主 policy server 和 backfill server 分成两个独立 JoyRA 进程时，主控制推理和 backfill 推理才是“系统级并行”
+
+如果这两个 JoyRA server 再分别放到不同 GPU 上，例如：
+
+- 主 policy: `--gpu-id 0`
+- backfill policy: `--gpu-id 1`
+
+那才是当前最理想的 dedicated backfill 部署。
+
+如果你只是把两个 server 起在不同端口，但仍然绑在同一张 GPU 上，也会比单 server 更解耦一些，但 GPU 计算资源仍然会互相争抢，收益通常不如分 GPU 明显。
+
 ### Episode 边界的 staged reset
 
 当前 copy 主线已经支持 staged reset：
@@ -100,8 +128,10 @@
 
 ## 关键文件
 
+- [configs/train_residual_copy.yaml](configs/train_residual_copy.yaml)
+  当前推荐 copy 训练配置
 - [configs/train_residual_optimized.yaml](configs/train_residual_optimized.yaml)
-  当前推荐训练配置
+  legacy `optimized` 配置，保留作 `legacy_reqrep` 对照
 - [config.py](config.py)
   typed config 定义与解析
 - [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
@@ -117,7 +147,7 @@
 - [residual_observation.py](residual_observation.py)
   residual observation schema
 - [docs/optimized_training_startup.md](docs/optimized_training_startup.md)
-  针对 optimized / copy 训练线的补充启动说明
+  针对旧 optimized 启动方式和 copy 训练线的补充说明
 - [docs/real_robot_startup_guide.md](docs/real_robot_startup_guide.md)
   真机 bring-up / 训练 / 评估通用说明
 
@@ -148,7 +178,7 @@
 最小安装通常至少包括：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
@@ -157,7 +187,7 @@ pip install -e ./serl_launcher
 如果不是 editable install，通常还需要：
 
 ```bash
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 ```
 
 ## Robot 运行时
@@ -165,14 +195,14 @@ export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/se
 actor 所在终端需要先加载 repo-local robot runtime：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 ```
 
 如果 forwarder / vendored runtime 还没准备好，先执行：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/prepare_robot_runtime.sh --from-dir /path/to/forwarder
 ```
 
@@ -196,14 +226,14 @@ bash tools/prepare_robot_runtime.sh --from-dir /path/to/forwarder
 示例：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/serve_joyra.sh --joyra-root /path/to/JoyRA --ckpt-path /path/to/checkpoint.pt --port 9001
 ```
 
 再开一个终端：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/serve_joyra.sh --joyra-root /path/to/JoyRA --ckpt-path /path/to/checkpoint.pt --port 9011
 ```
 
@@ -251,11 +281,10 @@ backfill_policy:
 ### Learner
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 python examples/agibot_real/scripts/run_residual_training_copy.py \
-  --config-name train_residual_optimized \
   runtime.role=learner
 ```
 
@@ -264,29 +293,27 @@ python examples/agibot_real/scripts/run_residual_training_copy.py \
 先在 actor 终端准备 robot 环境：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 ```
 
 然后回到 repo root 启动：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 python examples/agibot_real/scripts/run_residual_training_copy.py \
-  --config-name train_residual_optimized \
   runtime.role=actor
 ```
 
 ### Actor with Dedicated Backfill
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 python examples/agibot_real/scripts/run_residual_training_copy.py \
-  --config-name train_residual_optimized \
   runtime.role=actor \
   backfill_policy.enabled=true \
   backfill_policy.host=127.0.0.1 \
@@ -296,13 +323,15 @@ python examples/agibot_real/scripts/run_residual_training_copy.py \
 
 ## 默认配置和推荐配置
 
-当前 [train_residual_optimized.yaml](configs/train_residual_optimized.yaml) 的默认值已经直接打开 async backfill：
+当前 [train_residual_copy.yaml](configs/train_residual_copy.yaml) 的默认值是：
 
 - `policy.type=joyra`
 - `policy.port=9001`
+- `runtime.trainer_transport.mode=split_queue`
+- `runtime.trainer_transport.data_port=5490`
 - `backfill_policy.enabled=true`
 - `backfill_policy.port=${policy.port}`
-- `backfill_policy.max_pending_chunks=10`
+- `backfill_policy.max_pending_chunks=4`
 - `residual.chunk_horizon=30`
 - `task.hz=30`
 - `controller.terminal_grace_sec=0.15`
@@ -313,14 +342,22 @@ python examples/agibot_real/scripts/run_residual_training_copy.py \
 
 怎么理解这份默认配置：
 
+- `mode=split_queue`
+  代表 actor 和 learner 之间的数据面/控制面已经拆开，常规 `update()` 只追求 accepted，shutdown 时再等 committed
 - `enabled=true` 且 `port=${policy.port}`
   代表默认先走“异步 backfill on 主 server”，所以 staged reset 已经会生效
-- `max_pending_chunks=10`
-  现在默认就是 active 的，但对真机 dedicated backfill 来说偏松
+- `max_pending_chunks=4`
+  这是当前推荐的 backlog / stale guard 起点，更适合真机 dedicated backfill
 - `chunk_horizon=30` 且 `hz=30`
   一个 chunk 大约对应 1 秒控制时间
 - `terminal_grace_sec=0.15`
   现在已经接进 controller 运行时，会在 terminal 事件后短暂忽略 `s/f/r`，避免 episode 边界粘键
+
+如果你想回退到旧的 trainer 通信方式，可以继续使用 [train_residual_optimized.yaml](configs/train_residual_optimized.yaml)。它保留的是：
+
+- `runtime.trainer_transport.mode=legacy_reqrep`
+- `backfill_policy.port=${policy.port}`
+- `backfill_policy.max_pending_chunks=10`
 
 如果你现在是在真机上追求更流畅的交互，我更推荐从下面这个组合开始：
 
@@ -374,17 +411,13 @@ backfill_policy:
 
 ## 一些容易混淆的点
 
-### 为什么脚本默认 config_name 还是 `train_residual`
+### 为什么这里不再显式传 `--config-name`
 
-[run_residual_training_copy.py](scripts/run_residual_training_copy.py) 的 Hydra 装饰器默认还是：
+[run_residual_training_copy.py](scripts/run_residual_training_copy.py) 现在默认就是：
 
-- `config_name="train_residual"`
+- `config_name="train_residual_copy"`
 
-所以如果你要走本文档这条 optimized 主线，记得显式传：
-
-```bash
---config-name train_residual_optimized
-```
+所以按本文档这条主线启动时，不需要再额外传 `--config-name`。只有当你想回退到旧的 `train_residual_optimized.yaml` 或其它实验 yaml 时，才需要显式 override。
 
 ### 为什么 README 不再推荐 `tools/run_actor.sh`
 

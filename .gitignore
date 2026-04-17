@@ -189,9 +189,11 @@ output/
 pretrained_models/
 
 # Generated example data
+examples/agibot_real/data/**
 examples/libero/data/**
 examples/libero/experiments/
 examples/libero/training_logs/
+test/results/**
 examples/libero/.local/
 .libero/
 .codex

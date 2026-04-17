@@ -7,18 +7,43 @@ from pathlib import Path
 import numpy as np
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
-if str(REPO_PARENT) not in sys.path:
-    sys.path.insert(0, str(REPO_PARENT))
+SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[3] / "serl_launcher"
+for candidate in (REPO_PARENT, SERL_LAUNCHER_ROOT):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
 
-from serl_torch.examples.libero.transition_assembly import (
-    LiberoTransitionAssembler,
-)
-from serl_torch.examples.libero.transition_assembly import (
-    RawChunkRecord,
-)
-from serl_torch.examples.libero.transition_assembly import (
-    assemble_chunk_step_transitions,
-)
+_IMPORT_ERROR: ModuleNotFoundError | None = None
+try:
+    from serl_torch.examples.libero.transition_assembly import (
+        BatchAwareLiberoTransitionAssembler,
+    )
+    from serl_torch.examples.libero.transition_assembly import (
+        LiberoTransitionAssembler,
+    )
+    from serl_torch.examples.libero.transition_assembly import (
+        RawChunkRecord,
+    )
+    from serl_torch.examples.libero.transition_assembly import (
+        assemble_chunk_step_transitions,
+    )
+    from serl_torch.examples.libero.transition_assembly import (
+        backfill_post_step_residual_obs_batch_aware,
+    )
+except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
+    _IMPORT_ERROR = exc
+    BatchAwareLiberoTransitionAssembler = object  # type: ignore[assignment]
+    LiberoTransitionAssembler = object  # type: ignore[assignment]
+    RawChunkRecord = object  # type: ignore[assignment]
+
+    def assemble_chunk_step_transitions(*args: object, **kwargs: object) -> object:
+        raise _IMPORT_ERROR
+
+    def backfill_post_step_residual_obs_batch_aware(
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        raise _IMPORT_ERROR
 
 
 class _FakeAssembler(LiberoTransitionAssembler):
@@ -39,6 +64,46 @@ class _FakeAssembler(LiberoTransitionAssembler):
     ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
         del observations, task_prompt
         return self._base_actions, self._residual_observations
+
+
+class _BatchOnlyPolicyClient:
+    def __init__(self) -> None:
+        self.infer_many_calls = 0
+        self.infer_calls = 0
+
+    def infer_many(
+        self,
+        policy_inputs: list[object],
+    ) -> tuple[list[np.ndarray], dict[str, object]]:
+        self.infer_many_calls += 1
+        actions: list[np.ndarray] = []
+        for index, _policy_input in enumerate(policy_inputs, start=1):
+            actions.append(
+                np.asarray(
+                    [[float(index)], [float(index) + 0.5]],
+                    dtype=np.float32,
+                )
+            )
+        return actions, {"backend": "fake_batch"}
+
+    def infer(self, policy_input: object) -> tuple[np.ndarray, dict[str, object]]:
+        del policy_input
+        self.infer_calls += 1
+        raise AssertionError("batch-capable path should not fall back to infer()")
+
+
+class _SerialOnlyPolicyClient:
+    def __init__(self) -> None:
+        self.infer_calls = 0
+
+    def infer(self, policy_input: object) -> tuple[np.ndarray, dict[str, object]]:
+        del policy_input
+        self.infer_calls += 1
+        base = float(self.infer_calls)
+        return (
+            np.asarray([[base], [base + 0.25]], dtype=np.float32),
+            {"backend": "fake_serial"},
+        )
 
 
 def _fake_chunk_result(
@@ -64,6 +129,18 @@ def _fake_chunk_result(
     }
 
 
+def _fake_libero_obs(value: float) -> dict[str, object]:
+    pixel = np.full((8, 8, 3), fill_value=int(value), dtype=np.uint8)
+    return {
+        "robot0_eef_pos": np.asarray([value, value + 0.1, value + 0.2], dtype=np.float32),
+        "robot0_eef_axis_angle": np.asarray([0.0, 0.0, 0.0], dtype=np.float32),
+        "robot0_gripper_qpos": np.asarray([0.04, -0.04], dtype=np.float32),
+        "agentview_image": pixel,
+        "robot0_eye_in_hand_image": pixel,
+    }
+
+
+@unittest.skipIf(_IMPORT_ERROR is not None, f"missing dependency: {_IMPORT_ERROR}")
 class LiberoTransitionAssemblyTest(unittest.TestCase):
     def test_assemble_chunk_step_transitions_chains_observations(self) -> None:
         obs0 = {"state": np.asarray([0.0], dtype=np.float32)}
@@ -282,6 +359,86 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertIsNone(result.prefetched)
         self.assertEqual(result.transitions[0]["masks"], 1.0)
         self.assertEqual(result.transitions[0]["dones"], True)
+
+    def test_batch_aware_backfill_uses_infer_many_and_preserves_order(self) -> None:
+        policy_client = _BatchOnlyPolicyClient()
+        observations = [
+            _fake_libero_obs(1.0),
+            _fake_libero_obs(2.0),
+            _fake_libero_obs(3.0),
+        ]
+
+        base_actions, residual_observations = (
+            backfill_post_step_residual_obs_batch_aware(
+                observations=observations,
+                task_prompt="pick up the block",
+                policy_client=policy_client,
+                chunk_horizon=2,
+                image_keys=("image_rgb_0", "image_rgb_1"),
+                residual_alpha=0.1,
+            )
+        )
+
+        self.assertEqual(policy_client.infer_many_calls, 1)
+        self.assertEqual(policy_client.infer_calls, 0)
+        self.assertEqual(len(base_actions), 3)
+        self.assertEqual(len(residual_observations), 3)
+        self.assertTrue(np.allclose(base_actions[0][:, 0], [1.0, 1.5]))
+        self.assertTrue(np.allclose(base_actions[1][:, 0], [2.0, 2.5]))
+        self.assertTrue(np.allclose(base_actions[2][:, 0], [3.0, 3.5]))
+
+    def test_batch_aware_backfill_falls_back_to_serial_infer(self) -> None:
+        policy_client = _SerialOnlyPolicyClient()
+        observations = [
+            _fake_libero_obs(1.0),
+            _fake_libero_obs(2.0),
+        ]
+
+        base_actions, residual_observations = (
+            backfill_post_step_residual_obs_batch_aware(
+                observations=observations,
+                task_prompt="stack the blocks",
+                policy_client=policy_client,
+                chunk_horizon=2,
+                image_keys=("image_rgb_0", "image_rgb_1"),
+                residual_alpha=0.2,
+            )
+        )
+
+        self.assertEqual(policy_client.infer_calls, 2)
+        self.assertEqual(len(base_actions), 2)
+        self.assertEqual(len(residual_observations), 2)
+        self.assertTrue(np.allclose(base_actions[0][:, 0], [1.0, 1.25]))
+        self.assertTrue(np.allclose(base_actions[1][:, 0], [2.0, 2.25]))
+
+    def test_batch_aware_assembler_process_chunk_keeps_prefetch_contract(self) -> None:
+        assembler = BatchAwareLiberoTransitionAssembler(
+            policy_client=_BatchOnlyPolicyClient(),
+            chunk_horizon=2,
+            image_keys=("image_rgb_0", "image_rgb_1"),
+            residual_alpha=0.1,
+        )
+        raw = RawChunkRecord.from_step_chunk_result(
+            episode_id=5,
+            episode_step_start=0,
+            residual_obs_before_chunk={"state": np.asarray([0.0], dtype=np.float32)},
+            action_chunk=np.asarray([[0.1], [0.2]], dtype=np.float32),
+            chunk_result=_fake_chunk_result(
+                observations=[_fake_libero_obs(1.0), _fake_libero_obs(2.0)],
+                rewards=[0.0, 1.0],
+                dones=[False, False],
+                infos=[{"env_done": False}, {"env_done": False}],
+                done=False,
+                truncated=False,
+            ),
+        )
+
+        result = assembler.process_chunk(raw=raw, task_prompt="move")
+
+        self.assertFalse(result.episode_done)
+        self.assertIsNotNone(result.prefetched)
+        assert result.prefetched is not None
+        self.assertTrue(np.allclose(result.prefetched.base_actions[:, 0], [2.0, 2.5]))
 
 
 if __name__ == "__main__":

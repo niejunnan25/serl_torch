@@ -9,8 +9,8 @@
 
 对应脚本：
 
-- [run_residual_training_chunk_boundary.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_chunk_boundary.py)
-- [train_residual_chunk_boundary.yaml](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/configs/train_residual_chunk_boundary.yaml)
+- [run_residual_training_chunk_boundary.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_chunk_boundary.py)
+- [train_residual_chunk_boundary.yaml](/home/hello/codebase/serl_torch/examples/agibot_real/configs/train_residual_chunk_boundary.yaml)
 
 ## 1. 前置条件
 
@@ -44,7 +44,7 @@
 在 `examples/agibot_real` 目录下执行：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
@@ -58,7 +58,7 @@ bash tools/start_robot_service.sh
 新脚本已经默认指向 `train_residual_chunk_boundary.yaml`，所以最小命令是：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training_chunk_boundary.py runtime.role=learner
 ```
 
@@ -76,7 +76,7 @@ python scripts/run_residual_training_chunk_boundary.py \
 actor 仍然需要先加载 robot runtime：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 python scripts/run_residual_training_chunk_boundary.py runtime.role=actor
 ```

@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
+from serl_torch.examples.libero.env.policy_input import build_libero_policy_inputs
 from serl_torch.examples.libero.residual_observation import build_chunk_residual_obs
 from serl_torch.examples.libero.residual_observation import prepare_base_actions_chunk
 
@@ -247,6 +248,72 @@ def backfill_post_step_residual_obs(
         base_action_chunks.append(next_base_actions)
         residual_observations.append(next_residual_obs)
     return base_action_chunks, residual_observations
+
+
+def backfill_post_step_residual_obs_batch_aware(
+    *,
+    observations: list[dict[str, Any]],
+    task_prompt: str,
+    policy_client: Any,
+    chunk_horizon: int,
+    image_keys: tuple[str, ...],
+    residual_alpha: float,
+) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
+    if not observations:
+        return [], []
+
+    infer_many = getattr(policy_client, "infer_many", None)
+    if not callable(infer_many):
+        return backfill_post_step_residual_obs(
+            observations=observations,
+            task_prompt=task_prompt,
+            policy_client=policy_client,
+            chunk_horizon=chunk_horizon,
+            image_keys=image_keys,
+            residual_alpha=residual_alpha,
+        )
+
+    policy_inputs = build_libero_policy_inputs(observations, task_prompt)
+    action_chunks, _batch_info = infer_many(policy_inputs)
+    if len(action_chunks) != len(observations):
+        raise ValueError(
+            "infer_many returned a mismatched batch length: "
+            f"got {len(action_chunks)}, expected {len(observations)}"
+        )
+
+    base_action_chunks: list[np.ndarray] = []
+    residual_observations: list[dict[str, np.ndarray]] = []
+    for post_step_obs, raw_actions in zip(observations, action_chunks):
+        next_base_actions = prepare_base_actions_chunk(
+            base_actions=raw_actions,
+            chunk_horizon=chunk_horizon,
+        )
+        next_residual_obs = build_chunk_residual_obs(
+            obs=post_step_obs,
+            base_actions=next_base_actions,
+            image_keys=image_keys,
+            residual_alpha=residual_alpha,
+        )
+        base_action_chunks.append(np.asarray(next_base_actions, dtype=np.float32))
+        residual_observations.append(next_residual_obs)
+    return base_action_chunks, residual_observations
+
+
+class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
+    def backfill_post_step_residual_obs(
+        self,
+        *,
+        observations: list[dict[str, Any]],
+        task_prompt: str,
+    ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
+        return backfill_post_step_residual_obs_batch_aware(
+            observations=observations,
+            task_prompt=task_prompt,
+            policy_client=self.policy_client,
+            chunk_horizon=self.chunk_horizon,
+            image_keys=self.image_keys,
+            residual_alpha=self.residual_alpha,
+        )
 
 
 def assemble_chunk_step_transitions(

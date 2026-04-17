@@ -10,6 +10,7 @@ from typing import cast
 
 from omegaconf import DictConfig
 
+from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.utils.serialization import to_jsonable
 
 from .schema import build_agibot_task_key
@@ -42,6 +43,7 @@ class RuntimeConfig:
     trainer_port: int
     broadcast_port: int
     data_store_queue_size: int
+    trainer_transport: TrainerTransportConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -535,16 +537,21 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
         "runtime.role",
         allowed=("actor", "learner"),
     )
+    trainer_port = _positive_int(
+        runtime_cfg.get("trainer_port", 5488),
+        "runtime.trainer_port",
+    )
+    transport_cfg = _parse_trainer_transport_cfg(
+        runtime_cfg=runtime_cfg,
+        default_data_port=int(trainer_port + 2),
+    )
     return RuntimeConfig(
         role=cast(RuntimeRole, role),
         trainer_host=_required_str(
             runtime_cfg.get("trainer_host", "127.0.0.1"),
             "runtime.trainer_host",
         ),
-        trainer_port=_positive_int(
-            runtime_cfg.get("trainer_port", 5488),
-            "runtime.trainer_port",
-        ),
+        trainer_port=int(trainer_port),
         broadcast_port=_positive_int(
             runtime_cfg.get("broadcast_port", 5489),
             "runtime.broadcast_port",
@@ -552,6 +559,49 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
         data_store_queue_size=_positive_int(
             runtime_cfg.get("data_store_queue_size", 2000),
             "runtime.data_store_queue_size",
+        ),
+        trainer_transport=transport_cfg,
+    )
+
+
+def _parse_trainer_transport_cfg(
+    *,
+    runtime_cfg: DictConfig | dict[str, Any],
+    default_data_port: int,
+) -> TrainerTransportConfig:
+    raw_cfg = runtime_cfg.get("trainer_transport", {})
+    mode = _parse_choice(
+        raw_cfg.get("mode", "legacy_reqrep"),
+        "runtime.trainer_transport.mode",
+        allowed=("legacy_reqrep", "split_queue"),
+    )
+    return TrainerTransportConfig(
+        mode=mode,
+        data_port=_positive_int(
+            raw_cfg.get("data_port", default_data_port),
+            "runtime.trainer_transport.data_port",
+        ),
+        control_timeout_ms=_positive_int(
+            raw_cfg.get("control_timeout_ms", 800),
+            "runtime.trainer_transport.control_timeout_ms",
+        ),
+        data_queue_capacity=_positive_int(
+            raw_cfg.get("data_queue_capacity", 8),
+            "runtime.trainer_transport.data_queue_capacity",
+        ),
+        data_socket_hwm=_positive_int(
+            raw_cfg.get("data_socket_hwm", 8),
+            "runtime.trainer_transport.data_socket_hwm",
+        ),
+        commit_poll_ms=_positive_int(
+            raw_cfg.get("commit_poll_ms", 20),
+            "runtime.trainer_transport.commit_poll_ms",
+        ),
+        wait_committed_on_episode_end=bool(
+            raw_cfg.get("wait_committed_on_episode_end", False)
+        ),
+        wait_committed_on_shutdown=bool(
+            raw_cfg.get("wait_committed_on_shutdown", True)
         ),
     )
 

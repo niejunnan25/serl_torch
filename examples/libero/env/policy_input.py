@@ -5,6 +5,7 @@ from typing import Any
 from typing import Dict
 from typing import Hashable
 from typing import Optional
+from typing import Sequence
 
 import numpy as np
 
@@ -41,4 +42,14 @@ def build_libero_policy_input(
     )
 
 
-__all__ = ["build_libero_policy_input"]
+def build_libero_policy_inputs(
+    observations: Sequence[Dict[str, Any]],
+    prompt: str,
+) -> list[PolicyInput]:
+    return [
+        build_libero_policy_input(obs, prompt)
+        for obs in observations
+    ]
+
+
+__all__ = ["build_libero_policy_input", "build_libero_policy_inputs"]

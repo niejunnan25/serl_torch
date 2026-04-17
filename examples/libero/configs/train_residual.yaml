@@ -13,6 +13,15 @@ runtime:
   trainer_port: 5688
   broadcast_port: 5689
   data_store_queue_size: 2000
+  trainer_transport:
+    mode: legacy_reqrep
+    data_port: 5690
+    control_timeout_ms: 800
+    data_queue_capacity: 8
+    data_socket_hwm: 8
+    commit_poll_ms: 20
+    wait_committed_on_episode_end: false
+    wait_committed_on_shutdown: true
 
 wandb:
   project: libero
@@ -24,6 +33,13 @@ policy:
   type: openpi
   host: localhost
   port: 30001
+
+backfill_policy:
+  enabled: false
+  host: ${policy.host}
+  port: ${policy.port}
+  max_pending_chunks: 2
+  mode: thread
 
 env:
   action_dim: 7
@@ -55,7 +71,7 @@ encoder:
   use_proprio: true
   proprio_latent_dim: 64
   resnet:
-    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings

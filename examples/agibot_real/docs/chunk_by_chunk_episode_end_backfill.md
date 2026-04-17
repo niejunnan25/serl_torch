@@ -11,10 +11,10 @@
 
 相关实现入口：
 
-- actor 主循环：[../scripts/run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
-- 真实机器人 env：[../env/task_env.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/env/task_env.py)
-- base policy adapter：[../env/base_policy.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/env/base_policy.py)
-- residual observation helper：[../residual_observation.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/residual_observation.py)
+- actor 主循环：[../scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
+- 真实机器人 env：[../env/task_env.py](/home/hello/codebase/serl_torch/examples/agibot_real/env/task_env.py)
+- base policy adapter：[../env/base_policy.py](/home/hello/codebase/serl_torch/examples/agibot_real/env/base_policy.py)
+- residual observation helper：[../residual_observation.py](/home/hello/codebase/serl_torch/examples/agibot_real/residual_observation.py)
 
 ## 1. 当前实现的问题
 
@@ -333,7 +333,7 @@ step-level 的 terminal 判断可按下面方式恢复：
 
 ### 10.2 episode 结束时会有一次集中补账延迟
 
-由于当前 [AgiBotBasePolicy.infer()](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/env/base_policy.py#L81) 是单帧接口，episode 结束后需要按步补推理。  
+由于当前 [AgiBotBasePolicy.infer()](/home/hello/codebase/serl_torch/examples/agibot_real/env/base_policy.py#L81) 是单帧接口，episode 结束后需要按步补推理。
 episode 越长，这段尾部停顿越明显。
 
 ### 10.3 learner 看到数据会更晚
@@ -390,7 +390,7 @@ episode 越长，这段尾部停顿越明显。
 
 主要重构点会在：
 
-- [run_residual_training.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
+- [run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
 
 要做的核心改动是：
 
@@ -401,7 +401,7 @@ episode 越长，这段尾部停顿越明显。
 
 ### 12.2 env 基本可以少改
 
-当前 [task_env.py](/Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real/env/task_env.py) 已经有 `step_chunk()`，第一版不一定需要大改 env。
+当前 [task_env.py](/home/hello/codebase/serl_torch/examples/agibot_real/env/task_env.py) 已经有 `step_chunk()`，第一版不一定需要大改 env。
 
 真正需要确认的是：
 

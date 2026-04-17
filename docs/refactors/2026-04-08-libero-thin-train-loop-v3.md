@@ -2,8 +2,8 @@
 
 ## Modification Summary
 
-- Added [serl_launcher/serl_launcher/residual/runtime/learner_service.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py) to hold the standalone learner runtime logic.
-- Slimmed [examples/libero/scripts/run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py) into a thin entrypoint that now only:
+- Added [serl_launcher/serl_launcher/residual/runtime/learner_service.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py) to hold the standalone learner runtime logic.
+- Slimmed [examples/libero/scripts/run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py) into a thin entrypoint that now only:
   - builds run context
   - sets seeds
   - passes LIBERO-specific `data_config` and image-key resolution into the learner service
@@ -15,8 +15,8 @@
 ## Review Notes
 
 - `py_compile` passed for:
-  - [examples/libero/scripts/run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py)
-  - [serl_launcher/serl_launcher/residual/runtime/learner_service.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py)
+  - [examples/libero/scripts/run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py)
+  - [serl_launcher/serl_launcher/residual/runtime/learner_service.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py)
   - plus the already-split actor-side files
 - The learner entry script is now 48 lines.
 - `learner_service.py` no longer has Hydra or LIBERO-specific imports baked into the service layer itself.

@@ -171,11 +171,13 @@ def build_agibot_base_policy(
     cfg: Any,
     *,
     logger: logging.Logger,
+    host: str | None = None,
+    port: int | None = None,
 ) -> AgiBotBasePolicy:
     backend_type = _resolve_policy_backend_type(cfg)
     description = _describe_policy_backend(cfg)
-    host = str(cfg.policy.host)
-    port = int(cfg.policy.port)
+    host = str(cfg.policy.host) if host is None else str(host)
+    port = int(cfg.policy.port) if port is None else int(port)
     action_dim = int(cfg.env.action_dim)
     chunk_horizon = int(cfg.residual.chunk_horizon)
 

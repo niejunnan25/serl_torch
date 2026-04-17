@@ -25,7 +25,7 @@
 sac:
   encoder_type: resnet
   resnet:
-    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings
@@ -38,7 +38,7 @@ sac:
 训练启动后，在日志中应看到：
 
 ```
-[ResNetEncoder] Loaded pretrained weights: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+[ResNetEncoder] Loaded pretrained weights: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
 ```
 
 **如果看到 `Random init from architecture`，说明有问题。**
@@ -46,7 +46,7 @@ sac:
 同时确认本地模型文件存在：
 
 ```bash
-ls /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18/model.safetensors
+ls /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18/model.safetensors
 ```
 
 ---

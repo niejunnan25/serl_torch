@@ -6,33 +6,33 @@ Extend the first chunk-policy abstraction past the actor runtime so evaluation a
 
 ## Changes
 
-- Extended [serl_launcher/serl_launcher/policy/factory.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/policy/factory.py) with:
+- Extended [serl_launcher/serl_launcher/policy/factory.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/factory.py) with:
   - `resolve_policy_backend_id(...)`
   - `build_policy_backend_info(...)` now returning both `type` and `id`
   - null-safe fallback behavior so `policy.id: null` resolves back to the backend type
-- Updated [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py) logging to surface both backend type and backend id.
-- Updated [examples/libero/scripts/eval_residual_fast.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/eval_residual_fast.py) to:
+- Updated [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py) logging to surface both backend type and backend id.
+- Updated [examples/libero/scripts/eval_residual_fast.py](/home/hello/codebase/serl_torch/examples/libero/scripts/eval_residual_fast.py) to:
   - build the chunk policy through the policy factory
   - stop importing `OpenPIPolicyClient` directly
   - write `base_policy_type` and `base_policy_id` into the eval summary
-- Updated [examples/libero/scripts/materialize_residual_training_online.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/materialize_residual_training_online.py) to:
+- Updated [examples/libero/scripts/materialize_residual_training_online.py](/home/hello/codebase/serl_torch/examples/libero/scripts/materialize_residual_training_online.py) to:
   - build the chunk policy through the policy factory
   - record `base_policy_type` and `base_policy_id` in episode metadata and manifest metadata
   - keep `openpi_host/openpi_port` in manifest metadata only as backend-specific compatibility fields when `policy.type=openpi`
-- Updated [examples/libero/scripts/materialize_residual_training_offline.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/materialize_residual_training_offline.py) to:
+- Updated [examples/libero/scripts/materialize_residual_training_offline.py](/home/hello/codebase/serl_torch/examples/libero/scripts/materialize_residual_training_offline.py) to:
   - add lightweight `--policy_type` and `--policy_id` CLI flags
   - construct a temporary policy config and build the chunk policy through the factory
   - record `base_policy_type` and `base_policy_id` in episode metadata and manifest metadata
   - keep `openpi_host/openpi_port` in manifest metadata only for the OpenPI backend
 - Added default `policy` blocks to:
-  - [examples/libero/conf/train_residual_sac.yaml](/vla/users/niejunnan/codebase/serl_torch/examples/libero/conf/train_residual_sac.yaml)
-  - [examples/libero/conf/eval_residual_fast.yaml](/vla/users/niejunnan/codebase/serl_torch/examples/libero/conf/eval_residual_fast.yaml)
+  - [examples/libero/conf/train_residual_sac.yaml](/home/hello/codebase/serl_torch/examples/libero/conf/train_residual_sac.yaml)
+  - [examples/libero/conf/eval_residual_fast.yaml](/home/hello/codebase/serl_torch/examples/libero/conf/eval_residual_fast.yaml)
 - Added `policy.id: pi05_libero` to the current `exp11` pi05 configs:
-  - [libero_10_task_8_chunk_async_null_pi05.yaml](/vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_pi05.yaml)
-  - [libero_10_task_8_chunk_async_null_unfreeze_pi05.yaml](/vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_unfreeze_pi05.yaml)
-  - [libero_10_task_8_chunk_async_null_utdeff1p_pi05.yaml](/vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_utdeff1p_pi05.yaml)
-  - [libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05.yaml](/vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05.yaml)
-- Fixed a pre-existing circular import trap by making [examples/libero/runtime/__init__.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/__init__.py) lazily expose `runtime_bindings`, and by switching the modified scripts to import concrete runtime submodules directly instead of going through the package re-export.
+  - [libero_10_task_8_chunk_async_null_pi05.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_pi05.yaml)
+  - [libero_10_task_8_chunk_async_null_unfreeze_pi05.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_unfreeze_pi05.yaml)
+  - [libero_10_task_8_chunk_async_null_utdeff1p_pi05.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_utdeff1p_pi05.yaml)
+  - [libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/exp11/chunk/libero_10_task_8_chunk_async_null_utdeff1p_unfreeze_pi05.yaml)
+- Fixed a pre-existing circular import trap by making [examples/libero/runtime/__init__.py](/home/hello/codebase/serl_torch/examples/libero/runtime/__init__.py) lazily expose `runtime_bindings`, and by switching the modified scripts to import concrete runtime submodules directly instead of going through the package re-export.
 
 ## Why This Helps
 

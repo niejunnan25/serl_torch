@@ -1,7 +1,7 @@
 """Helpers for building OpenPI requests from canonical policy inputs."""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 import numpy as np
 
@@ -61,4 +61,14 @@ def build_openpi_request(policy_input: PolicyInput) -> Dict[str, Any]:
         "observation/wrist_image": _resolve_wrist_image(policy_input),
         "observation/state": np.asarray(policy_input.state, dtype=np.float32),
         "prompt": str(policy_input.prompt),
+    }
+
+
+def build_openpi_batch_request(
+    policy_inputs: Sequence[PolicyInput],
+) -> Dict[str, Any]:
+    if not policy_inputs:
+        raise ValueError("policy_inputs must be non-empty for OpenPI batch requests")
+    return {
+        "examples": [build_openpi_request(policy_input) for policy_input in policy_inputs]
     }

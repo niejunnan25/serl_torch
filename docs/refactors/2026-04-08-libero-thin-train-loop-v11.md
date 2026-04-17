@@ -6,7 +6,7 @@ Introduce a shared `ResidualRuntimeBindings` protocol so the residual runtime de
 
 ## Changes
 
-- Added [serl_launcher/serl_launcher/residual/runtime/bindings.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py) with a new `ResidualRuntimeBindings` protocol.
+- Added [serl_launcher/serl_launcher/residual/runtime/bindings.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py) with a new `ResidualRuntimeBindings` protocol.
 - The protocol defines the minimal runtime-facing environment contract:
   - attributes:
     - `env`
@@ -19,11 +19,11 @@ Introduce a shared `ResidualRuntimeBindings` protocol so the residual runtime de
     - `build_step_core(...)`
     - `build_step_obs(...)`
     - `build_step_obs_profiled(...)`
-- Updated [examples/libero/runtime/runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py) so `LiberoRuntimeBindings` explicitly implements `ResidualRuntimeBindings`.
+- Updated [examples/libero/runtime/runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py) so `LiberoRuntimeBindings` explicitly implements `ResidualRuntimeBindings`.
 - Updated actor-side runtime typing to consume the protocol rather than `Any`:
-  - [serl_launcher/serl_launcher/residual/runtime/actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
-  - [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
-  - [serl_launcher/serl_launcher/residual/runtime/actor_support.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
+  - [serl_launcher/serl_launcher/residual/runtime/actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
+  - [serl_launcher/serl_launcher/residual/runtime/actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
+  - [serl_launcher/serl_launcher/residual/runtime/actor_support.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
 
 ## Why This Helps
 
@@ -43,11 +43,11 @@ Introduce a shared `ResidualRuntimeBindings` protocol so the residual runtime de
 ## Self Review
 
 - Ran `python -m py_compile` on:
-  - [bindings.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py)
-  - [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
-  - [actor_setup.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
-  - [actor_support.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
-  - [runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
+  - [bindings.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py)
+  - [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
+  - [actor_setup.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_setup.py)
+  - [actor_support.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_support.py)
+  - [runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
 - Ran `git diff --check`.
 - Verified imports with:
   - `from serl_launcher.residual.runtime.bindings import ResidualRuntimeBindings`

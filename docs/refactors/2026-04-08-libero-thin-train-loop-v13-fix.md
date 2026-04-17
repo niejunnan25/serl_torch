@@ -6,7 +6,7 @@ Fix the remaining boundary problem from V13: learner/data entrypoints should not
 
 ## Problem
 
-After V13, `run_learner.py` depended on `build_libero_data_bindings(...)`, but that function still lived in [runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py).
+After V13, `run_learner.py` depended on `build_libero_data_bindings(...)`, but that function still lived in [runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py).
 
 That meant the learner path still imported:
 - env factory code
@@ -17,12 +17,12 @@ at module import time, even though learner/data flows only need task/data metada
 
 ## Changes
 
-- Added [data_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/data_bindings.py) as a physically separate, lightweight module for:
+- Added [data_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/data_bindings.py) as a physically separate, lightweight module for:
   - `LiberoDataBindings`
   - `build_libero_data_bindings(...)`
-- Updated [runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py) to import the data-binding pieces from `data_bindings.py` instead of defining them inline.
-- Updated [run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py) to import `build_libero_data_bindings(...)` from the lightweight module.
-- Updated [runtime/__init__.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/__init__.py) so:
+- Updated [runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py) to import the data-binding pieces from `data_bindings.py` instead of defining them inline.
+- Updated [run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py) to import `build_libero_data_bindings(...)` from the lightweight module.
+- Updated [runtime/__init__.py](/home/hello/codebase/serl_torch/examples/libero/runtime/__init__.py) so:
   - data-binding names are lazily loaded from `data_bindings.py`
   - runtime-binding names are lazily loaded from `runtime_bindings.py`
 
@@ -38,14 +38,14 @@ at module import time, even though learner/data flows only need task/data metada
 ## Self Review
 
 - Ran `python -m py_compile` on:
-  - [data_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/data_bindings.py)
-  - [runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
-  - [runtime/__init__.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/__init__.py)
-  - [run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py)
+  - [data_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/data_bindings.py)
+  - [runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
+  - [runtime/__init__.py](/home/hello/codebase/serl_torch/examples/libero/runtime/__init__.py)
+  - [run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py)
 - Ran `git diff --check`.
 - Ran:
   - `conda run -n serl_torch python examples/libero/scripts/run_learner.py --help`
-- Verified that [run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py) no longer imports from `runtime_bindings.py`.
+- Verified that [run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py) no longer imports from `runtime_bindings.py`.
 
 ## Commit Summary
 

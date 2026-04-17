@@ -18,6 +18,15 @@ runtime:
   trainer_port: 5488
   broadcast_port: 5489
   data_store_queue_size: 2000
+  trainer_transport:
+    mode: legacy_reqrep
+    data_port: 5490
+    control_timeout_ms: 800
+    data_queue_capacity: 8
+    data_socket_hwm: 8
+    commit_poll_ms: 20
+    wait_committed_on_episode_end: false
+    wait_committed_on_shutdown: true
 
 wandb:
   project: agibot_real

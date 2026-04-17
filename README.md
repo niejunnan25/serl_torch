@@ -64,7 +64,7 @@
 最常见的 Python 环境是 `serl_torch`。
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
@@ -124,7 +124,7 @@ pip install -e ./third_party/openpi-client
 如果你不是用 editable install，也可以手工补 `PYTHONPATH`：
 
 ```bash
-export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 ```
 
 但对当前仓库，不建议长期依赖手工 `PYTHONPATH`。`pip install -e ./serl_launcher` 更稳，也更符合 Python 包的正常组织方式。
@@ -185,7 +185,7 @@ export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Doc
 如果本机没有缓存 HuggingFace ResNet 权重，可以先下载：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 python scripts/download_resnet.py --models microsoft/resnet-18
 ```
 
@@ -215,13 +215,13 @@ pretrained_models/microsoft--resnet-18
 这套代码通常会默认使用下面这些本机路径假设：
 
 - LIBERO checkout:
-  `/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO`
+  `/home/hello/codebase/serl_torch/third_party/LIBERO`
 - LIBERO datasets:
   `/vla/users/niejunnan/datasets`
 - OpenPI repo:
   `/vla/users/niejunnan/codebase/openpi`
 - 本地 ResNet 缓存：
-  `/vla/users/niejunnan/codebase/serl_torch/pretrained_models`
+  `/home/hello/codebase/serl_torch/pretrained_models`
 
 如果你的机器路径不同，请在命令行或环境变量里显式覆盖，例如：
 

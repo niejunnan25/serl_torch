@@ -2,11 +2,11 @@
 
 ## What changed
 - Split the large episode executor in
-  [actor_episode.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode.py)
+  [actor_episode.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode.py)
   into three mode-oriented modules:
-  - [actor_episode_shared.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode_shared.py)
-  - [actor_episode_chunk.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode_chunk.py)
-  - [actor_episode_step.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode_step.py)
+  - [actor_episode_shared.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode_shared.py)
+  - [actor_episode_chunk.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode_chunk.py)
+  - [actor_episode_step.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_episode_step.py)
 - Kept `run_policy_episode(...)` as the stable top-level entrypoint and moved only
   internal episode execution bodies.
 - Centralized shared episode helpers for:

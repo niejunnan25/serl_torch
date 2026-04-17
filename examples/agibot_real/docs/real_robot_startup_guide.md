@@ -58,7 +58,7 @@
 ### 3.1 安装 `serl_torch`
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
@@ -71,7 +71,7 @@ pip install -e ./serl_launcher
 如果 `examples/agibot_real/vendor/` 下的 runtime 还没准备好，先执行：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/prepare_robot_runtime.sh --from-dir /path/to/forwarder
 ```
 
@@ -122,7 +122,7 @@ export AGIBOT_NO_ROS=1
 ### 6.1 OpenPI
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 OPENPI_ROOT=/path/to/openpi \
 POLICY_DIR=/path/to/policy/checkpoint \
 bash tools/serve_openpi.sh --port 30001
@@ -141,7 +141,7 @@ bash tools/serve_openpi.sh --port 30001
 ### 6.2 JoyRA
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 JOYRA_ROOT=/path/to/JoyRA \
 JOYRA_CKPT_PATH=/path/to/checkpoints/steps_xxx.pt \
 bash tools/serve_joyra.sh --port 9001
@@ -158,7 +158,7 @@ policy.type=joyra policy.port=9001
 标准方式：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
@@ -180,14 +180,14 @@ bash tools/start_robot_service.sh --help
 最小命令：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/run_learner.sh
 ```
 
 等价直跑：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training.py runtime.role=learner
 ```
 
@@ -215,7 +215,7 @@ bash tools/run_learner.sh \
 actor 终端必须先加载真机 runtime 环境：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 ```
 
@@ -413,7 +413,7 @@ outputs/agibot_real/train_residual/<timestamp>/
 最小命令：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 python scripts/evaluate_checkpoint.py \
   eval.checkpoint_path=/path/to/checkpoints \

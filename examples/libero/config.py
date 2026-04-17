@@ -11,6 +11,7 @@ from typing import cast
 
 from omegaconf import DictConfig
 
+from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.utils.serialization import to_jsonable
 
 from .env.observation import resolve_libero_image_keys
@@ -34,6 +35,7 @@ class RuntimeConfig:
     trainer_port: int
     broadcast_port: int
     data_store_queue_size: int
+    trainer_transport: TrainerTransportConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +173,15 @@ class OfflineConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BackfillPolicyConfig:
+    enabled: bool
+    host: str
+    port: int
+    max_pending_chunks: int
+    mode: str
+
+
+@dataclass(frozen=True, slots=True)
 class MixedPrecisionConfig:
     enabled: bool
     dtype: str
@@ -267,6 +278,7 @@ class LiberoTrainConfig:
     runtime: RuntimeConfig
     wandb: WandbConfig
     policy: PolicyConfig
+    backfill_policy: BackfillPolicyConfig
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
@@ -320,6 +332,30 @@ def _required_str(value: Any, field_name: str) -> str:
     if resolved is None:
         raise ValueError(f"{field_name} must be a non-empty string")
     return resolved
+
+
+def _required_mapping(value: Any, field_name: str) -> DictConfig | dict[str, Any]:
+    if value is None:
+        raise ValueError(
+            f"{field_name} must be declared explicitly in the train yaml"
+        )
+    if not isinstance(value, (DictConfig, dict)):
+        raise ValueError(
+            f"{field_name} must be a mapping, got {type(value).__name__}"
+        )
+    return value
+
+
+def _required_mapping_key(
+    mapping: DictConfig | dict[str, Any],
+    key: str,
+    field_name: str,
+) -> Any:
+    if key not in mapping:
+        raise ValueError(
+            f"{field_name} must be declared explicitly in the train yaml"
+        )
+    return mapping[key]
 
 
 def _int_value(value: Any, field_name: str) -> int:
@@ -472,16 +508,21 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
         "runtime.role",
         allowed=("actor", "learner"),
     )
+    trainer_port = _positive_int(
+        runtime_cfg.get("trainer_port", 5688),
+        "runtime.trainer_port",
+    )
+    transport_cfg = _parse_trainer_transport_cfg(
+        runtime_cfg=runtime_cfg,
+        default_data_port=int(trainer_port + 2),
+    )
     return RuntimeConfig(
         role=cast(RuntimeRole, role),
         trainer_host=_required_str(
             runtime_cfg.get("trainer_host", "127.0.0.1"),
             "runtime.trainer_host",
         ),
-        trainer_port=_positive_int(
-            runtime_cfg.get("trainer_port", 5688),
-            "runtime.trainer_port",
-        ),
+        trainer_port=int(trainer_port),
         broadcast_port=_positive_int(
             runtime_cfg.get("broadcast_port", 5689),
             "runtime.broadcast_port",
@@ -489,6 +530,49 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
         data_store_queue_size=_positive_int(
             runtime_cfg.get("data_store_queue_size", 2000),
             "runtime.data_store_queue_size",
+        ),
+        trainer_transport=transport_cfg,
+    )
+
+
+def _parse_trainer_transport_cfg(
+    *,
+    runtime_cfg: DictConfig | dict[str, Any],
+    default_data_port: int,
+) -> TrainerTransportConfig:
+    raw_cfg = runtime_cfg.get("trainer_transport", {})
+    mode = _parse_choice(
+        raw_cfg.get("mode", "legacy_reqrep"),
+        "runtime.trainer_transport.mode",
+        allowed=("legacy_reqrep", "split_queue"),
+    )
+    return TrainerTransportConfig(
+        mode=mode,
+        data_port=_positive_int(
+            raw_cfg.get("data_port", default_data_port),
+            "runtime.trainer_transport.data_port",
+        ),
+        control_timeout_ms=_positive_int(
+            raw_cfg.get("control_timeout_ms", 800),
+            "runtime.trainer_transport.control_timeout_ms",
+        ),
+        data_queue_capacity=_positive_int(
+            raw_cfg.get("data_queue_capacity", 8),
+            "runtime.trainer_transport.data_queue_capacity",
+        ),
+        data_socket_hwm=_positive_int(
+            raw_cfg.get("data_socket_hwm", 8),
+            "runtime.trainer_transport.data_socket_hwm",
+        ),
+        commit_poll_ms=_positive_int(
+            raw_cfg.get("commit_poll_ms", 20),
+            "runtime.trainer_transport.commit_poll_ms",
+        ),
+        wait_committed_on_episode_end=bool(
+            raw_cfg.get("wait_committed_on_episode_end", False)
+        ),
+        wait_committed_on_shutdown=bool(
+            raw_cfg.get("wait_committed_on_shutdown", True)
         ),
     )
 
@@ -519,6 +603,58 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
         host=_required_str(policy_cfg.get("host", "localhost"), "policy.host"),
         port=_positive_int(policy_cfg.get("port", 30001), "policy.port"),
         id=_optional_str(policy_cfg.get("id", None)),
+    )
+
+
+def _parse_backfill_policy_cfg(
+    cfg: DictConfig,
+) -> BackfillPolicyConfig:
+    backfill_cfg = _required_mapping(
+        cfg.get("backfill_policy", None),
+        "backfill_policy",
+    )
+    mode = _parse_choice(
+        _required_mapping_key(
+            backfill_cfg,
+            "mode",
+            "backfill_policy.mode",
+        ),
+        "backfill_policy.mode",
+        allowed=("thread",),
+    )
+    return BackfillPolicyConfig(
+        enabled=bool(
+            _required_mapping_key(
+                backfill_cfg,
+                "enabled",
+                "backfill_policy.enabled",
+            )
+        ),
+        host=_required_str(
+            _required_mapping_key(
+                backfill_cfg,
+                "host",
+                "backfill_policy.host",
+            ),
+            "backfill_policy.host",
+        ),
+        port=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "port",
+                "backfill_policy.port",
+            ),
+            "backfill_policy.port",
+        ),
+        max_pending_chunks=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "max_pending_chunks",
+                "backfill_policy.max_pending_chunks",
+            ),
+            "backfill_policy.max_pending_chunks",
+        ),
+        mode=mode,
     )
 
 
@@ -1166,6 +1302,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
     encoder = _parse_encoder_cfg(cfg)
     offline = _parse_offline_cfg(cfg)
+    policy = _parse_policy_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
         raise ValueError(
@@ -1180,7 +1317,8 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         task=task,
         runtime=runtime,
         wandb=_parse_wandb_cfg(cfg, task=task),
-        policy=_parse_policy_cfg(cfg),
+        policy=policy,
+        backfill_policy=_parse_backfill_policy_cfg(cfg),
         env=env,
         obs=obs,
         residual=residual,
@@ -1276,6 +1414,7 @@ __all__ = [
     "AsyncEvalCheckpointConfig",
     "AsyncEvalConfig",
     "AsyncEvalEnvConfig",
+    "BackfillPolicyConfig",
     "CheckpointConfig",
     "EncoderConfig",
     "EnvBackend",

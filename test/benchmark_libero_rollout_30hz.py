@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Synthetic 30Hz rollout benchmark for LIBERO actor dataflow variants.
 
-This benchmark compares three actor-side rollout shapes:
+This benchmark compares four actor-side rollout shapes:
 
 1. baseline_step:
    Mirrors examples/libero/scripts/run_residual_training.py
@@ -12,6 +12,9 @@ This benchmark compares three actor-side rollout shapes:
 3. copy_async:
    Mirrors the async backfill / ordered commit path in
    examples/libero/scripts/run_residual_training_copy.py
+4. copy_copy:
+   Mirrors the batch-aware async backfill path in
+   examples/libero/scripts/run_residual_training_copy_copy.py
 
 The environment is synthetic but shaped like LIBERO observations so the
 benchmark still exercises:
@@ -152,6 +155,28 @@ class FakePolicyClient:
         for step_idx in range(int(self.chunk_horizon)):
             action_chunk[step_idx, :] = base_value + float(step_idx) * 0.01
         return action_chunk, {"backend": "fake"}
+
+    def infer_many(
+        self,
+        policy_inputs: Sequence[Any],
+    ) -> tuple[list[np.ndarray], dict[str, Any]]:
+        if self.infer_sec > 0.0:
+            time.sleep(self.infer_sec)
+        action_chunks: list[np.ndarray] = []
+        for policy_input in policy_inputs:
+            state = np.asarray(policy_input.state, dtype=np.float32).reshape(-1)
+            action_chunk = np.zeros(
+                (int(self.chunk_horizon), int(self.action_dim)),
+                dtype=np.float32,
+            )
+            base_value = float(state[0]) if state.size > 0 else 0.0
+            for step_idx in range(int(self.chunk_horizon)):
+                action_chunk[step_idx, :] = base_value + float(step_idx) * 0.01
+            action_chunks.append(action_chunk)
+        return action_chunks, {
+            "backend": "fake",
+            "batch_size": int(len(policy_inputs)),
+        }
 
     def close(self) -> None:
         return
@@ -412,6 +437,47 @@ def _backfill_post_step_residual_obs(
     return base_action_chunks, residual_observations
 
 
+def _backfill_post_step_residual_obs_batch_aware(
+    *,
+    stats: StatsCollector,
+    metric_prefix: str,
+    observations: Sequence[dict[str, Any]],
+    task_prompt: str,
+    policy_client: FakePolicyClient,
+    chunk_horizon: int,
+    image_keys: tuple[str, ...],
+    residual_alpha: float,
+) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
+    if not observations:
+        return [], []
+
+    with stats.context(f"{metric_prefix}.build_policy_input_many"):
+        policy_inputs = [
+            build_libero_policy_input(obs, task_prompt) for obs in observations
+        ]
+    with stats.context(f"{metric_prefix}.policy_infer_many"):
+        action_chunks, _ = policy_client.infer_many(policy_inputs)
+
+    base_action_chunks: list[np.ndarray] = []
+    residual_observations: list[dict[str, np.ndarray]] = []
+    for post_step_obs, raw_actions in zip(observations, action_chunks):
+        with stats.context(f"{metric_prefix}.prepare_base_actions"):
+            base_actions = prepare_base_actions_chunk(
+                base_actions=raw_actions,
+                chunk_horizon=int(chunk_horizon),
+            )
+        with stats.context(f"{metric_prefix}.build_residual_obs"):
+            residual_obs = build_chunk_residual_obs(
+                obs=post_step_obs,
+                base_actions=base_actions,
+                image_keys=image_keys,
+                residual_alpha=float(residual_alpha),
+            )
+        base_action_chunks.append(np.asarray(base_actions, dtype=np.float32))
+        residual_observations.append(residual_obs)
+    return base_action_chunks, residual_observations
+
+
 @dataclass
 class _PendingAsyncChunk:
     chunk_seq: int
@@ -442,12 +508,14 @@ class BenchmarkAsyncChunkAssemblyCoordinator:
         chunk_horizon: int,
         image_keys: tuple[str, ...],
         residual_alpha: float,
+        batch_aware: bool,
     ) -> None:
         self._stats = stats
         self._policy_client = policy_client
         self._chunk_horizon = int(chunk_horizon)
         self._image_keys = tuple(image_keys)
         self._residual_alpha = float(residual_alpha)
+        self._batch_aware = bool(batch_aware)
         self._executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="bench-libero-backfill",
@@ -478,8 +546,13 @@ class BenchmarkAsyncChunkAssemblyCoordinator:
             observations_to_backfill = list(raw.post_step_observations[:-1])
         else:
             observations_to_backfill = list(raw.post_step_observations)
+        backfill_fn = (
+            _backfill_post_step_residual_obs_batch_aware
+            if self._batch_aware
+            else _backfill_post_step_residual_obs
+        )
         backfill_future = self._executor.submit(
-            _backfill_post_step_residual_obs,
+            backfill_fn,
             stats=self._stats,
             metric_prefix="async_backfill",
             observations=observations_to_backfill,
@@ -634,13 +707,14 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
     data_store = FakeDataStore(replay_insert_ms=float(cfg.replay_insert_ms))
 
     async_coord: BenchmarkAsyncChunkAssemblyCoordinator | None = None
-    if variant == "copy_async":
+    if variant in {"copy_async", "copy_copy"}:
         async_coord = BenchmarkAsyncChunkAssemblyCoordinator(
             stats=stats,
             policy_client=backfill_policy_client,
             chunk_horizon=int(cfg.chunk_horizon),
             image_keys=tuple(cfg.image_keys),
             residual_alpha=float(cfg.residual_alpha),
+            batch_aware=bool(variant == "copy_copy"),
         )
 
     env_steps = 0
@@ -675,7 +749,7 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
                 chunk_count += 1
                 with stats.context("total"):
                     with stats.context("sample_actions"):
-                        if variant == "copy_async":
+                        if variant in {"copy_async", "copy_copy"}:
                             decision_obs = _infer_decision_obs(
                                 stats=stats,
                                 metric_prefix="sample_actions.current",
@@ -821,7 +895,7 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
                                 )
                             else:
                                 prefetched = None
-                        elif variant == "copy_async":
+                        elif variant in {"copy_async", "copy_copy"}:
                             next_env_steps = int(env_steps + raw_chunk.executed_steps)
                             expect_tail_handoff = (
                                 not bool(raw_chunk.chunk_done or raw_chunk.chunk_truncated)
@@ -1064,8 +1138,8 @@ def _parse_args() -> BenchmarkConfig:
     parser.add_argument(
         "--variants",
         nargs="+",
-        default=("baseline_step", "copy_sync", "copy_async"),
-        choices=("baseline_step", "copy_sync", "copy_async"),
+        default=("baseline_step", "copy_sync", "copy_async", "copy_copy"),
+        choices=("baseline_step", "copy_sync", "copy_async", "copy_copy"),
         help="Variants to benchmark",
     )
     parser.add_argument(

@@ -3,22 +3,15 @@ from __future__ import annotations
 """Copy-style AgiBot residual DRQ training script."""
 
 from collections import deque
-from concurrent.futures import Future
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 import json
 import logging
 import sys
 import time
 from pathlib import Path
 from threading import Lock
-from types import SimpleNamespace
 from typing import Any
 
 from agentlace.data.data_store import QueuedDataStore
-from agentlace.trainer import TrainerClient
-from agentlace.trainer import TrainerConfig
-from agentlace.trainer import TrainerServer
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import numpy as np
@@ -30,7 +23,8 @@ from serl_launcher.agents.continuous.drq_typed_config import (
 )
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
-from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
+from serl_launcher.common.trainer_transport import build_actor_trainer_transport
+from serl_launcher.common.trainer_transport import build_learner_trainer_transport
 from serl_launcher.common.training_observability import (
     configure_learner_wandb_metrics,
 )
@@ -84,271 +78,10 @@ from serl_torch.examples.agibot_real.transition_assembly import (
     AgiBotTransitionAssembler,
 )
 from serl_torch.examples.agibot_real.transition_assembly import AssemblyResult
-from serl_torch.examples.agibot_real.transition_assembly import (
-    PrefetchedDecisionObs,
-)
 from serl_torch.examples.agibot_real.transition_assembly import RawChunkRecord
-from serl_torch.examples.agibot_real.transition_assembly import (
-    assemble_chunk_step_transitions,
-)
-from serl_torch.examples.agibot_real.transition_assembly import (
-    backfill_post_step_residual_obs,
-)
 from serl_torch.examples.agibot_real.transition_assembly import (
     count_executed_steps_from_infos,
 )
-from serl_torch.examples.agibot_real.transition_assembly import (
-    infer_chunk_residual_obs,
-)
-
-
-@dataclass(frozen=True)
-class _BackfillPolicySettings:
-    enabled: bool
-    host: str
-    port: int
-    max_pending_chunks: int
-    mode: str
-
-
-@dataclass
-class _PendingChunkAssembly:
-    chunk_seq: int
-    raw: RawChunkRecord
-    backfill_future: Future[list[dict[str, np.ndarray]]]
-    expects_tail_handoff: bool
-    tail_next_residual_obs: dict[str, np.ndarray] | None = None
-
-
-def _copy_residual_observation(
-    observation: dict[str, np.ndarray],
-) -> dict[str, np.ndarray]:
-    return {key: np.array(value, copy=True) for key, value in observation.items()}
-
-
-def _build_base_policy_endpoint_cfg(
-    cfg: AgiBotTrainConfig,
-    *,
-    host: str,
-    port: int,
-) -> Any:
-    return SimpleNamespace(
-        policy=SimpleNamespace(
-            type=str(cfg.policy.type),
-            id=getattr(cfg.policy, "id", None),
-            host=str(host),
-            port=int(port),
-        ),
-        env=SimpleNamespace(action_dim=int(cfg.env.action_dim)),
-        residual=SimpleNamespace(chunk_horizon=int(cfg.residual.chunk_horizon)),
-    )
-
-
-def _parse_backfill_policy_settings(
-    *,
-    cfg: AgiBotTrainConfig,
-) -> _BackfillPolicySettings:
-    backfill_cfg = cfg.backfill_policy
-    return _BackfillPolicySettings(
-        enabled=bool(backfill_cfg.enabled),
-        host=str(backfill_cfg.host),
-        port=int(backfill_cfg.port),
-        max_pending_chunks=int(backfill_cfg.max_pending_chunks),
-        mode=str(backfill_cfg.mode),
-    )
-
-
-class _AsyncChunkAssemblyCoordinator:
-    def __init__(
-        self,
-        *,
-        cfg: AgiBotTrainConfig,
-        logger: logging.Logger,
-        settings: _BackfillPolicySettings,
-    ) -> None:
-        self.logger = logger
-        self.image_keys = tuple(cfg.obs.image_keys)
-        self.residual_alpha = float(cfg.residual.alpha)
-        self._assembly_executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="agibot-backfill-assembly",
-        )
-        endpoint_cfg = _build_base_policy_endpoint_cfg(
-            cfg,
-            host=settings.host,
-            port=settings.port,
-        )
-        self._assembly_base_policy = build_agibot_base_policy(
-            endpoint_cfg,
-            logger=logger,
-        )
-        self._pending: dict[int, _PendingChunkAssembly] = {}
-        self._next_submit_chunk_seq = 0
-        self._next_commit_chunk_seq = 0
-
-    @property
-    def pending_count(self) -> int:
-        return len(self._pending)
-
-    @property
-    def next_commit_chunk_seq(self) -> int:
-        return int(self._next_commit_chunk_seq)
-
-    def _backfill_residual_observations(
-        self,
-        *,
-        observations: list[dict[str, Any]],
-        task_prompt: str,
-    ) -> list[dict[str, np.ndarray]]:
-        _base_action_chunks, next_residual_observations = (
-            backfill_post_step_residual_obs(
-                observations=observations,
-                task_prompt=task_prompt,
-                base_policy=self._assembly_base_policy,
-                image_keys=self.image_keys,
-                residual_alpha=self.residual_alpha,
-            )
-        )
-        return next_residual_observations
-
-    def _build_assembly_result(
-        self,
-        *,
-        raw: RawChunkRecord,
-        next_residual_observations: list[dict[str, np.ndarray]],
-    ) -> AssemblyResult:
-        transitions = assemble_chunk_step_transitions(
-            episode_id=int(raw.episode_id),
-            episode_step_start=int(raw.episode_step_start),
-            residual_obs_before_chunk=raw.residual_obs_before_chunk,
-            executed_actions=raw.action_chunk,
-            rewards=raw.rewards,
-            dones=raw.dones,
-            infos=raw.infos,
-            chunk_truncated=bool(raw.chunk_truncated),
-            next_residual_observations=next_residual_observations,
-        )
-        return AssemblyResult(
-            transitions=transitions,
-            prefetched=None,
-            next_obs=dict(raw.final_obs),
-            episode_done=bool(raw.chunk_done or raw.chunk_truncated),
-            env_steps_delta=int(raw.executed_steps),
-            episode_steps_delta=int(raw.executed_steps),
-            episode_return_delta=float(raw.reward_sum),
-            episode_success=any(bool(info.get("success", False)) for info in raw.infos),
-            last_info=dict(raw.chunk_info),
-        )
-
-    def submit_chunk(
-        self,
-        *,
-        raw: RawChunkRecord,
-        task_prompt: str,
-        expect_tail_handoff: bool,
-    ) -> int:
-        chunk_seq = int(self._next_submit_chunk_seq)
-        self._next_submit_chunk_seq += 1
-        observations_to_backfill = (
-            list(raw.post_step_observations[:-1])
-            if bool(expect_tail_handoff)
-            else list(raw.post_step_observations)
-        )
-        backfill_future = self._assembly_executor.submit(
-            self._backfill_residual_observations,
-            observations=observations_to_backfill,
-            task_prompt=task_prompt,
-        )
-        self._pending[chunk_seq] = _PendingChunkAssembly(
-            chunk_seq=chunk_seq,
-            raw=raw,
-            backfill_future=backfill_future,
-            expects_tail_handoff=bool(expect_tail_handoff),
-        )
-        return chunk_seq
-
-    def provide_tail(
-        self,
-        *,
-        chunk_seq: int,
-        decision_obs: PrefetchedDecisionObs,
-    ) -> None:
-        pending = self._pending.get(int(chunk_seq))
-        if pending is None:
-            raise KeyError(f"Unknown pending chunk_seq={chunk_seq}")
-        if not pending.expects_tail_handoff:
-            raise ValueError(f"Chunk {chunk_seq} does not expect a tail handoff")
-        if pending.tail_next_residual_obs is not None:
-            raise ValueError(f"Chunk {chunk_seq} tail handoff already provided")
-        pending.tail_next_residual_obs = _copy_residual_observation(
-            decision_obs.residual_obs
-        )
-
-    def finalize_tail_with_fallback(
-        self,
-        *,
-        chunk_seq: int,
-        task_prompt: str,
-    ) -> None:
-        pending = self._pending.get(int(chunk_seq))
-        if pending is None or not pending.expects_tail_handoff:
-            return
-        if pending.tail_next_residual_obs is not None:
-            return
-        _tail_base_actions, tail_residual_obs = infer_chunk_residual_obs(
-            obs=pending.raw.final_obs,
-            task_prompt=task_prompt,
-            base_policy=self._assembly_base_policy,
-            image_keys=self.image_keys,
-            residual_alpha=self.residual_alpha,
-        )
-        pending.tail_next_residual_obs = tail_residual_obs
-
-    def pop_committable(
-        self,
-        *,
-        block_until_seq: int | None = None,
-    ) -> list[AssemblyResult]:
-        assembled_chunks: list[AssemblyResult] = []
-        while int(self._next_commit_chunk_seq) in self._pending:
-            next_seq = int(self._next_commit_chunk_seq)
-            pending = self._pending[next_seq]
-            if block_until_seq is not None and next_seq <= int(block_until_seq):
-                next_residual_observations = pending.backfill_future.result()
-            elif pending.backfill_future.done():
-                next_residual_observations = pending.backfill_future.result()
-            else:
-                break
-            if pending.expects_tail_handoff:
-                if pending.tail_next_residual_obs is None:
-                    if block_until_seq is not None and next_seq <= int(block_until_seq):
-                        raise RuntimeError(
-                            f"Chunk {next_seq} is missing tail handoff during blocking commit"
-                        )
-                    break
-                next_residual_observations = list(next_residual_observations) + [
-                    _copy_residual_observation(pending.tail_next_residual_obs)
-                ]
-            assembled_chunk = self._build_assembly_result(
-                raw=pending.raw,
-                next_residual_observations=next_residual_observations,
-            )
-            assembled_chunks.append(assembled_chunk)
-            self._pending.pop(next_seq, None)
-            self._next_commit_chunk_seq += 1
-        return assembled_chunks
-
-    def close(self) -> None:
-        self._assembly_executor.shutdown(wait=True, cancel_futures=False)
-        close_fn = getattr(self._assembly_base_policy, "close", None)
-        if callable(close_fn):
-            try:
-                close_fn()
-            except Exception:  # noqa: BLE001
-                self.logger.debug(
-                    "ignored backfill base policy close error",
-                    exc_info=True,
-                )
 
 
 def actor(
@@ -365,31 +98,19 @@ def actor(
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
-    residual_alpha = residual_action_spec.alpha
     transition_assembler = AgiBotTransitionAssembler(
-        base_policy=base_policy,
-        image_keys=image_keys,
-        residual_alpha=residual_alpha,
-    )
-    # Copy actor dataflow:
-    # chunk execute -> post-hoc step transition assembly -> step-window replay.
-    # Replay still stores per-step transitions; this is not direct chunk replay.
-    backfill_policy_settings = _parse_backfill_policy_settings(
         cfg=cfg,
+        base_policy=base_policy,
+        logger=logger,
     )
-    async_backfill: _AsyncChunkAssemblyCoordinator | None = None
-    if backfill_policy_settings.enabled:
-        async_backfill = _AsyncChunkAssemblyCoordinator(
-            cfg=cfg,
-            logger=logger,
-            settings=backfill_policy_settings,
-        )
+
+    if transition_assembler.async_backfill_enabled:
         logger.info(
             "Async backfill enabled: mode=%s endpoint=%s:%s max_pending_chunks=%s",
-            backfill_policy_settings.mode,
-            backfill_policy_settings.host,
-            int(backfill_policy_settings.port),
-            int(backfill_policy_settings.max_pending_chunks),
+            str(cfg.backfill_policy.mode),
+            str(cfg.backfill_policy.host),
+            int(cfg.backfill_policy.port),
+            int(cfg.backfill_policy.max_pending_chunks),
         )
 
     sample_obs = build_chunk_residual_sample_obs(
@@ -405,6 +126,7 @@ def actor(
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
+
     if bool(cfg.training.torch_compile.enabled):
         logger.info(
             "training.torch_compile.enabled=true is ignored on actor; compile applies "
@@ -412,16 +134,16 @@ def actor(
         )
 
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
-    client = TrainerClient(
-        "actor_env",
-        cfg.runtime.trainer_host,
-        TrainerConfig(  # pyright: ignore[reportCallIssue]
-            port_number=cfg.runtime.trainer_port,
-            broadcast_port=cfg.runtime.broadcast_port,
-            request_types=["send-stats"],
-        ),
-        data_store,
+    client = build_actor_trainer_transport(
+        store_name="actor_env",
+        server_ip=cfg.runtime.trainer_host,
+        trainer_port=cfg.runtime.trainer_port,
+        broadcast_port=cfg.runtime.broadcast_port,
+        transport_cfg=cfg.runtime.trainer_transport,
+        data_store=data_store,
+        request_types=("send-stats",),
         wait_for_server=True,
+        log_level=logger.level,
     )
 
     def update_actor(payload: dict[str, Any]) -> None:
@@ -456,12 +178,103 @@ def actor(
     summary: dict[str, Any] = {
         "role": "actor",
         "mode": "residual",
+        "transport_mode": str(cfg.runtime.trainer_transport.mode),
         "env_steps": 0,
         "episodes": 0,
         "successes": 0,
         "timer_log_path": str(actor_timer_log_path),
         "episode_log_path": str(rollout_log_path),
     }
+
+    def _transport_status() -> dict[str, Any]:
+        try:
+            return dict(client.get_transport_status("actor_env"))
+        except Exception:  # noqa: BLE001
+            return {"transport_mode": str(cfg.runtime.trainer_transport.mode)}
+
+    consecutive_update_failures = 0
+    consecutive_stats_failures = 0
+
+    def _update_trainer_transport(*, context: str) -> bool:
+        nonlocal consecutive_update_failures
+        ok = bool(client.update())
+        if ok:
+            consecutive_update_failures = 0
+            return True
+        consecutive_update_failures += 1
+        logger.warning(
+            "trainer transport update failed: context=%s consecutive_failures=%s status=%s",
+            str(context),
+            int(consecutive_update_failures),
+            _transport_status(),
+        )
+        if int(consecutive_update_failures) >= 5:
+            raise RuntimeError(
+                "trainer transport update failed repeatedly; aborting actor run"
+            )
+        return False
+
+    def _send_rollout_stats(*, payload: dict[str, Any]) -> None:
+        nonlocal consecutive_stats_failures
+        response = client.request("send-stats", payload)
+        if response is not None:
+            consecutive_stats_failures = 0
+            return
+        consecutive_stats_failures += 1
+        logger.warning(
+            "trainer transport send-stats failed: consecutive_failures=%s status=%s",
+            int(consecutive_stats_failures),
+            _transport_status(),
+        )
+
+    wait_for_episode_commit = bool(
+        cfg.runtime.trainer_transport.wait_committed_on_episode_end
+    )
+    current_task_prompt: str | None = None
+    pending_last_transition: dict[str, Any] | None = None
+
+    def _flush_pending_last_transition() -> None:
+        nonlocal pending_last_transition
+        if pending_last_transition is None:
+            return
+        data_store.insert(pending_last_transition)
+        pending_last_transition = None
+
+    def _finalize_pending_last_transition(
+        *,
+        terminal_reward: float,
+        boundary_flag: bool,
+    ) -> None:
+        nonlocal pending_last_transition
+        if pending_last_transition is None:
+            return
+        pending_last_transition["rewards"] = float(
+            pending_last_transition["rewards"]
+        ) + float(terminal_reward)
+        pending_last_transition["dones"] = bool(boundary_flag)
+        pending_last_transition["masks"] = 0.0
+        data_store.insert(pending_last_transition)
+        pending_last_transition = None
+
+    def _commit_assembled_chunks(assembled_chunks: list[AssemblyResult]) -> None:
+        nonlocal committed_env_steps
+        nonlocal pending_last_transition
+        for assembled_chunk in assembled_chunks:
+            _flush_pending_last_transition()
+            if bool(assembled_chunk.episode_done):
+                transitions_to_insert = assembled_chunk.transitions
+            else:
+                transitions_to_insert = assembled_chunk.transitions[:-1]
+                pending_last_transition = assembled_chunk.transitions[-1]
+            for transition in transitions_to_insert:
+                data_store.insert(transition)
+            for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
+                next_committed_env_step = int(committed_env_steps + step_offset)
+                if next_committed_env_step % steps_per_update == 0:
+                    _update_trainer_transport(
+                        context=f"commit_step_{int(next_committed_env_step)}"
+                    )
+            committed_env_steps += int(assembled_chunk.env_steps_delta)
 
     progress_bar = tqdm(
         total=int(max_env_steps),
@@ -484,97 +297,30 @@ def actor(
                 with timer.context("reset_env"):
                     obs = dict(env.reset())
                 task_prompt = str(env.task_description)
+            current_task_prompt = str(task_prompt)
 
-            prefetched: PrefetchedDecisionObs | None = None
-            pending_last_transition: dict[str, Any] | None = None
-            last_submitted_chunk_seq: int | None = None
-            pending_tail_chunk_seq: int | None = None
+            pending_last_transition = None
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
 
-            def _flush_pending_last_transition() -> None:
-                nonlocal pending_last_transition
-                if pending_last_transition is None:
-                    return
-                data_store.insert(pending_last_transition)
-                pending_last_transition = None
-
-            def _finalize_pending_last_transition(
-                *,
-                terminal_reward: float,
-                boundary_flag: bool,
-            ) -> None:
-                nonlocal pending_last_transition
-                if pending_last_transition is None:
-                    return
-                pending_last_transition["rewards"] = float(
-                    pending_last_transition["rewards"]
-                ) + float(terminal_reward)
-                pending_last_transition["dones"] = bool(boundary_flag)
-                pending_last_transition["masks"] = 0.0
-                data_store.insert(pending_last_transition)
-                pending_last_transition = None
-
-            def _commit_assembled_chunks(*, block_until_seq: int | None = None) -> None:
-                nonlocal committed_env_steps
-                nonlocal pending_last_transition
-                if async_backfill is None:
-                    return
-                assembled_chunks = async_backfill.pop_committable(
-                    block_until_seq=block_until_seq
-                )
-                for assembled_chunk in assembled_chunks:
-                    _flush_pending_last_transition()
-                    if bool(assembled_chunk.episode_done):
-                        transitions_to_insert = assembled_chunk.transitions
-                    else:
-                        transitions_to_insert = assembled_chunk.transitions[:-1]
-                        pending_last_transition = assembled_chunk.transitions[-1]
-                    for transition in transitions_to_insert:
-                        data_store.insert(transition)
-                    for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
-                        next_committed_env_step = int(committed_env_steps + step_offset)
-                        if next_committed_env_step % steps_per_update == 0:
-                            client.update()
-                    committed_env_steps += int(assembled_chunk.env_steps_delta)
-
             while env_steps < max_env_steps:
-                _commit_assembled_chunks()
+                if transition_assembler.async_backfill_enabled:
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(transition_assembler.drain_ready())
                 timer.tick("total")
                 with timer.context("sample_actions"):
-                    if async_backfill is not None:
-                        decision_obs = transition_assembler.infer_decision_obs(
-                            obs=obs,
-                            task_prompt=task_prompt,
-                        )
-                        if pending_tail_chunk_seq is not None:
-                            async_backfill.provide_tail(
-                                chunk_seq=int(pending_tail_chunk_seq),
-                                decision_obs=decision_obs,
-                            )
-                            pending_tail_chunk_seq = None
-                        base_actions = decision_obs.base_actions
-                        residual_obs = decision_obs.residual_obs
-                    elif prefetched is None:
-                        decision_obs = transition_assembler.infer_decision_obs(
-                            obs=obs,
-                            task_prompt=task_prompt,
-                        )
-                        base_actions = decision_obs.base_actions
-                        residual_obs = decision_obs.residual_obs
-                    else:
-                        base_actions = prefetched.base_actions
-                        residual_obs = prefetched.residual_obs
-                        prefetched = None
-
+                    decision_obs = transition_assembler.next_decision_obs(
+                        obs=obs,
+                        task_prompt=task_prompt,
+                    )
                     residual_actions = agent.sample_action(
-                        residual_obs,
+                        decision_obs.residual_obs,
                         deterministic=False,
                     )
                     final_actions = residual_action_spec.compose_chunk(
-                        base_action_chunk=base_actions,
+                        base_action_chunk=decision_obs.base_actions,
                         residual_action=residual_actions,
                     )
 
@@ -603,11 +349,13 @@ def actor(
                         raise RuntimeError(
                             "step_chunk returned no executed actions without a terminal outcome"
                         )
-                    if async_backfill is not None and last_submitted_chunk_seq is not None:
-                        with timer.context("commit_replay"):
-                            _commit_assembled_chunks(
-                                block_until_seq=int(last_submitted_chunk_seq)
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(
+                            transition_assembler.finish_episode(
+                                task_prompt=task_prompt,
+                                block=bool(wait_for_episode_commit),
                             )
+                        )
                     _finalize_pending_last_transition(
                         terminal_reward=float(chunk_result["reward_sum"]),
                         boundary_flag=bool(
@@ -618,7 +366,6 @@ def actor(
                     episode_success = bool(
                         episode_success or chunk_result["info"].get("success", False)
                     )
-                    prefetched = None
                     episode_done = True
                     timer.tock("total")
                     if should_log_timer:
@@ -630,6 +377,7 @@ def actor(
                                 "episode_id": int(episode_id),
                                 "episode_steps": int(episode_steps),
                                 "timer": timer.get_average_times(),
+                                "transport": _transport_status(),
                             },
                         )
                     break
@@ -637,92 +385,45 @@ def actor(
                 raw_chunk = RawChunkRecord.from_step_chunk_result(
                     episode_id=int(episode_id),
                     episode_step_start=int(episode_steps),
-                    residual_obs_before_chunk=residual_obs,
+                    residual_obs_before_chunk=decision_obs.residual_obs,
                     action_chunk=action_chunk,
                     chunk_result=chunk_result,
                 )
-                if async_backfill is None:
-                    with timer.context("build_decision_obs"):
-                        assembled_chunk = transition_assembler.process_chunk(
-                            raw=raw_chunk,
-                            task_prompt=task_prompt,
-                        )
-
-                    _flush_pending_last_transition()
-                    if bool(assembled_chunk.episode_done):
-                        transitions_to_insert = assembled_chunk.transitions
-                        prefetched = None
-                    else:
-                        transitions_to_insert = assembled_chunk.transitions[:-1]
-                        pending_last_transition = assembled_chunk.transitions[-1]
-                        prefetched = assembled_chunk.prefetched
-                    for transition in transitions_to_insert:
-                        data_store.insert(transition)
-
-                    for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
-                        next_env_step = int(env_steps + step_offset)
-                        if next_env_step % steps_per_update == 0:
-                            client.update()
-                        if next_env_step % log_period == 0:
-                            should_log_timer = True
-
-                    last_info = dict(assembled_chunk.last_info)
-                    env_steps += int(assembled_chunk.env_steps_delta)
-                    progress_bar.update(int(assembled_chunk.env_steps_delta))
-                    episode_steps += int(assembled_chunk.episode_steps_delta)
-                    episode_return += float(assembled_chunk.episode_return_delta)
-                    episode_success = bool(
-                        episode_success or assembled_chunk.episode_success
+                previous_env_steps = int(env_steps)
+                with timer.context("build_decision_obs"):
+                    assembled_chunks = transition_assembler.handle_chunk(
+                        raw=raw_chunk,
+                        task_prompt=task_prompt,
+                        env_steps=int(env_steps),
+                        max_env_steps=int(max_env_steps),
                     )
-                    obs = dict(assembled_chunk.next_obs)
-                    episode_done = bool(assembled_chunk.episode_done)
+
+                env_steps += int(raw_chunk.executed_steps)
+                progress_bar.update(int(raw_chunk.executed_steps))
+                episode_steps += int(raw_chunk.executed_steps)
+                episode_return += float(raw_chunk.reward_sum)
+                episode_success = bool(
+                    episode_success
+                    or any(bool(info.get("success", False)) for info in raw_chunk.infos)
+                )
+                last_info = dict(raw_chunk.chunk_info)
+                obs = dict(raw_chunk.final_obs)
+
+                for step_offset in range(1, int(raw_chunk.executed_steps) + 1):
+                    next_env_step = int(previous_env_steps + step_offset)
+                    if next_env_step % log_period == 0:
+                        should_log_timer = True
+
+                if transition_assembler.async_backfill_enabled:
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(assembled_chunks)
                 else:
-                    next_env_steps = int(env_steps + raw_chunk.executed_steps)
-                    expect_tail_handoff = (
-                        not bool(raw_chunk.chunk_done or raw_chunk.chunk_truncated)
-                        and next_env_steps < int(max_env_steps)
-                    )
-                    with timer.context("build_decision_obs"):
-                        last_submitted_chunk_seq = async_backfill.submit_chunk(
-                            raw=raw_chunk,
-                            task_prompt=task_prompt,
-                            expect_tail_handoff=expect_tail_handoff,
-                        )
-                    pending_tail_chunk_seq = (
-                        int(last_submitted_chunk_seq) if expect_tail_handoff else None
-                    )
+                    _commit_assembled_chunks(assembled_chunks)
 
-                    env_steps += int(raw_chunk.executed_steps)
-                    progress_bar.update(int(raw_chunk.executed_steps))
-                    episode_steps += int(raw_chunk.executed_steps)
-                    episode_return += float(raw_chunk.reward_sum)
-                    episode_success = bool(
-                        episode_success
-                        or any(bool(info.get("success", False)) for info in raw_chunk.infos)
-                    )
-                    last_info = dict(raw_chunk.chunk_info)
-                    obs = dict(raw_chunk.final_obs)
-                    episode_done = bool(raw_chunk.chunk_done or raw_chunk.chunk_truncated)
-                    prefetched = None
-
-                    for step_offset in range(1, int(raw_chunk.executed_steps) + 1):
-                        next_env_step = int(
-                            env_steps - int(raw_chunk.executed_steps) + step_offset
-                        )
-                        if next_env_step % log_period == 0:
-                            should_log_timer = True
-
-                    _commit_assembled_chunks()
-                    while (
-                        async_backfill.pending_count
-                        > int(backfill_policy_settings.max_pending_chunks)
-                    ):
-                        with timer.context("commit_replay"):
-                            _commit_assembled_chunks(
-                                block_until_seq=async_backfill.next_commit_chunk_seq
-                            )
-
-                if bool(chunk_result["done"] or chunk_result["truncated"]) or env_steps >= max_env_steps:
+                if (
+                    bool(chunk_result["done"] or chunk_result["truncated"])
+                    or env_steps >= max_env_steps
+                ):
                     episode_done = True
 
                 timer.tock("total")
@@ -736,21 +437,16 @@ def actor(
                             "episode_id": int(episode_id),
                             "episode_steps": int(episode_steps),
                             "timer": timer.get_average_times(),
+                            "transport": _transport_status(),
                         },
                     )
 
                 if episode_done:
                     break
 
-            if async_backfill is not None and pending_tail_chunk_seq is not None:
-                async_backfill.finalize_tail_with_fallback(
-                    chunk_seq=int(pending_tail_chunk_seq),
-                    task_prompt=task_prompt,
-                )
-                pending_tail_chunk_seq = None
             next_reset_error: Exception | None = None
             should_prefetch_next_reset = bool(
-                async_backfill is not None
+                transition_assembler.async_backfill_enabled
                 and supports_staged_reset
                 and env_steps < max_env_steps
                 and episode_id < max_episodes
@@ -762,11 +458,22 @@ def actor(
                         prepare_episode_reset_fn()
                 except Exception as exc:  # noqa: BLE001
                     next_reset_error = exc
-            if async_backfill is not None and last_submitted_chunk_seq is not None:
+            if transition_assembler.async_backfill_enabled:
                 with timer.context("commit_replay"):
-                    _commit_assembled_chunks(block_until_seq=last_submitted_chunk_seq)
+                    _commit_assembled_chunks(
+                        transition_assembler.finish_episode(
+                            task_prompt=task_prompt,
+                            block=bool(wait_for_episode_commit),
+                        )
+                    )
+            else:
+                _commit_assembled_chunks(
+                    transition_assembler.finish_episode(
+                        task_prompt=task_prompt,
+                    )
+                )
             _flush_pending_last_transition()
-            client.update()
+            _update_trainer_transport(context="episode_end")
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
             recent_success_rate_20 = float(sum(recent_episode_successes)) / float(
@@ -792,9 +499,12 @@ def actor(
                 {
                     "source": "rollout",
                     **episode_stats,
+                    "transport": _transport_status(),
                 },
             )
-            client.request("send-stats", episode_stats)
+            if wait_for_episode_commit:
+                client.wait_until_committed()
+            _send_rollout_stats(payload=episode_stats)
             progress_bar.set_postfix(
                 episode=int(episode_id),
                 success=int(bool(episode_success)),
@@ -813,19 +523,36 @@ def actor(
             )
 
     finally:
+        if current_task_prompt is not None:
+            try:
+                _commit_assembled_chunks(
+                    transition_assembler.finish_episode(
+                        task_prompt=current_task_prompt,
+                        block=True,
+                    )
+                )
+                _flush_pending_last_transition()
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "ignored final actor replay flush error",
+                    exc_info=True,
+                )
+        try:
+            _update_trainer_transport(context="shutdown")
+            if bool(cfg.runtime.trainer_transport.wait_committed_on_shutdown):
+                client.wait_until_committed()
+        except Exception:  # noqa: BLE001
+            pass
         summary.update(
             {
                 "env_steps": int(env_steps),
                 "episodes": int(episode_id),
                 "successes": int(success_count),
+                "transport": _transport_status(),
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2, ensure_ascii=False)
-        try:
-            client.update()
-        except Exception:  # noqa: BLE001
-            pass
         try:
             progress_bar.close()
         except Exception:  # noqa: BLE001
@@ -838,8 +565,14 @@ def actor(
             base_policy.close()
         except Exception:  # noqa: BLE001
             pass
-        if async_backfill is not None:
-            async_backfill.close()
+        try:
+            transition_assembler.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            client.stop()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -922,11 +655,37 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     summary: dict[str, Any] = {
         "role": "learner",
         "mode": "residual",
+        "transport_mode": str(cfg.runtime.trainer_transport.mode),
         "update_steps": 0,
         "env_steps": 0,
         "replay_size": 0,
         "timer_log_path": str(learner_timer_log_path),
     }
+
+    def _transport_status() -> dict[str, Any]:
+        try:
+            return dict(server.get_transport_status("actor_env"))
+        except Exception:  # noqa: BLE001
+            return {"transport_mode": str(cfg.runtime.trainer_transport.mode)}
+
+    def _committed_online_steps() -> int:
+        return int(replay_buffer.latest_data_id())
+
+    def _should_stop_after_actor_done(*, online_update_steps: int) -> bool:
+        if int(env_steps) < int(cfg.training.max_env_steps):
+            return False
+        committed_online_steps = int(_committed_online_steps())
+        if int(online_update_steps) < int(committed_online_steps):
+            return False
+        transport_status = _transport_status()
+        accepted = int(transport_status.get("accepted_update_id", -1))
+        committed = int(transport_status.get("committed_update_id", -1))
+        target_last_online_id = max(0, int(env_steps) - 1)
+        if accepted < int(target_last_online_id) or committed < int(target_last_online_id):
+            return False
+        if accepted >= 0 and committed >= 0 and accepted > committed:
+            return False
+        return True
 
     def stats_callback(request_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal env_steps
@@ -951,13 +710,13 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             wandb_logger.log(to_jsonable(rollout_metrics))
         return {}
 
-    server = TrainerServer(
-        TrainerConfig(  # pyright: ignore[reportCallIssue]
-            port_number=cfg.runtime.trainer_port,
-            broadcast_port=cfg.runtime.broadcast_port,
-            request_types=["send-stats"],
-        ),
+    server = build_learner_trainer_transport(
+        trainer_port=cfg.runtime.trainer_port,
+        broadcast_port=cfg.runtime.broadcast_port,
+        transport_cfg=cfg.runtime.trainer_transport,
         request_callback=stats_callback,
+        request_types=("send-stats",),
+        log_level=logger.level,
     )
     server.register_data_store("actor_env", replay_buffer)
     server.start(threaded=True)
@@ -1148,10 +907,20 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             int(env_steps),
         )
 
+    interrupted = False
     try:
         while update_steps < max_update_steps:
             online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
-            if not online_update_steps < env_steps:
+            if _should_stop_after_actor_done(online_update_steps=int(online_update_steps)):
+                logger.info(
+                    "stopping learner after actor env limit: update_steps=%s env_steps=%s replay_size=%s transport=%s",
+                    int(update_steps),
+                    int(env_steps),
+                    int(len(replay_buffer)),
+                    _transport_status(),
+                )
+                break
+            if not online_update_steps < _committed_online_steps():
                 time.sleep(idle_poll_interval_sec)
                 continue
 
@@ -1191,6 +960,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         "replay_size": int(len(replay_buffer)),
                         "updates_per_sec": float(updates_per_sec),
                         "timer": timer_metrics,
+                        "transport": _transport_status(),
                     },
                 )
                 offline_suffix = ""
@@ -1235,6 +1005,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                     int(env_steps),
                     checkpoint_path,
                 )
+    except KeyboardInterrupt:
+        interrupted = True
+        logger.info("learner interrupted; shutting down gracefully")
 
     finally:
         with progress_state_lock:
@@ -1245,6 +1018,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                 "env_steps": int(env_steps),
                 "replay_size": int(len(replay_buffer)),
                 "last_completed_episode_id": int(summary_last_completed_episode_id),
+                "transport": _transport_status(),
                 "offline": {
                     "enabled": bool(cfg.offline.enabled),
                     "ratio": float(cfg.offline.ratio),
@@ -1285,12 +1059,14 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             server.stop()
         except Exception:  # noqa: BLE001
             pass
+    if interrupted:
+        return
 
 
 @hydra.main(
     version_base=None,
     config_path="../configs",
-    config_name="train_residual",
+    config_name="train_residual_copy",
 )
 def main(cfg: DictConfig) -> None:
     typed_cfg = parse_train_cfg(cfg)

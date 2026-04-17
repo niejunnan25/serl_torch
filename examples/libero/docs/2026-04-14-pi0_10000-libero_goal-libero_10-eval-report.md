@@ -6,9 +6,9 @@
 
 - 策略名称: `pi0_10000`
 - GPU: `1`
-- Policy script: `/vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/serve_openpi_10000_policy.sh`
+- Policy script: `/home/hello/codebase/serl_torch/examples/libero/tools/serve_openpi_10000_policy.sh`
 - Policy port: `42001`
-- 结果目录: `/vla/users/niejunnan/codebase/serl_torch/outputs/openpi_libero_eval/2026-04-13_23-52-56_goal10_gpu1_gpu2/pi0_10000`
+- 结果目录: `/home/hello/codebase/serl_torch/outputs/openpi_libero_eval/2026-04-13_23-52-56_goal10_gpu1_gpu2/pi0_10000`
 - 套件数: `2`
 - 套件列表: `libero_goal, libero_10`
 

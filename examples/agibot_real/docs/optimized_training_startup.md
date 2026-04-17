@@ -71,7 +71,7 @@ python scripts/run_residual_training_copy.py ...
 ### 1. 启动 JoyRA server
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 JOYRA_ROOT=/path/to/JoyRA \
 JOYRA_CKPT_PATH=/path/to/checkpoints/steps_xxx.pt \
 bash tools/serve_joyra.sh --port 9001
@@ -80,14 +80,14 @@ bash tools/serve_joyra.sh --port 9001
 ### 2. 启动 robot-service
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
 ### 3. 启动 learner
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
   runtime.role=learner
@@ -104,7 +104,7 @@ training.max_update_steps=300000 training.checkpoint.dir=checkpoints
 actor 终端先准备真机环境：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 ```
 
@@ -123,7 +123,7 @@ python scripts/run_residual_training_copy.py \
 ### 1. 启动 OpenPI server
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 OPENPI_ROOT=/path/to/openpi \
 POLICY_DIR=/path/to/policy/checkpoint \
 bash tools/serve_openpi.sh --port 30001
@@ -132,14 +132,14 @@ bash tools/serve_openpi.sh --port 30001
 ### 2. 启动 robot-service
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
 ### 3. 启动 learner
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
   runtime.role=learner \
@@ -151,7 +151,7 @@ python scripts/run_residual_training_copy.py \
 ### 4. 启动 actor
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
@@ -198,7 +198,7 @@ task.name=agibot_real_default task.prompt='Pick up the object with the right han
 终端 1，主 JoyRA policy：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 JOYRA_ROOT=/path/to/JoyRA \
 JOYRA_CKPT_PATH=/path/to/checkpoints/steps_xxx.pt \
 bash tools/serve_joyra.sh --port 9001
@@ -207,7 +207,7 @@ bash tools/serve_joyra.sh --port 9001
 终端 2，backfill JoyRA policy：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 JOYRA_ROOT=/path/to/JoyRA \
 JOYRA_CKPT_PATH=/path/to/checkpoints/steps_xxx.pt \
 bash tools/serve_joyra.sh --port 9011
@@ -216,14 +216,14 @@ bash tools/serve_joyra.sh --port 9011
 终端 3，robot-service：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
 终端 4，learner：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
   runtime.role=learner
@@ -232,7 +232,7 @@ python scripts/run_residual_training_copy.py \
 终端 5，actor：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
@@ -253,7 +253,7 @@ python scripts/run_residual_training_copy.py \
 终端 1，主 OpenPI policy：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 OPENPI_ROOT=/path/to/openpi \
 POLICY_DIR=/path/to/policy/checkpoint \
 bash tools/serve_openpi.sh --port 30001
@@ -262,7 +262,7 @@ bash tools/serve_openpi.sh --port 30001
 终端 2，backfill OpenPI policy：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 OPENPI_ROOT=/path/to/openpi \
 POLICY_DIR=/path/to/policy/checkpoint \
 bash tools/serve_openpi.sh --port 30011
@@ -271,14 +271,14 @@ bash tools/serve_openpi.sh --port 30011
 终端 3，robot-service：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
 终端 4，learner：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
   runtime.role=learner \
@@ -290,7 +290,7 @@ python scripts/run_residual_training_copy.py \
 终端 5，actor：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
@@ -311,7 +311,7 @@ python scripts/run_residual_training_copy.py \
 终端 1，policy server：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 JOYRA_ROOT=/path/to/JoyRA \
 JOYRA_CKPT_PATH=/path/to/checkpoints/steps_xxx.pt \
 bash tools/serve_joyra.sh --port 9001
@@ -320,14 +320,14 @@ bash tools/serve_joyra.sh --port 9001
 终端 2，robot-service：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
 终端 3，learner：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \
   runtime.role=learner
@@ -336,7 +336,7 @@ python scripts/run_residual_training_copy.py \
 终端 4，actor：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 python scripts/run_residual_training_copy.py \
   --config-name train_residual_optimized \

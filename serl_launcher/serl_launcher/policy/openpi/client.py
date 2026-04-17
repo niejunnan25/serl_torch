@@ -5,11 +5,17 @@ import inspect
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from serl_launcher.policy.base import coerce_action_chunk, PolicyInferInfo, PolicyInput
+from serl_launcher.policy.base import (
+    coerce_action_chunk,
+    PolicyBatchInferResult,
+    PolicyInferInfo,
+    PolicyInput,
+)
+from serl_launcher.policy.openpi.request_builder import build_openpi_batch_request
 from serl_launcher.policy.openpi.request_builder import build_openpi_request
 
 
@@ -98,24 +104,18 @@ class OpenPIPolicyClient:
     def _is_retryable_connection_error(self, err: BaseException) -> bool:
         return isinstance(err, (self._websocket_connection_closed_error, OSError))
 
-    def infer(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
-        send_data = build_openpi_request(policy_input)
+    def _send_request_with_retry(
+        self,
+        *,
+        send_data: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], float]:
         for attempt_idx in range(self._reconnect_retry_count + 1):
             try:
                 start = time.time()
                 with self._client_lock:
                     pred = self._client.infer(send_data)
                 e2e_ms = (time.time() - start) * 1000.0
-                chunk = coerce_action_chunk(
-                    pred["actions"],
-                    action_dim=self._action_dim,
-                )
-                info: PolicyInferInfo = {
-                    "e2e_ms": float(e2e_ms),
-                    "policy_ms": maybe_get_policy_infer_ms(pred),
-                    "server_ms": maybe_get_server_infer_ms(pred),
-                }
-                return chunk, info
+                return pred, float(e2e_ms)
             except Exception as err:
                 can_retry = (
                     self._is_retryable_connection_error(err)
@@ -136,6 +136,70 @@ class OpenPIPolicyClient:
 
         raise RuntimeError("OpenPI infer retry loop exited unexpectedly.")
 
+    def infer(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
+        pred, e2e_ms = self._send_request_with_retry(
+            send_data=build_openpi_request(policy_input)
+        )
+        chunk = coerce_action_chunk(
+            pred["actions"],
+            action_dim=self._action_dim,
+        )
+        info: PolicyInferInfo = {
+            "e2e_ms": float(e2e_ms),
+            "policy_ms": maybe_get_policy_infer_ms(pred),
+            "server_ms": maybe_get_server_infer_ms(pred),
+            "server_action_dim": int(np.asarray(pred["actions"]).shape[-1]),
+        }
+        if self._action_dim is not None:
+            info["used_action_dim"] = int(self._action_dim)
+        if "batch_size" in pred:
+            info["batch_size"] = int(pred["batch_size"])
+        return chunk, info
+
+    def infer_many(
+        self,
+        policy_inputs: Sequence[PolicyInput],
+    ) -> PolicyBatchInferResult:
+        if not policy_inputs:
+            raise ValueError("policy_inputs must be non-empty for OpenPI batch infer")
+        pred, e2e_ms = self._send_request_with_retry(
+            send_data=build_openpi_batch_request(policy_inputs)
+        )
+        raw_actions = np.asarray(pred["actions"], dtype=np.float32)
+        if raw_actions.ndim == 2:
+            raw_actions = np.expand_dims(raw_actions, axis=0)
+        if raw_actions.ndim != 3:
+            raise ValueError(
+                f"Expected OpenPI batch actions to be rank-3, got {raw_actions.shape}"
+            )
+        expected_batch_size = len(policy_inputs)
+        if int(raw_actions.shape[0]) != expected_batch_size:
+            raise ValueError(
+                "OpenPI batch response size does not match request size: "
+                f"expected={expected_batch_size} got={int(raw_actions.shape[0])}"
+            )
+        chunks = [
+            coerce_action_chunk(raw_actions[idx], action_dim=self._action_dim)
+            for idx in range(expected_batch_size)
+        ]
+        info: PolicyInferInfo = {
+            "e2e_ms": float(e2e_ms),
+            "policy_ms": maybe_get_policy_infer_ms(pred),
+            "server_ms": maybe_get_server_infer_ms(pred),
+            "server_action_dim": int(raw_actions.shape[-1]),
+            "batch_size": expected_batch_size,
+        }
+        if self._action_dim is not None:
+            info["used_action_dim"] = int(self._action_dim)
+        if "batch_size" in pred:
+            info["server_batch_size"] = int(pred["batch_size"])
+        return chunks, info
+
     def infer_chunk(self, policy_input: PolicyInput) -> Tuple[np.ndarray, PolicyInferInfo]:
         """Backward-compatible alias for older call sites."""
         return self.infer(policy_input)
+
+    def close(self) -> None:
+        close_fn = getattr(self._client, "close", None)
+        if callable(close_fn):
+            close_fn()

@@ -11,7 +11,7 @@ CACHE_ITEMS=("uv" "huggingface")
 usage() {
   cat <<EOF
 Usage:
-  bash /vla/users/niejunnan/codebase/serl_torch/examples/libero/tools/${SCRIPT_NAME} [copy|link|all]
+  bash /home/hello/codebase/serl_torch/examples/libero/tools/${SCRIPT_NAME} [copy|link|all]
 
 Modes:
   copy  Copy current user's caches from ${USER_CACHE_ROOT} to ${SHARED_CACHE_ROOT}

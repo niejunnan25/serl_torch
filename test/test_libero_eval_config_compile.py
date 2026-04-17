@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+import sys
 
 from omegaconf import OmegaConf
+
+REPO_PARENT = Path(__file__).resolve().parents[2]
+SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[1] / "serl_launcher"
+for candidate in (REPO_PARENT, SERL_LAUNCHER_ROOT):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
 
 from serl_torch.examples.libero.config import EvalConfig
 from serl_torch.examples.libero.config import parse_train_cfg

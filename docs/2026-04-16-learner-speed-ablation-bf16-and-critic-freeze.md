@@ -1659,7 +1659,7 @@ fp32 对照：
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate /vla/miniconda3/envs/serl_torch
 
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0
 
 python examples/libero/scripts/run_residual_training.py \
@@ -1683,7 +1683,7 @@ bf16 对照：
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate /vla/miniconda3/envs/serl_torch
 
-export PYTHONPATH=/vla/users/niejunnan/codebase:/vla/users/niejunnan/codebase/serl_torch:/vla/users/niejunnan/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0
 
 python examples/libero/scripts/run_residual_training.py \

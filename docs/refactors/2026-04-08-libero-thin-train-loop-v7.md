@@ -10,7 +10,7 @@ This phase is a stabilization pass after the actor loop extraction.
 
 Updated:
 
-- [actor_loop.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
+- [actor_loop.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_loop.py)
 
 Removed a duplicated session-construction block that had been accidentally left
 inside `run_actor_loop(...)` after the previous extraction.
@@ -22,7 +22,7 @@ Before this fix, the loop body still contained:
 
 That meant the extracted loop still tried to rebuild runtime state instead of
 strictly consuming the `ctx/state` passed in by
-[actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py).
+[actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py).
 
 After this fix:
 
@@ -34,7 +34,7 @@ After this fix:
 Passed:
 
 - `grep` check confirming `build_actor_runtime_session(...)` is only referenced in
-  [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
+  [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
 - `python -m py_compile serl_launcher/serl_launcher/residual/runtime/actor_runtime.py`
 - `python -m py_compile serl_launcher/serl_launcher/residual/runtime/actor_loop.py`
 - `python -m py_compile examples/libero/scripts/train_residual_sac.py`

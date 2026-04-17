@@ -2,8 +2,8 @@
 
 ## Modification Summary
 
-- Added [serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py) to isolate actor-side agentlace concerns from the rollout runtime.
-- Moved these responsibilities out of [actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py):
+- Added [serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py) to isolate actor-side agentlace concerns from the rollout runtime.
+- Moved these responsibilities out of [actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py):
   - actor bootstrap file generation
   - `_AgentlaceAsyncLearner` construction/startup
   - timer stats payload generation and send cadence
@@ -16,10 +16,10 @@
 ## Review Notes
 
 - `py_compile` passed for:
-  - [serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py)
-  - [serl_launcher/serl_launcher/residual/runtime/actor_runtime.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
-  - [examples/libero/scripts/train_residual_sac.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/train_residual_sac.py)
-  - [examples/libero/runtime/runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
+  - [serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/agentlace_bridge.py)
+  - [serl_launcher/serl_launcher/residual/runtime/actor_runtime.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/actor_runtime.py)
+  - [examples/libero/scripts/train_residual_sac.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_sac.py)
+  - [examples/libero/runtime/runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
 - During extraction I corrected one important detail:
   - bounded-lag target update budgeting must still use `training.update_every` and `training.updates_per_step`
   - it must not silently switch to `training.async.update_frequency`

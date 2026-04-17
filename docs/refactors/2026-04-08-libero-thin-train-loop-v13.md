@@ -6,20 +6,20 @@ Align the standalone learner path with the shared bindings model, without forcin
 
 ## Changes
 
-- Updated [serl_launcher/serl_launcher/residual/runtime/bindings.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py) to split bindings into two layers:
+- Updated [serl_launcher/serl_launcher/residual/runtime/bindings.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py) to split bindings into two layers:
   - `ResidualDataBindings`
   - `ResidualRuntimeBindings`
 - `ResidualRuntimeBindings` now extends `ResidualDataBindings`, so actor-side runtime still consumes the full environment-facing contract while learner-side code can depend only on the smaller data/task-facing subset.
-- Updated [examples/libero/runtime/runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py):
+- Updated [examples/libero/runtime/runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py):
   - added `LiberoDataBindings`
   - added `build_libero_data_bindings(...)`
   - made `LiberoRuntimeBindings` inherit from `LiberoDataBindings`
   - reused the same data-binding fields when constructing the full runtime bindings
-- Updated [serl_launcher/serl_launcher/residual/runtime/learner_service.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py) so the learner service now consumes `bindings: ResidualDataBindings` instead of separately receiving:
+- Updated [serl_launcher/serl_launcher/residual/runtime/learner_service.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py) so the learner service now consumes `bindings: ResidualDataBindings` instead of separately receiving:
   - `data_config`
   - `resolve_cfg_image_keys(...)`
-- Updated [examples/libero/scripts/run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py) to construct `build_libero_data_bindings(...)` and pass that into the learner service.
-- Updated [examples/libero/runtime/__init__.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/__init__.py) to lazily expose:
+- Updated [examples/libero/scripts/run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py) to construct `build_libero_data_bindings(...)` and pass that into the learner service.
+- Updated [examples/libero/runtime/__init__.py](/home/hello/codebase/serl_torch/examples/libero/runtime/__init__.py) to lazily expose:
   - `LiberoDataBindings`
   - `build_libero_data_bindings(...)`
 
@@ -41,11 +41,11 @@ Align the standalone learner path with the shared bindings model, without forcin
 ## Self Review
 
 - Ran `python -m py_compile` on:
-  - [bindings.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py)
-  - [learner_service.py](/vla/users/niejunnan/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py)
-  - [runtime_bindings.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
-  - [runtime/__init__.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/runtime/__init__.py)
-  - [run_learner.py](/vla/users/niejunnan/codebase/serl_torch/examples/libero/scripts/run_learner.py)
+  - [bindings.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/bindings.py)
+  - [learner_service.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/runtime/learner_service.py)
+  - [runtime_bindings.py](/home/hello/codebase/serl_torch/examples/libero/runtime/runtime_bindings.py)
+  - [runtime/__init__.py](/home/hello/codebase/serl_torch/examples/libero/runtime/__init__.py)
+  - [run_learner.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_learner.py)
 - Ran `git diff --check`.
 - Ran learner entrypoint smoke test:
   - `conda run -n serl_torch python examples/libero/scripts/run_learner.py --help`
