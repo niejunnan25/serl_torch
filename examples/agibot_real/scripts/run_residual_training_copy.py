@@ -46,6 +46,8 @@ from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
+from serl_launcher.residual.observation import build_chunk_residual_observation_space
+from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl
@@ -62,17 +64,14 @@ from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.config import parse_train_cfg
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
 from serl_torch.examples.agibot_real.env.factory import create_env
+from serl_torch.examples.agibot_real.env.observation import AGIBOT_STATE_DIM
+from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
+from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.agibot_real.offline_data import (
     load_prepared_offline_replay,
 )
 from serl_torch.examples.agibot_real.offline_data import (
     resolve_and_validate_prepared_paths,
-)
-from serl_torch.examples.agibot_real.residual_observation import (
-    build_chunk_residual_observation_space,
-)
-from serl_torch.examples.agibot_real.residual_observation import (
-    build_chunk_residual_sample_obs,
 )
 from serl_torch.examples.agibot_real.runtime_helpers import (
     commit_finished_episode_chunks,
@@ -108,9 +107,12 @@ def actor(
     )
 
     sample_obs = build_chunk_residual_sample_obs(
+        state_dim=AGIBOT_STATE_DIM,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
+        image_height=RESIDUAL_IMAGE_HEIGHT,
+        image_width=RESIDUAL_IMAGE_WIDTH,
     )
     agent = create_drq_agent_from_typed_cfg(
         cfg,
@@ -570,9 +572,12 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         action_dim=action_dim,
     )
     sample_obs = build_chunk_residual_sample_obs(
+        state_dim=AGIBOT_STATE_DIM,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
+        image_height=RESIDUAL_IMAGE_HEIGHT,
+        image_width=RESIDUAL_IMAGE_WIDTH,
     )
     agent = create_drq_agent_from_typed_cfg(
         cfg,

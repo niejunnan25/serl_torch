@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from serl_launcher.residual.observation import build_chunk_residual_obs
 from serl_launcher.rollout.async_transition_assembly import (
     AsyncTransitionAssemblyCoordinator,
 )
@@ -15,10 +16,9 @@ from serl_torch.examples.agibot_real.env.base_policy import (
     build_agibot_base_policy,
     canonicalize_agibot_action_chunks,
 )
+from serl_torch.examples.agibot_real.env.observation import build_agibot_state
+from serl_torch.examples.agibot_real.env.observation import extract_agibot_residual_images
 from serl_torch.examples.agibot_real.env.policy_input import build_agibot_policy_inputs
-from serl_torch.examples.agibot_real.residual_observation import (
-    build_chunk_residual_obs,
-)
 
 
 @dataclass(frozen=True)
@@ -138,9 +138,13 @@ def infer_chunk_residual_obs(
     base_actions, _infer_info = base_policy.infer(obs, prompt=task_prompt)
     base_actions = np.asarray(base_actions, dtype=np.float32)
     residual_obs = build_chunk_residual_obs(
-        obs=obs,
-        base_actions=base_actions,
+        robot_state=build_agibot_state(obs),
+        images=extract_agibot_residual_images(
+            obs,
+            image_keys=image_keys,
+        ),
         image_keys=image_keys,
+        base_actions=base_actions,
         residual_alpha=residual_alpha,
     )
     return base_actions, residual_obs
@@ -416,9 +420,13 @@ def backfill_post_step_residual_obs(
         )
         residual_observations = [
             build_chunk_residual_obs(
-                obs=post_step_obs,
-                base_actions=base_actions,
+                robot_state=build_agibot_state(post_step_obs),
+                images=extract_agibot_residual_images(
+                    post_step_obs,
+                    image_keys=image_keys,
+                ),
                 image_keys=image_keys,
+                base_actions=base_actions,
                 residual_alpha=residual_alpha,
             )
             for post_step_obs, base_actions in zip(

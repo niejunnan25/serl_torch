@@ -24,7 +24,7 @@
 - [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py)
 - [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
 - [scripts/serve_env.py](scripts/serve_env.py)
-- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+- [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
 - [tools/serve_env.sh](tools/serve_env.sh)
 
 `scripts/process_eval_queue.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
@@ -47,18 +47,16 @@
   LIBERO HTTP RPC env server
 - [offline_data.py](offline_data.py)
   prepared offline dataset 的生成、manifest 校验和 replay 加载
-- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+- [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
   checkpoint eval 入口
 - [scripts/process_eval_queue.py](scripts/process_eval_queue.py)
   训练期 eval worker
-- [eval_runner.py](eval_runner.py)
-  评估主循环
 - [async_eval.py](async_eval.py)
   训练期 eval runtime
 - [env/](env/)
   本地 env、remote env、观测解析、LIBERO 路径 bootstrap
-- [residual_observation.py](residual_observation.py)
-  residual observation 构造和 observation space
+- [../../serl_launcher/serl_launcher/residual/observation.py](../../serl_launcher/serl_launcher/residual/observation.py)
+  公共 residual observation schema
 - [tools/serve_env.sh](tools/serve_env.sh)
   env server shell wrapper
 - `outputs/`
@@ -724,7 +722,7 @@ python examples/libero/scripts/run_residual_training.py \
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/evaluate_checkpoint.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_eval.py \
   eval.checkpoint_path=/abs/path/to/checkpoints \
   eval.episodes=20 \
   eval.deterministic=true \
@@ -804,9 +802,9 @@ outputs/libero/eval_residual/<suite>_task_<id>/<timestamp>/
 
 - [config.py](config.py)
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
-- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
+- [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
 - [env/](env/)
-- [residual_observation.py](residual_observation.py)
+- [../../serl_launcher/serl_launcher/residual/observation.py](../../serl_launcher/serl_launcher/residual/observation.py)
 - `serl_launcher/serl_launcher/policy/*`
 - `serl_launcher/serl_launcher/residual/*`
 

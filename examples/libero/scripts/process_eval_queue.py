@@ -29,7 +29,7 @@ from serl_torch.examples.libero.config import LiberoTrainConfig
 from serl_torch.examples.libero.config import LoggingConfig
 from serl_torch.examples.libero.config import parse_train_cfg
 from serl_torch.examples.libero.config import train_cfg_to_eval_cfg
-from serl_torch.examples.libero.eval_runner import run_eval
+from serl_torch.examples.libero.scripts.run_residual_eval import run_residual_eval
 
 
 LOGGER = logging.getLogger("libero_async_eval_worker")
@@ -90,7 +90,7 @@ def _process_one_request(
     try:
         eval_cfg = _build_eval_cfg(train_cfg, request)
         eval_logger = logging.getLogger(f"libero_async_eval_worker.eval_{eval_index}")
-        summary = run_eval(
+        summary = run_residual_eval(
             eval_cfg,
             run_dir=eval_run_dir,
             logger=eval_logger,

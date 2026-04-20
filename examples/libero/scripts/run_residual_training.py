@@ -46,6 +46,10 @@ from serl_launcher.policy.typed_factory import build_policy_client
 from serl_launcher.policy.typed_factory import describe_policy_backend
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
+from serl_launcher.residual.observation import build_chunk_residual_obs
+from serl_launcher.residual.observation import build_chunk_residual_observation_space
+from serl_launcher.residual.observation import build_chunk_residual_sample_obs
+from serl_launcher.residual.observation import prepare_base_actions_chunk
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl
@@ -68,21 +72,14 @@ from serl_torch.examples.libero.async_eval import start_async_eval_worker
 from serl_torch.examples.libero.async_eval import summarize_async_eval_results
 from serl_torch.examples.libero.async_eval import wait_for_async_eval_worker
 from serl_torch.examples.libero.env.factory import create_env
+from serl_torch.examples.libero.env.observation import build_libero_state
+from serl_torch.examples.libero.env.observation import extract_libero_images
+from serl_torch.examples.libero.env.observation import LIBERO_STATE_DIM
+from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_HEIGHT
+from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
-from serl_torch.examples.libero.offline_data import load_prepared_offline_replay
-from serl_torch.examples.libero.offline_data import resolve_and_validate_prepared_paths
-from serl_torch.examples.libero.residual_observation import (
-    build_chunk_residual_obs,
-)
-from serl_torch.examples.libero.residual_observation import (
-    build_chunk_residual_observation_space,
-)
-from serl_torch.examples.libero.residual_observation import (
-    build_chunk_residual_sample_obs,
-)
-from serl_torch.examples.libero.residual_observation import (
-    prepare_base_actions_chunk,
-)
+from serl_torch.examples.libero.env.offline_data import load_prepared_offline_replay
+from serl_torch.examples.libero.env.offline_data import resolve_and_validate_prepared_paths
 
 
 def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -100,9 +97,12 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     residual_alpha = residual_action_spec.alpha
 
     sample_obs = build_chunk_residual_sample_obs(
+        state_dim=LIBERO_STATE_DIM,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
+        image_height=RESIDUAL_IMAGE_HEIGHT,
+        image_width=RESIDUAL_IMAGE_WIDTH,
     )
 
     agent = create_drq_agent_from_typed_cfg(
@@ -190,9 +190,10 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                         )
 
                         residual_obs = build_chunk_residual_obs(
-                            obs=obs,
-                            base_actions=base_actions,
+                            robot_state=build_libero_state(obs),
+                            images=extract_libero_images(obs),
                             image_keys=image_keys,
+                            base_actions=base_actions,
                             residual_alpha=residual_alpha,
                         )
                     else:
@@ -229,9 +230,10 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                         )
 
                         next_residual_obs = build_chunk_residual_obs(
-                            obs=next_obs,
-                            base_actions=next_base_actions,
+                            robot_state=build_libero_state(next_obs),
+                            images=extract_libero_images(next_obs),
                             image_keys=image_keys,
+                            base_actions=next_base_actions,
                             residual_alpha=residual_alpha,
                         )
 
@@ -377,9 +379,12 @@ def learner(
         action_dim=action_dim,
     )
     sample_obs = build_chunk_residual_sample_obs(
+        state_dim=LIBERO_STATE_DIM,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
+        image_height=RESIDUAL_IMAGE_HEIGHT,
+        image_width=RESIDUAL_IMAGE_WIDTH,
     )
     agent = create_drq_agent_from_typed_cfg(
         cfg,

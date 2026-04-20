@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-"""Reusable LIBERO residual checkpoint evaluation runner."""
+"""Canonical LIBERO residual checkpoint evaluation entrypoint."""
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
+REPO_PARENT = Path(__file__).resolve().parents[4]
+if str(REPO_PARENT) not in sys.path:
+    sys.path.insert(0, str(REPO_PARENT))
+
+import hydra
 import numpy as np
+from hydra.core.hydra_config import HydraConfig
+from hydra.utils import get_original_cwd
+from omegaconf import DictConfig
 
 from serl_launcher.async_eval import resolve_async_eval_checkpoint_from_index
 from serl_launcher.agents.continuous.drq_typed_config import (
@@ -18,27 +27,28 @@ from serl_launcher.policy.typed_factory import build_policy_client
 from serl_launcher.policy.typed_factory import describe_policy_backend
 from serl_launcher.policy.typed_factory import resolve_policy_backend_id
 from serl_launcher.policy.typed_factory import resolve_policy_backend_type
+from serl_launcher.residual.observation import build_chunk_residual_obs
+from serl_launcher.residual.observation import build_chunk_residual_sample_obs
+from serl_launcher.residual.observation import prepare_base_actions_chunk
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import load_checkpoint_payload
-from serl_launcher.utils.jsonl import JsonlWriter
 from serl_launcher.utils.checkpoint_utils import resolve_checkpoint_path
+from serl_launcher.utils.jsonl import JsonlWriter
 from serl_launcher.utils.seeding import set_global_seeds
 from serl_launcher.utils.serialization import to_jsonable
 from serl_launcher.utils.timer_utils import Timer
 
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import LiberoEvalConfig
+from serl_torch.examples.libero.config import parse_eval_cfg
 from serl_torch.examples.libero.env.factory import create_env
+from serl_torch.examples.libero.env.observation import build_libero_state
+from serl_torch.examples.libero.env.observation import extract_libero_images
+from serl_torch.examples.libero.env.observation import LIBERO_STATE_DIM
+from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_HEIGHT
+from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
-from serl_torch.examples.libero.residual_observation import (
-    build_chunk_residual_obs,
-)
-from serl_torch.examples.libero.residual_observation import (
-    build_chunk_residual_sample_obs,
-)
-from serl_torch.examples.libero.residual_observation import (
-    prepare_base_actions_chunk,
-)
+
 
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
     if value is None:
@@ -62,6 +72,15 @@ def _positive_int(value: Any, field_name: str) -> int:
         raise ValueError(f"{field_name} must be positive, got {resolved}")
     return resolved
 
+
+def _checkpoint_step_from_path(checkpoint_path: Path) -> int | None:
+    stem = checkpoint_path.stem
+    try:
+        return int(stem.split("_")[-1])
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _resolve_checkpoint_input(
     checkpoint_path_raw: Any,
     checkpoint_step_raw: Any,
@@ -76,7 +95,9 @@ def _resolve_checkpoint_input(
 
     checkpoint_input_path = Path(checkpoint_value).expanduser()
     if not checkpoint_input_path.is_absolute():
-        base_dir = Path.cwd().resolve() if original_cwd is None else original_cwd.resolve()
+        base_dir = (
+            Path.cwd().resolve() if original_cwd is None else original_cwd.resolve()
+        )
         checkpoint_input_path = base_dir / checkpoint_input_path
     checkpoint_input_path = checkpoint_input_path.resolve()
 
@@ -99,7 +120,7 @@ def _resolve_checkpoint_input(
     return checkpoint_input_path, resolved_checkpoint_path
 
 
-def run_eval(
+def run_residual_eval(
     cfg: LiberoEvalConfig,
     *,
     run_dir: Path,
@@ -128,10 +149,7 @@ def run_eval(
     )
 
     logger.info("Eval run dir: %s", run_dir)
-    logger.info(
-        "Config:\n%s",
-        json.dumps(cfg_to_log_payload(cfg), indent=2),
-    )
+    logger.info("Config:\n%s", json.dumps(cfg_to_log_payload(cfg), indent=2))
 
     set_global_seeds(cfg.global_seed)
 
@@ -151,9 +169,12 @@ def run_eval(
     checkpoint_step = None
     if checkpoint_file is not None:
         sample_obs = build_chunk_residual_sample_obs(
+            state_dim=LIBERO_STATE_DIM,
             action_dim=action_dim,
             chunk_horizon=chunk_horizon,
             image_keys=image_keys,
+            image_height=RESIDUAL_IMAGE_HEIGHT,
+            image_width=RESIDUAL_IMAGE_WIDTH,
         )
         agent = create_drq_agent_from_typed_cfg(
             cfg,
@@ -177,15 +198,12 @@ def run_eval(
         logger.info(
             "Loaded residual checkpoint from: %s%s",
             checkpoint_file,
-            (
-                ""
-                if checkpoint_step is None
-                else f" (step={int(checkpoint_step)})"
-            ),
+            "" if checkpoint_step is None else f" (step={int(checkpoint_step)})",
         )
     else:
         logger.warning(
-            "eval.checkpoint_path is not set; running base-policy-only evaluation with zero residual actions"
+            "eval.checkpoint_path is not set; running base-policy-only evaluation "
+            "with zero residual actions"
         )
 
     timer = Timer()
@@ -208,9 +226,7 @@ def run_eval(
         "env_steps": 0,
         "deterministic": bool(deterministic),
         "checkpoint_loaded": bool(checkpoint_loaded),
-        "checkpoint_path": (
-            None if checkpoint_file is None else str(checkpoint_file)
-        ),
+        "checkpoint_path": None if checkpoint_file is None else str(checkpoint_file),
         "checkpoint_input_path": (
             None if checkpoint_input_path is None else str(checkpoint_input_path)
         ),
@@ -258,9 +274,10 @@ def run_eval(
                             chunk_horizon=chunk_horizon,
                         )
                         residual_obs = build_chunk_residual_obs(
-                            obs=obs,
-                            base_actions=base_actions,
+                            robot_state=build_libero_state(obs),
+                            images=extract_libero_images(obs),
                             image_keys=image_keys,
+                            base_actions=base_actions,
                             residual_alpha=residual_action_spec.alpha,
                         )
                     else:
@@ -302,7 +319,10 @@ def run_eval(
                     else min(int(chunk_horizon), int(remaining_episode_budget))
                 )
 
-                for action in np.asarray(final_actions[:execute_horizon], dtype=np.float32):
+                for action in np.asarray(
+                    final_actions[:execute_horizon],
+                    dtype=np.float32,
+                ):
                     with timer.context("step_env"):
                         next_obs, reward, done, truncated, info = env.step(action)
 
@@ -317,9 +337,10 @@ def run_eval(
                             chunk_horizon=chunk_horizon,
                         )
                         next_residual_obs = build_chunk_residual_obs(
-                            obs=next_obs,
-                            base_actions=next_base_actions,
+                            robot_state=build_libero_state(next_obs),
+                            images=extract_libero_images(next_obs),
                             image_keys=image_keys,
+                            base_actions=next_base_actions,
                             residual_alpha=residual_action_spec.alpha,
                         )
 
@@ -429,3 +450,31 @@ def run_eval(
                 pass
 
     return summary
+
+
+@hydra.main(
+    version_base=None,
+    config_path="../configs",
+    config_name="eval_residual",
+)
+def main(cfg: DictConfig) -> None:
+    run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    typed_cfg = parse_eval_cfg(cfg)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s %(message)s",
+    )
+    logger = logging.getLogger("libero_eval")
+    summary = run_residual_eval(
+        typed_cfg,
+        run_dir=run_dir,
+        logger=logger,
+        original_cwd=Path(get_original_cwd()).resolve(),
+    )
+    logger.info("evaluation done: %s", summary)
+
+
+if __name__ == "__main__":
+    main()

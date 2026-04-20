@@ -14,6 +14,8 @@ from serl_launcher.agents.continuous.drq_typed_config import (
 )
 from serl_launcher.common.agent_acceleration import apply_torch_compile
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
+from serl_launcher.residual.observation import build_chunk_residual_obs
+from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import load_checkpoint_payload
 from serl_launcher.utils.checkpoint_utils import resolve_checkpoint_path
@@ -26,12 +28,11 @@ from serl_torch.examples.agibot_real.config import AgiBotEvalConfig
 from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
 from serl_torch.examples.agibot_real.env.factory import create_env
-from serl_torch.examples.agibot_real.residual_observation import (
-    build_chunk_residual_obs,
-)
-from serl_torch.examples.agibot_real.residual_observation import (
-    build_chunk_residual_sample_obs,
-)
+from serl_torch.examples.agibot_real.env.observation import AGIBOT_STATE_DIM
+from serl_torch.examples.agibot_real.env.observation import build_agibot_state
+from serl_torch.examples.agibot_real.env.observation import extract_agibot_residual_images
+from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
+from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
 
 
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
@@ -134,9 +135,12 @@ def run_eval(
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
 
     sample_obs = build_chunk_residual_sample_obs(
+        state_dim=AGIBOT_STATE_DIM,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
+        image_height=RESIDUAL_IMAGE_HEIGHT,
+        image_width=RESIDUAL_IMAGE_WIDTH,
     )
     agent = create_drq_agent_from_typed_cfg(
         cfg,
@@ -231,9 +235,13 @@ def run_eval(
                             prompt=task_prompt,
                         )
                         residual_obs = build_chunk_residual_obs(
-                            obs=obs,
-                            base_actions=base_actions,
+                            robot_state=build_agibot_state(obs),
+                            images=extract_agibot_residual_images(
+                                obs,
+                                image_keys=image_keys,
+                            ),
                             image_keys=image_keys,
+                            base_actions=base_actions,
                             residual_alpha=residual_action_spec.alpha,
                         )
                     else:
@@ -293,9 +301,13 @@ def run_eval(
                             prompt=task_prompt,
                         )
                         next_residual_obs = build_chunk_residual_obs(
-                            obs=next_obs,
-                            base_actions=next_base_actions,
+                            robot_state=build_agibot_state(next_obs),
+                            images=extract_agibot_residual_images(
+                                next_obs,
+                                image_keys=image_keys,
+                            ),
                             image_keys=image_keys,
+                            base_actions=next_base_actions,
                             residual_alpha=residual_action_spec.alpha,
                         )
 

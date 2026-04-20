@@ -39,10 +39,9 @@ for path in (REPO_ROOT, SERL_LAUNCHER_ROOT):
         sys.path.insert(0, path_str)
 
 from examples.agibot_real.config import parse_train_cfg
-from examples.agibot_real.residual_observation import (
-    build_chunk_residual_observation_space,
-    build_chunk_residual_sample_obs,
-)
+from examples.agibot_real.env.observation import AGIBOT_STATE_DIM
+from examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
+from examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
@@ -57,6 +56,8 @@ from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payl
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
 from serl_launcher.residual.chunk_window_replay import reshape_chunk_batch_for_training
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
+from serl_launcher.residual.observation import build_chunk_residual_observation_space
+from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.vision.data_augmentations import batched_random_crop
 from serl_launcher.vision.data_augmentations import random_crop
@@ -91,9 +92,12 @@ def _make_sample_obs_and_spec(cfg: Any) -> tuple[dict[str, np.ndarray], Residual
         action_dim=int(cfg.env.action_dim),
     )
     sample_obs = build_chunk_residual_sample_obs(
+        state_dim=AGIBOT_STATE_DIM,
         action_dim=int(cfg.env.action_dim),
         chunk_horizon=int(cfg.residual.chunk_horizon),
         image_keys=tuple(cfg.obs.image_keys),
+        image_height=RESIDUAL_IMAGE_HEIGHT,
+        image_width=RESIDUAL_IMAGE_WIDTH,
     )
     return sample_obs, residual_action_spec
 

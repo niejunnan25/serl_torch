@@ -5,21 +5,182 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 import logging
+import pickle
 import sys
+import time
 from pathlib import Path
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
+from tqdm.auto import tqdm
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
+from serl_launcher.data.offline_prepared import EPISODE_FILE_GLOB
+from serl_launcher.data.offline_prepared import MANIFEST_FILENAME
+from serl_launcher.data.offline_prepared import OfflinePreparedInputs
+from serl_launcher.policy.typed_factory import build_policy_client
+from serl_launcher.policy.typed_factory import describe_policy_backend
+from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.seeding import set_global_seeds
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import parse_train_cfg
-from serl_torch.examples.libero.offline_data import prepare_current_task_offline_data
+from serl_torch.examples.libero.env.offline_data import OFFLINE_FORMAT_VERSION
+from serl_torch.examples.libero.env.offline_data import prepare_demo_transitions
+from serl_torch.examples.libero.env.offline_data import prepare_fingerprint
+from serl_torch.examples.libero.env.offline_data import prepared_dir_for_cfg
+from serl_torch.examples.libero.env.offline_data import resolve_configured_prepared_paths
+from serl_torch.examples.libero.env.offline_data import resolve_task_spec
+from serl_torch.examples.libero.env.offline_data import write_manifest
+
+
+def prepare_offline_data(
+    cfg,
+    *,
+    logger: logging.Logger,
+) -> OfflinePreparedInputs:
+    prepared_paths = resolve_configured_prepared_paths(cfg)
+    if prepared_paths:
+        return OfflinePreparedInputs(
+            prepared_paths=prepared_paths,
+            prepare_stats=None,
+            manifest_paths=tuple(
+                path / MANIFEST_FILENAME if path.is_dir() else path
+                for path in prepared_paths
+                if path.name == MANIFEST_FILENAME or path.is_dir()
+            ),
+        )
+
+    task_spec = resolve_task_spec(cfg)
+    prepared_dir = prepared_dir_for_cfg(cfg, task_spec=task_spec)
+    manifest_path = prepared_dir / MANIFEST_FILENAME
+    fingerprint = prepare_fingerprint(
+        cfg,
+        task_spec=task_spec,
+        offline_format_version=OFFLINE_FORMAT_VERSION,
+    )
+
+    if not task_spec.dataset_path.exists():
+        raise FileNotFoundError(f"Raw LIBERO demo dataset not found: {task_spec.dataset_path}")
+
+    import h5py
+
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+    for stale_path in prepared_dir.glob(EPISODE_FILE_GLOB):
+        stale_path.unlink()
+
+    action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=cfg.env.action_dim)
+    image_keys = cfg.obs.image_keys
+    policy_client = build_policy_client(cfg, logger=logger)
+    prepare_stats: dict[str, object] = {
+        "raw_dataset_path": str(task_spec.dataset_path),
+        "prepared_dir": str(prepared_dir),
+        "episodes_total": 0,
+        "steps_total": 0,
+        "steps_unrepresentable": 0,
+        "steps_filtered": 0,
+        "episodes_written": 0,
+        "steps_written": 0,
+        "elapsed_sec": 0.0,
+    }
+    start_time = time.time()
+    episode_files: list[Path] = []
+
+    logger.info(
+        "Preparing offline dataset: task=%s backend=%s raw=%s output=%s",
+        task_spec.task_key,
+        describe_policy_backend(cfg),
+        task_spec.dataset_path,
+        prepared_dir,
+    )
+
+    try:
+        with h5py.File(task_spec.dataset_path, "r") as dataset_file:
+            demo_names = sorted(
+                list(dataset_file["data"].keys()),
+                key=lambda name: int(str(name).split("_")[-1]),
+            )
+
+            episode_iter = tqdm(
+                enumerate(demo_names),
+                total=len(demo_names),
+                desc=f"prepare {task_spec.task_key}",
+                unit="episode",
+                dynamic_ncols=True,
+                leave=True,
+            )
+            for episode_index, demo_name in episode_iter:
+                transitions, episode_stats = prepare_demo_transitions(
+                    demo=dataset_file["data"][demo_name],
+                    episode_id=int(episode_index),
+                    task_prompt=task_spec.task_description,
+                    action_spec=action_spec,
+                    image_keys=image_keys,
+                    policy_client=policy_client,
+                    expert_reference_scale=float(cfg.offline.prepare.expert_reference_scale),
+                    clip_residual_to_unit=bool(cfg.offline.prepare.clip_residual_to_unit),
+                    filter_unrepresentable_steps=bool(
+                        cfg.offline.prepare.filter_unrepresentable_steps
+                    ),
+                )
+                prepare_stats["episodes_total"] = int(prepare_stats["episodes_total"]) + 1
+                prepare_stats["steps_total"] = int(prepare_stats["steps_total"]) + int(
+                    episode_stats["steps_total"]
+                )
+                prepare_stats["steps_unrepresentable"] = int(
+                    prepare_stats["steps_unrepresentable"]
+                ) + int(episode_stats["steps_unrepresentable"])
+                prepare_stats["steps_filtered"] = int(
+                    prepare_stats["steps_filtered"]
+                ) + int(episode_stats["steps_filtered"])
+                prepare_stats["steps_written"] = int(prepare_stats["steps_written"]) + int(
+                    episode_stats["steps_written"]
+                )
+                if transitions:
+                    episode_path = prepared_dir / f"episode_{int(episode_index):06d}.pkl"
+                    with open(episode_path, "wb") as fp:
+                        pickle.dump(transitions, fp, protocol=pickle.HIGHEST_PROTOCOL)
+                    episode_files.append(episode_path)
+                    prepare_stats["episodes_written"] = int(
+                        prepare_stats["episodes_written"]
+                    ) + 1
+    finally:
+        policy_client_close = getattr(policy_client, "close", None)
+        if callable(policy_client_close):
+            try:
+                policy_client_close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    prepare_stats["elapsed_sec"] = float(time.time() - start_time)
+    write_manifest(
+        manifest_path=manifest_path,
+        task_spec=task_spec,
+        cfg=cfg,
+        fingerprint=fingerprint,
+        episode_files=episode_files,
+        prepare_stats=prepare_stats,
+    )
+    logger.info(
+        "Offline prepare complete: episodes_total=%s steps_total=%s "
+        "steps_unrepresentable=%s steps_filtered=%s episodes_written=%s "
+        "steps_written=%s manifest=%s",
+        int(prepare_stats["episodes_total"]),
+        int(prepare_stats["steps_total"]),
+        int(prepare_stats["steps_unrepresentable"]),
+        int(prepare_stats["steps_filtered"]),
+        int(prepare_stats["episodes_written"]),
+        int(prepare_stats["steps_written"]),
+        manifest_path,
+    )
+    return OfflinePreparedInputs(
+        prepared_paths=(prepared_dir,),
+        prepare_stats=prepare_stats,
+        manifest_paths=(manifest_path,),
+    )
 
 
 @hydra.main(
@@ -53,7 +214,7 @@ def main(cfg: DictConfig) -> None:
         )
 
     set_global_seeds(typed_cfg.global_seed)
-    offline_inputs = prepare_current_task_offline_data(typed_cfg, logger=logger)
+    offline_inputs = prepare_offline_data(typed_cfg, logger=logger)
     summary = {
         "role": "prepare_offline_data",
         "mode": "residual",

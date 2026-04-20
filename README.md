@@ -245,7 +245,7 @@ pretrained_models/microsoft--resnet-18
 - env server:
   `examples/libero/scripts/serve_env.py`
 - checkpoint eval:
-  `examples/libero/scripts/evaluate_checkpoint.py`
+  `examples/libero/scripts/run_residual_eval.py`
 
 这条线支持：
 

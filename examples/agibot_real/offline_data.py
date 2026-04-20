@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Temporary AgiBot offline-data helpers aligned to the LIBERO train flow.
 
-This module intentionally mirrors the shape of ``examples/libero/offline_data.py``
+This module intentionally mirrors the shape of ``examples/libero/env/offline_data.py``
 for the first alignment pass. The prepared replay contract is stable, while the
 raw input format remains a temporary reference-only pickle layout until a real
 AgiBot data source is wired in.
@@ -11,7 +11,6 @@ AgiBot data source is wired in.
 import dataclasses
 import json
 import logging
-import pickle
 import time
 from pathlib import Path
 from typing import Any
@@ -20,21 +19,33 @@ from typing import Iterator
 from typing import Sequence
 
 import numpy as np
-from hydra.utils import get_original_cwd
 from tqdm.auto import tqdm
 
+from serl_launcher.data.offline_prepared import EPISODE_FILE_GLOB
+from serl_launcher.data.offline_prepared import MANIFEST_FILENAME
+from serl_launcher.data.offline_prepared import OfflinePreparedResolution
+from serl_launcher.data.offline_prepared import (
+    load_prepared_offline_replay as _load_prepared_offline_replay,
+)
+from serl_launcher.data.offline_prepared import read_manifest
+from serl_launcher.data.offline_prepared import (
+    resolve_prepared_episode_files as _resolve_prepared_episode_files,
+)
+from serl_launcher.data.offline_prepared import resolve_prepared_path_value
+from serl_launcher.data.offline_prepared import validate_prepared_paths
+from serl_launcher.residual.expert_projection import project_expert_action
+from serl_launcher.residual.observation import build_chunk_residual_obs
+from serl_launcher.residual.observation import prepare_base_actions_chunk
 from serl_launcher.residual.typed_action import ResidualActionSpec
+from serl_launcher.utils.path_utils import resolve_original_cwd
+from serl_launcher.utils.path_utils import resolve_path
 from serl_launcher.utils.serialization import to_jsonable
 
 from .config import AgiBotTrainConfig
-from .env.base_policy import build_agibot_base_policy
-from .residual_observation import build_chunk_residual_obs
-from .residual_observation import prepare_base_actions_chunk
+from .env.observation import build_agibot_state
+from .env.observation import extract_agibot_residual_images
 
-MANIFEST_FILENAME = "manifest.json"
-EPISODE_FILE_GLOB = "episode_*.pkl"
 OFFLINE_FORMAT_VERSION = "agibot_real_offline_step_transitions_v1"
-UNIT_RESIDUAL_EPS = 1.0e-6
 REFERENCE_SOURCE_FORMAT = "agibot_reference_episode_pickle_v1"
 REFERENCE_NOTE = (
     "Temporary reference offline pipeline modeled after examples/libero. "
@@ -48,34 +59,6 @@ class AgiBotTaskSpec:
     task_key: str
     task_description: str
     dataset_path: Path
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class OfflinePreparedInputs:
-    prepared_paths: tuple[Path, ...]
-    prepare_stats: dict[str, Any] | None
-    manifest_paths: tuple[Path, ...]
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class OfflinePreparedResolution:
-    prepared_paths: tuple[Path, ...]
-    manifest_paths: tuple[Path, ...]
-    validation_stats: dict[str, Any]
-
-
-def _resolve_original_cwd() -> Path:
-    try:
-        return Path(get_original_cwd()).resolve()
-    except Exception:  # noqa: BLE001
-        return Path.cwd().resolve()
-
-
-def _resolve_path(raw_path: str, *, base: Path) -> Path:
-    path = Path(str(raw_path)).expanduser()
-    if path.is_absolute():
-        return path.resolve()
-    return (base / path).resolve()
 
 
 def _policy_backend_type(cfg: AgiBotTrainConfig) -> str:
@@ -96,13 +79,13 @@ def _describe_policy_backend(cfg: AgiBotTrainConfig) -> str:
     return backend_type if backend_id == backend_type else f"{backend_type}:{backend_id}"
 
 
-def _resolve_task_spec(cfg: AgiBotTrainConfig) -> AgiBotTaskSpec:
+def resolve_task_spec(cfg: AgiBotTrainConfig) -> AgiBotTaskSpec:
     dataset_override = cfg.offline.prepare.raw_dataset_path
     if dataset_override is None:
         raise ValueError(
             "Temporary AgiBot offline prepare requires offline.prepare.raw_dataset_path"
         )
-    dataset_path = _resolve_path(dataset_override, base=_resolve_original_cwd())
+    dataset_path = resolve_path(dataset_override, base=resolve_original_cwd())
     return AgiBotTaskSpec(
         task_name=str(cfg.task.name),
         task_key=str(cfg.task.task_key),
@@ -115,7 +98,7 @@ def _format_alpha(alpha: float) -> str:
     return f"{float(alpha):.4f}".rstrip("0").rstrip(".").replace(".", "p")
 
 
-def _prepare_fingerprint(
+def prepare_fingerprint(
     cfg: AgiBotTrainConfig,
     *,
     task_spec: AgiBotTaskSpec,
@@ -152,7 +135,7 @@ def _prepare_fingerprint(
     }
 
 
-def _training_compatibility_signature(cfg: AgiBotTrainConfig) -> dict[str, Any]:
+def training_compatibility_signature(cfg: AgiBotTrainConfig) -> dict[str, Any]:
     return {
         "task_key": str(cfg.task.task_key),
         "policy_backend_type": _policy_backend_type(cfg),
@@ -181,14 +164,14 @@ def _training_compatibility_signature(cfg: AgiBotTrainConfig) -> dict[str, Any]:
     }
 
 
-def _prepared_dir_for_cfg(
+def prepared_dir_for_cfg(
     cfg: AgiBotTrainConfig,
     *,
     task_spec: AgiBotTaskSpec,
 ) -> Path:
-    output_root = _resolve_path(
+    output_root = resolve_path(
         cfg.offline.prepare.output_root,
-        base=_resolve_original_cwd(),
+        base=resolve_original_cwd(),
     )
     backend = _describe_policy_backend(cfg).replace(":", "_")
     alpha_token = _format_alpha(cfg.residual.alpha)
@@ -200,17 +183,6 @@ def _prepared_dir_for_cfg(
     return (
         task_root / f"{backend}_chunk{int(cfg.residual.chunk_horizon)}_alpha{alpha_token}"
     ).resolve()
-
-
-def _read_manifest(manifest_path: Path) -> dict[str, Any] | None:
-    if not manifest_path.exists():
-        return None
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as fp:
-            payload = json.load(fp)
-    except Exception:  # noqa: BLE001
-        return None
-    return payload if isinstance(payload, dict) else None
 
 
 def _manifest_signature(
@@ -242,10 +214,7 @@ def _manifest_signature(
 
 
 def resolve_configured_prepared_paths(cfg: AgiBotTrainConfig) -> tuple[Path, ...]:
-    prepared_path = cfg.offline.prepared_path
-    if prepared_path is None:
-        return tuple()
-    return (_resolve_path(prepared_path, base=_resolve_original_cwd()),)
+    return resolve_prepared_path_value(cfg.offline.prepared_path)
 
 
 def resolve_and_validate_prepared_paths(
@@ -253,74 +222,12 @@ def resolve_and_validate_prepared_paths(
     *,
     logger: logging.Logger,
 ) -> OfflinePreparedResolution:
-    prepared_paths = resolve_configured_prepared_paths(cfg)
-    if not prepared_paths:
-        raise ValueError(
-            "offline.enabled=true requires offline.prepared_path to point to prepared data"
-        )
-
-    expected_signature = _training_compatibility_signature(cfg)
-    manifest_paths: list[Path] = []
-    stats: dict[str, Any] = {
-        "paths_total": int(len(prepared_paths)),
-        "manifests_checked": 0,
-        "manifests_matched": 0,
-        "paths_without_manifest": 0,
-        "paths_without_validation": 0,
-    }
-
-    for path in prepared_paths:
-        manifest_path: Path | None = None
-        if path.is_dir():
-            candidate = path / MANIFEST_FILENAME
-            if candidate.exists():
-                manifest_path = candidate.resolve()
-            else:
-                raise ValueError(
-                    "prepared offline directory must contain manifest.json for "
-                    f"compatibility validation: {path}"
-                )
-        elif path.name == MANIFEST_FILENAME:
-            manifest_path = path.resolve()
-        elif path.suffix == ".pkl":
-            raise ValueError(
-                "prepared offline episode file without manifest is no longer "
-                f"supported: {path}"
-            )
-        else:
-            raise ValueError(f"Unsupported offline prepared path: {path}")
-
-        manifest_paths.append(manifest_path)
-        manifest = _read_manifest(manifest_path)
-        if manifest is None:
-            raise ValueError(f"Invalid offline manifest: {manifest_path}")
-        manifest_signature = _manifest_signature(manifest)
-        if manifest_signature is None:
-            raise ValueError(
-                "offline manifest missing compatibility fingerprint fields: "
-                f"{manifest_path}"
-            )
-
-        mismatches: dict[str, dict[str, Any]] = {}
-        for key, expected_value in expected_signature.items():
-            actual_value = manifest_signature.get(key, None)
-            if to_jsonable(actual_value) != to_jsonable(expected_value):
-                mismatches[str(key)] = {
-                    "expected": to_jsonable(expected_value),
-                    "actual": to_jsonable(actual_value),
-                }
-        stats["manifests_checked"] = int(stats["manifests_checked"]) + 1
-        if mismatches:
-            raise ValueError(
-                "prepared offline manifest does not match current training config: "
-                f"{manifest_path} mismatches={json.dumps(mismatches, ensure_ascii=False)}"
-            )
-        stats["manifests_matched"] = int(stats["manifests_matched"]) + 1
-
-    return OfflinePreparedResolution(
-        prepared_paths=prepared_paths,
-        manifest_paths=tuple(manifest_paths),
-        validation_stats=stats,
+    del logger
+    return validate_prepared_paths(
+        resolve_configured_prepared_paths(cfg),
+        expected_signature=training_compatibility_signature(cfg),
+        manifest_signature_fn=_manifest_signature,
+        manifest_filename=MANIFEST_FILENAME,
     )
 
 
@@ -336,7 +243,7 @@ def _coerce_obs_tree(value: Any) -> Any:
     return value
 
 
-def _normalize_episode_steps(payload: Any, *, source_path: Path) -> list[dict[str, Any]]:
+def normalize_episode_steps(payload: Any, *, source_path: Path) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         steps = payload
     elif isinstance(payload, tuple):
@@ -487,69 +394,7 @@ def _zero_like_obs(obs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {key: np.zeros_like(value) for key, value in obs.items()}
 
 
-def _project_expert_action(
-    *,
-    expert_action: np.ndarray,
-    base_action: np.ndarray,
-    action_spec: ResidualActionSpec,
-    expert_reference_scale: float,
-    clip_residual_to_unit: bool,
-) -> tuple[np.ndarray, int, bool]:
-    expert_arr = np.asarray(expert_action, dtype=np.float32).reshape(-1)
-    base_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
-    if expert_arr.shape != base_arr.shape:
-        raise ValueError(
-            f"expert/base action shape mismatch: {expert_arr.shape} != {base_arr.shape}"
-        )
-
-    projected = np.asarray(base_arr, dtype=np.float32).copy()
-    if action_spec.alpha <= 0.0:
-        step_unrepresentable = bool(
-            np.any(
-                np.abs(
-                    expert_arr[
-                        np.asarray(action_spec.control_indices, dtype=np.int64).reshape(-1)
-                    ]
-                    - base_arr[
-                        np.asarray(action_spec.control_indices, dtype=np.int64).reshape(-1)
-                    ]
-                )
-                > UNIT_RESIDUAL_EPS
-            )
-        )
-        if action_spec.clip_gripper and projected.shape[0] > 0:
-            projected[-1] = np.clip(projected[-1], -1.0, 1.0)
-        return projected, 0, step_unrepresentable
-
-    clipped_values = 0
-    step_unrepresentable = False
-    limits = np.asarray(action_spec.residual_limits, dtype=np.float32).reshape(-1)
-    control_indices = np.asarray(action_spec.control_indices, dtype=np.int64).reshape(-1)
-    denom = limits * float(action_spec.alpha) * float(expert_reference_scale)
-    for local_idx, action_idx in enumerate(control_indices):
-        scale = float(denom[local_idx])
-        if (not np.isfinite(scale)) or scale <= 0.0:
-            if abs(float(expert_arr[action_idx] - base_arr[action_idx])) > UNIT_RESIDUAL_EPS:
-                clipped_values += 1
-                step_unrepresentable = True
-            continue
-        residual_value = float(expert_arr[action_idx] - base_arr[action_idx]) / scale
-        if abs(residual_value) > (1.0 + UNIT_RESIDUAL_EPS):
-            clipped_values += 1
-            step_unrepresentable = True
-        if clip_residual_to_unit:
-            clipped_residual = float(np.clip(residual_value, -1.0, 1.0))
-            residual_value = clipped_residual
-        projected[action_idx] = base_arr[action_idx] + (residual_value * scale)
-
-    if action_spec.clip_gripper and projected.shape[0] > 0:
-        projected[-1] = np.clip(projected[-1], -1.0, 1.0)
-    return projected.astype(np.float32, copy=False), int(clipped_values), bool(
-        step_unrepresentable
-    )
-
-
-def _prepare_reference_episode_transitions(
+def prepare_reference_episode_transitions(
     *,
     raw_steps: Sequence[dict[str, Any]],
     episode_id: int,
@@ -594,13 +439,17 @@ def _prepare_reference_episode_transitions(
         obs_raw = _raw_obs_from_step(raw_step, source_path=source_path)
         base_chunk = np.asarray(base_chunks_per_step[step_idx], dtype=np.float32)
         residual_obs = build_chunk_residual_obs(
-            obs=obs_raw,
-            base_actions=base_chunk,
+            robot_state=build_agibot_state(obs_raw),
+            images=extract_agibot_residual_images(
+                obs_raw,
+                image_keys=image_keys,
+            ),
             image_keys=image_keys,
+            base_actions=base_chunk,
             residual_alpha=float(action_spec.alpha),
         )
 
-        final_action, step_unrepresentable_values, step_unrepresentable = _project_expert_action(
+        final_action, step_unrepresentable_values, step_unrepresentable = project_expert_action(
             expert_action=_expert_action_from_step(
                 raw_step,
                 action_dim=int(action_spec.action_dim),
@@ -637,9 +486,13 @@ def _prepare_reference_episode_transitions(
                 )
             next_base_chunk = np.asarray(base_chunks_per_step[step_idx + 1], dtype=np.float32)
             next_residual_obs = build_chunk_residual_obs(
-                obs=next_obs_raw,
-                base_actions=next_base_chunk,
+                robot_state=build_agibot_state(next_obs_raw),
+                images=extract_agibot_residual_images(
+                    next_obs_raw,
+                    image_keys=image_keys,
+                ),
                 image_keys=image_keys,
+                base_actions=next_base_chunk,
                 residual_alpha=float(action_spec.alpha),
             )
             mask = 1.0
@@ -670,7 +523,7 @@ def _prepare_reference_episode_transitions(
     return transitions, episode_stats
 
 
-def _write_manifest(
+def write_manifest(
     *,
     manifest_path: Path,
     task_spec: AgiBotTaskSpec,
@@ -723,46 +576,16 @@ def _write_manifest(
     return manifest
 
 
-def _episode_files_from_manifest(manifest_path: Path) -> list[Path]:
-    manifest = _read_manifest(manifest_path)
-    if manifest is None:
-        raise ValueError(f"Invalid offline manifest: {manifest_path}")
-    episode_files = manifest.get("episode_files", ())
-    resolved: list[Path] = []
-    for entry in episode_files:
-        resolved.append((manifest_path.parent / str(entry)).resolve())
-    return resolved
-
-
 def resolve_prepared_episode_files(paths: Sequence[Path]) -> list[Path]:
-    episode_files: list[Path] = []
-    for path in paths:
-        if path.is_dir():
-            manifest_path = path / MANIFEST_FILENAME
-            if manifest_path.exists():
-                episode_files.extend(_episode_files_from_manifest(manifest_path))
-                continue
-            episode_files.extend(sorted(path.glob(EPISODE_FILE_GLOB)))
-            continue
-        if path.name == MANIFEST_FILENAME:
-            episode_files.extend(_episode_files_from_manifest(path))
-            continue
-        if path.suffix == ".pkl":
-            episode_files.append(path.resolve())
-            continue
-        raise ValueError(f"Unsupported offline prepared path: {path}")
-    unique_files: list[Path] = []
-    seen = set()
-    for path in episode_files:
-        resolved = path.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        unique_files.append(resolved)
-    return unique_files
+    return _resolve_prepared_episode_files(
+        paths,
+        manifest_filename=MANIFEST_FILENAME,
+        episode_file_glob=EPISODE_FILE_GLOB,
+        read_manifest_fn=read_manifest,
+    )
 
 
-def _resolve_reference_raw_episode_files(dataset_path: Path) -> list[Path]:
+def resolve_reference_raw_episode_files(dataset_path: Path) -> list[Path]:
     if dataset_path.is_dir():
         episode_files = sorted(dataset_path.glob(EPISODE_FILE_GLOB))
         if episode_files:
@@ -778,160 +601,6 @@ def _resolve_reference_raw_episode_files(dataset_path: Path) -> list[Path]:
     )
 
 
-def prepare_current_task_offline_data(
-    cfg: AgiBotTrainConfig,
-    *,
-    logger: logging.Logger,
-) -> OfflinePreparedInputs:
-    if not cfg.offline.enabled:
-        return OfflinePreparedInputs(
-            prepared_paths=tuple(),
-            prepare_stats=None,
-            manifest_paths=tuple(),
-        )
-
-    prepared_paths = resolve_configured_prepared_paths(cfg)
-    if prepared_paths:
-        return OfflinePreparedInputs(
-            prepared_paths=prepared_paths,
-            prepare_stats=None,
-            manifest_paths=tuple(
-                path / MANIFEST_FILENAME if path.is_dir() else path
-                for path in prepared_paths
-                if path.name == MANIFEST_FILENAME or path.is_dir()
-            ),
-        )
-
-    task_spec = _resolve_task_spec(cfg)
-    prepared_dir = _prepared_dir_for_cfg(cfg, task_spec=task_spec)
-    manifest_path = prepared_dir / MANIFEST_FILENAME
-    fingerprint = _prepare_fingerprint(cfg, task_spec=task_spec)
-    raw_episode_files = _resolve_reference_raw_episode_files(task_spec.dataset_path)
-
-    logger.warning(
-        "Preparing AgiBot offline data with a temporary reference-only pipeline. "
-        "This mirrors the LIBERO workflow shape but not the final AgiBot data source."
-    )
-
-    prepared_dir.mkdir(parents=True, exist_ok=True)
-    for stale_path in prepared_dir.glob(EPISODE_FILE_GLOB):
-        stale_path.unlink()
-
-    action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=cfg.env.action_dim)
-    image_keys = cfg.obs.image_keys
-    base_policy = build_agibot_base_policy(cfg, logger=logger)
-    prepare_stats: dict[str, Any] = {
-        "reference_only": True,
-        "reference_source_format": REFERENCE_SOURCE_FORMAT,
-        "reference_note": REFERENCE_NOTE,
-        "raw_dataset_path": str(task_spec.dataset_path),
-        "prepared_dir": str(prepared_dir),
-        "episodes_total": 0,
-        "steps_total": 0,
-        "steps_unrepresentable": 0,
-        "steps_filtered": 0,
-        "episodes_written": 0,
-        "steps_written": 0,
-        "elapsed_sec": 0.0,
-    }
-    start_time = time.time()
-    episode_files: list[Path] = []
-
-    logger.info(
-        "Preparing AgiBot offline dataset (temporary reference mode): task=%s backend=%s raw=%s output=%s",
-        task_spec.task_key,
-        _describe_policy_backend(cfg),
-        task_spec.dataset_path,
-        prepared_dir,
-    )
-
-    try:
-        episode_iter: Iterable[tuple[int, Path]] = tqdm(
-            enumerate(raw_episode_files),
-            total=len(raw_episode_files),
-            desc=f"prepare {task_spec.task_key}",
-            unit="episode",
-            dynamic_ncols=True,
-            leave=True,
-        )
-        for episode_index, episode_source_path in episode_iter:
-            with open(episode_source_path, "rb") as fp:
-                raw_payload = pickle.load(fp)
-            raw_steps = _normalize_episode_steps(
-                raw_payload,
-                source_path=episode_source_path,
-            )
-            transitions, episode_stats = _prepare_reference_episode_transitions(
-                raw_steps=raw_steps,
-                episode_id=int(episode_index),
-                task_prompt=task_spec.task_description,
-                action_spec=action_spec,
-                image_keys=image_keys,
-                base_policy=base_policy,
-                expert_reference_scale=float(cfg.offline.prepare.expert_reference_scale),
-                clip_residual_to_unit=bool(cfg.offline.prepare.clip_residual_to_unit),
-                filter_unrepresentable_steps=bool(
-                    cfg.offline.prepare.filter_unrepresentable_steps
-                ),
-                source_path=episode_source_path,
-            )
-            prepare_stats["episodes_total"] = int(prepare_stats["episodes_total"]) + 1
-            prepare_stats["steps_total"] = int(prepare_stats["steps_total"]) + int(
-                episode_stats["steps_total"]
-            )
-            prepare_stats["steps_unrepresentable"] = int(
-                prepare_stats["steps_unrepresentable"]
-            ) + int(episode_stats["steps_unrepresentable"])
-            prepare_stats["steps_filtered"] = int(
-                prepare_stats["steps_filtered"]
-            ) + int(episode_stats["steps_filtered"])
-            prepare_stats["steps_written"] = int(prepare_stats["steps_written"]) + int(
-                episode_stats["steps_written"]
-            )
-            if transitions:
-                episode_path = prepared_dir / f"episode_{int(episode_index):06d}.pkl"
-                with open(episode_path, "wb") as fp:
-                    pickle.dump(transitions, fp, protocol=pickle.HIGHEST_PROTOCOL)
-                episode_files.append(episode_path)
-                prepare_stats["episodes_written"] = int(
-                    prepare_stats["episodes_written"]
-                ) + 1
-    finally:
-        base_policy_close = getattr(base_policy, "close", None)
-        if callable(base_policy_close):
-            try:
-                base_policy_close()
-            except Exception:  # noqa: BLE001
-                pass
-
-    prepare_stats["elapsed_sec"] = float(time.time() - start_time)
-    _write_manifest(
-        manifest_path=manifest_path,
-        task_spec=task_spec,
-        cfg=cfg,
-        fingerprint=fingerprint,
-        episode_files=episode_files,
-        prepare_stats=prepare_stats,
-    )
-    logger.info(
-        "AgiBot offline prepare complete: episodes_total=%s steps_total=%s "
-        "steps_unrepresentable=%s steps_filtered=%s episodes_written=%s "
-        "steps_written=%s manifest=%s",
-        int(prepare_stats["episodes_total"]),
-        int(prepare_stats["steps_total"]),
-        int(prepare_stats["steps_unrepresentable"]),
-        int(prepare_stats["steps_filtered"]),
-        int(prepare_stats["episodes_written"]),
-        int(prepare_stats["steps_written"]),
-        manifest_path,
-    )
-    return OfflinePreparedInputs(
-        prepared_paths=(prepared_dir,),
-        prepare_stats=prepare_stats,
-        manifest_paths=(manifest_path,),
-    )
-
-
 def load_prepared_offline_replay(
     *,
     replay_buffer: Any,
@@ -940,115 +609,33 @@ def load_prepared_offline_replay(
     max_episodes: int | None = None,
     max_transitions: int | None = None,
 ) -> dict[str, Any]:
-    episode_files = resolve_prepared_episode_files(prepared_paths)
-    stats: dict[str, Any] = {
-        "files_total": int(len(episode_files)),
-        "episodes_loaded": 0,
-        "steps_loaded": 0,
-        "load_errors": 0,
-    }
-    if not episode_files:
-        logger.warning("Prepared offline dataset paths resolved to zero episode files")
-        return stats
-
-    episode_iter: Iterable[Path] = tqdm(
-        episode_files,
-        total=len(episode_files),
-        desc="load offline replay",
-        unit="episode",
-        dynamic_ncols=True,
-        leave=False,
+    return _load_prepared_offline_replay(
+        replay_buffer=replay_buffer,
+        prepared_paths=prepared_paths,
+        logger=logger,
+        max_episodes=max_episodes,
+        max_transitions=max_transitions,
+        manifest_filename=MANIFEST_FILENAME,
+        episode_file_glob=EPISODE_FILE_GLOB,
+        read_manifest_fn=read_manifest,
     )
-    for episode_path in episode_iter:
-        if max_episodes is not None and stats["episodes_loaded"] >= int(max_episodes):
-            break
-        if max_transitions is not None and stats["steps_loaded"] >= int(max_transitions):
-            break
-        try:
-            with open(episode_path, "rb") as fp:
-                transitions = pickle.load(fp)
-            if not isinstance(transitions, list):
-                raise ValueError(f"prepared episode must be a list, got {type(transitions)}")
-            for transition in transitions:
-                if max_transitions is not None and stats["steps_loaded"] >= int(max_transitions):
-                    break
-                if not isinstance(transition, dict):
-                    raise ValueError(
-                        f"prepared transition must be a dict, got {type(transition)}"
-                    )
-                replay_buffer.insert(transition)
-                stats["steps_loaded"] += 1
-            stats["episodes_loaded"] += 1
-        except Exception as exc:  # noqa: BLE001
-            stats["load_errors"] += 1
-            logger.warning("failed to load prepared offline episode %s: %s", episode_path, exc)
-
-    manifest_paths: list[Path] = []
-    seen_manifest_paths: set[Path] = set()
-    for prepared_path in prepared_paths:
-        manifest_path: Path | None = None
-        if prepared_path.is_dir():
-            candidate = prepared_path / MANIFEST_FILENAME
-            if candidate.exists():
-                manifest_path = candidate.resolve()
-        elif prepared_path.name == MANIFEST_FILENAME:
-            manifest_path = prepared_path.resolve()
-        if manifest_path is None or manifest_path in seen_manifest_paths:
-            continue
-        seen_manifest_paths.add(manifest_path)
-        manifest_paths.append(manifest_path)
-
-    dataset_stats = {
-        "steps_total": 0,
-        "steps_unrepresentable": 0,
-        "steps_filtered": 0,
-        "steps_written": 0,
-    }
-    for manifest_path in manifest_paths:
-        manifest = _read_manifest(manifest_path)
-        if manifest is None:
-            continue
-        prepare_stats = manifest.get("prepare_stats", None)
-        if not isinstance(prepare_stats, dict):
-            continue
-        dataset_stats["steps_total"] += int(prepare_stats.get("steps_total", 0) or 0)
-        dataset_stats["steps_unrepresentable"] += int(
-            prepare_stats.get("steps_unrepresentable", 0) or 0
-        )
-        dataset_stats["steps_filtered"] += int(
-            prepare_stats.get("steps_filtered", 0) or 0
-        )
-        dataset_stats["steps_written"] += int(
-            prepare_stats.get(
-                "steps_written",
-                prepare_stats.get("transitions_written", 0),
-            )
-            or 0
-        )
-
-    logger.info(
-        "Offline replay loaded: files_total=%s episodes_loaded=%s steps_loaded=%s "
-        "load_errors=%s dataset_steps_total=%s dataset_steps_filtered=%s "
-        "dataset_steps_written=%s",
-        int(stats["files_total"]),
-        int(stats["episodes_loaded"]),
-        int(stats["steps_loaded"]),
-        int(stats["load_errors"]),
-        int(dataset_stats["steps_total"]),
-        int(dataset_stats["steps_filtered"]),
-        int(dataset_stats["steps_written"]),
-    )
-    return stats
 
 
 __all__ = [
     "AgiBotTaskSpec",
-    "OfflinePreparedInputs",
     "OfflinePreparedResolution",
     "OFFLINE_FORMAT_VERSION",
+    "REFERENCE_NOTE",
+    "REFERENCE_SOURCE_FORMAT",
     "load_prepared_offline_replay",
-    "prepare_current_task_offline_data",
+    "normalize_episode_steps",
+    "prepare_fingerprint",
+    "prepare_reference_episode_transitions",
+    "prepared_dir_for_cfg",
     "resolve_and_validate_prepared_paths",
     "resolve_configured_prepared_paths",
     "resolve_prepared_episode_files",
+    "resolve_reference_raw_episode_files",
+    "resolve_task_spec",
+    "write_manifest",
 ]

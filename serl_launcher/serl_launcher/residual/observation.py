@@ -1,7 +1,8 @@
-"""Observation-schema helpers for AgiBot residual training."""
+"""Environment-agnostic residual-observation schema helpers."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Iterable
+from typing import Mapping
 
 import numpy as np
 
@@ -10,12 +11,19 @@ try:
 except ModuleNotFoundError:
     import gymnasium as gym
 
-from .env.observation import AGIBOT_STATE_DIM
-from .env.observation import RESIDUAL_IMAGE_HEIGHT
-from .env.observation import RESIDUAL_IMAGE_WIDTH
-from .env.observation import build_agibot_state
-from .env.observation import extract_agibot_residual_images
-from .schema import resolve_agibot_image_keys
+
+def _normalize_image_keys(image_keys: Iterable[str]) -> tuple[str, ...]:
+    normalized_keys: list[str] = []
+    seen: set[str] = set()
+    for image_key in image_keys:
+        key = str(image_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_keys.append(key)
+    if not normalized_keys:
+        raise ValueError("At least one image key is required")
+    return tuple(normalized_keys)
 
 
 def prepare_base_actions_chunk(
@@ -39,42 +47,62 @@ def prepare_base_actions_chunk(
 
 def build_chunk_residual_obs(
     *,
-    obs: dict[str, Any],
+    robot_state: np.ndarray,
+    images: Mapping[str, np.ndarray],
+    image_keys: Iterable[str],
     base_actions: np.ndarray,
-    image_keys: tuple[str, ...],
     residual_alpha: float,
 ) -> dict[str, np.ndarray]:
     base_actions_array = np.asarray(base_actions, dtype=np.float32)
-    resolved_image_keys = resolve_agibot_image_keys(image_keys)
-    images = extract_agibot_residual_images(obs, image_keys=resolved_image_keys)
+    if base_actions_array.ndim != 2 or int(base_actions_array.shape[0]) <= 0:
+        raise ValueError(
+            "base_actions must be a non-empty 2D array, "
+            f"got shape {base_actions_array.shape}"
+        )
+
     residual_obs: dict[str, np.ndarray] = {
-        "robot_proprio": np.expand_dims(build_agibot_state(obs), axis=0).astype(
-            np.float32
-        ),
+        "robot_proprio": np.expand_dims(
+            np.asarray(robot_state, dtype=np.float32).reshape(-1),
+            axis=0,
+        ).astype(np.float32),
         "base_action": np.expand_dims(base_actions_array[0], axis=0).astype(np.float32),
         "base_action_chunk": np.expand_dims(base_actions_array, axis=0).astype(
             np.float32
         ),
         "alpha": np.asarray([[residual_alpha]], dtype=np.float32),
     }
-    for key in resolved_image_keys:
-        residual_obs[key] = np.expand_dims(images[key].copy(), axis=0)
+    for key in _normalize_image_keys(image_keys):
+        if key not in images:
+            raise KeyError(f"Missing image key {key!r}; available keys={sorted(images)}")
+        residual_obs[key] = np.expand_dims(
+            np.asarray(images[key], dtype=np.uint8).copy(),
+            axis=0,
+        )
     return residual_obs
 
 
 def build_chunk_residual_sample_obs(
     *,
+    state_dim: int,
     action_dim: int,
     chunk_horizon: int,
-    image_keys: tuple[str, ...],
+    image_keys: Iterable[str],
+    image_height: int,
+    image_width: int,
 ) -> dict[str, np.ndarray]:
+    if int(state_dim) <= 0:
+        raise ValueError(f"state_dim must be positive, got {state_dim}")
     if int(action_dim) <= 0:
         raise ValueError(f"action_dim must be positive, got {action_dim}")
     if int(chunk_horizon) <= 0:
         raise ValueError(f"chunk_horizon must be positive, got {chunk_horizon}")
+    if int(image_height) <= 0:
+        raise ValueError(f"image_height must be positive, got {image_height}")
+    if int(image_width) <= 0:
+        raise ValueError(f"image_width must be positive, got {image_width}")
 
     sample_obs: dict[str, np.ndarray] = {
-        "robot_proprio": np.zeros((1, AGIBOT_STATE_DIM), dtype=np.float32),
+        "robot_proprio": np.zeros((1, int(state_dim)), dtype=np.float32),
         "base_action": np.zeros((1, int(action_dim)), dtype=np.float32),
         "base_action_chunk": np.zeros(
             (1, int(chunk_horizon), int(action_dim)),
@@ -82,9 +110,9 @@ def build_chunk_residual_sample_obs(
         ),
         "alpha": np.zeros((1, 1), dtype=np.float32),
     }
-    for key in resolve_agibot_image_keys(image_keys):
+    for key in _normalize_image_keys(image_keys):
         sample_obs[key] = np.zeros(
-            (1, RESIDUAL_IMAGE_HEIGHT, RESIDUAL_IMAGE_WIDTH, 3),
+            (1, int(image_height), int(image_width), 3),
             dtype=np.uint8,
         )
     return sample_obs
@@ -93,9 +121,9 @@ def build_chunk_residual_sample_obs(
 def build_chunk_residual_observation_space(
     *,
     sample_obs: dict[str, np.ndarray],
-    image_keys: tuple[str, ...],
+    image_keys: Iterable[str],
 ) -> gym.spaces.Dict:
-    resolved_image_keys = set(resolve_agibot_image_keys(image_keys))
+    resolved_image_keys = set(_normalize_image_keys(image_keys))
     spaces: dict[str, gym.Space] = {}
     for key, value in sample_obs.items():
         value_array = np.asarray(value)

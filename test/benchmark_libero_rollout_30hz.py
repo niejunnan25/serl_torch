@@ -21,7 +21,7 @@ benchmark still exercises:
 
 - build_libero_policy_input(...)
 - build_chunk_residual_obs(...)
-- RawChunkRecord / assemble_chunk_step_transitions(...)
+- ChunkExecutionRecord / assemble_chunk_step_transitions(...)
 
 Usage:
 
@@ -56,12 +56,14 @@ for candidate in (REPO_PARENT, SERL_LAUNCHER_ROOT):
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
+from serl_launcher.residual.observation import build_chunk_residual_obs
+from serl_launcher.residual.observation import prepare_base_actions_chunk
 from serl_launcher.residual.typed_action import ResidualActionSpec
+from serl_torch.examples.libero.env.observation import build_libero_state
+from serl_torch.examples.libero.env.observation import extract_libero_images
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
-from serl_torch.examples.libero.residual_observation import build_chunk_residual_obs
-from serl_torch.examples.libero.residual_observation import prepare_base_actions_chunk
+from serl_torch.examples.libero.transition_assembly import ChunkExecutionRecord
 from serl_torch.examples.libero.transition_assembly import PrefetchedDecisionObs
-from serl_torch.examples.libero.transition_assembly import RawChunkRecord
 from serl_torch.examples.libero.transition_assembly import (
     assemble_chunk_step_transitions,
 )
@@ -397,9 +399,10 @@ def _infer_decision_obs(
         )
     with stats.context(f"{metric_prefix}.build_residual_obs"):
         residual_obs = build_chunk_residual_obs(
-            obs=obs,
-            base_actions=base_actions,
+            robot_state=build_libero_state(obs),
+            images=extract_libero_images(obs),
             image_keys=image_keys,
+            base_actions=base_actions,
             residual_alpha=float(residual_alpha),
         )
     return PrefetchedDecisionObs(
@@ -468,9 +471,10 @@ def _backfill_post_step_residual_obs_batch_aware(
             )
         with stats.context(f"{metric_prefix}.build_residual_obs"):
             residual_obs = build_chunk_residual_obs(
-                obs=post_step_obs,
-                base_actions=base_actions,
+                robot_state=build_libero_state(post_step_obs),
+                images=extract_libero_images(post_step_obs),
                 image_keys=image_keys,
+                base_actions=base_actions,
                 residual_alpha=float(residual_alpha),
             )
         base_action_chunks.append(np.asarray(base_actions, dtype=np.float32))
@@ -481,7 +485,7 @@ def _backfill_post_step_residual_obs_batch_aware(
 @dataclass
 class _PendingAsyncChunk:
     chunk_seq: int
-    raw: RawChunkRecord
+    raw: ChunkExecutionRecord
     backfill_future: Future[tuple[list[np.ndarray], list[dict[str, np.ndarray]]]]
     expects_tail_handoff: bool
     tail_next_residual_obs: dict[str, np.ndarray] | None = None
@@ -535,7 +539,7 @@ class BenchmarkAsyncChunkAssemblyCoordinator:
     def submit_chunk(
         self,
         *,
-        raw: RawChunkRecord,
+        raw: ChunkExecutionRecord,
         task_prompt: str,
         expect_tail_handoff: bool,
     ) -> int:
@@ -843,7 +847,7 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
                         with stats.context("step_env"):
                             chunk_result = env.step_chunk(action_chunk)
 
-                        raw_chunk = RawChunkRecord.from_step_chunk_result(
+                        raw_chunk = ChunkExecutionRecord.from_env_chunk_result(
                             episode_id=int(episode_id),
                             episode_step_start=int(episode_steps),
                             residual_obs_before_chunk=residual_obs,
@@ -1161,7 +1165,7 @@ def _parse_args() -> BenchmarkConfig:
         action_dim=int(args.action_dim),
         chunk_horizon=int(args.chunk_horizon),
         residual_alpha=float(args.residual_alpha),
-        image_keys=("image", "wrist_image"),
+        image_keys=("image_rgb_0", "image_rgb_1"),
         policy_infer_ms=float(args.policy_infer_ms),
         backfill_policy_infer_ms=float(backfill_policy_infer_ms),
         residual_sample_ms=float(args.residual_sample_ms),

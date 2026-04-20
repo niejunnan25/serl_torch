@@ -14,7 +14,7 @@
 - actor 主循环：[../scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
 - 真实机器人 env：[../env/task_env.py](/home/hello/codebase/serl_torch/examples/agibot_real/env/task_env.py)
 - base policy adapter：[../env/base_policy.py](/home/hello/codebase/serl_torch/examples/agibot_real/env/base_policy.py)
-- residual observation helper：[../residual_observation.py](/home/hello/codebase/serl_torch/examples/agibot_real/residual_observation.py)
+- residual observation helper：[../../../serl_launcher/serl_launcher/residual/observation.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/observation.py)
 
 ## 1. 当前实现的问题
 

@@ -144,8 +144,8 @@
   人工 gating / success / fail / reset 控制器
 - [env/base_policy.py](env/base_policy.py)
   AgiBot example-local base policy adapter
-- [residual_observation.py](residual_observation.py)
-  residual observation schema
+- [../../serl_launcher/serl_launcher/residual/observation.py](../../serl_launcher/serl_launcher/residual/observation.py)
+  公共 residual observation schema
 - [docs/optimized_training_startup.md](docs/optimized_training_startup.md)
   针对旧 optimized 启动方式和 copy 训练线的补充说明
 - [docs/real_robot_startup_guide.md](docs/real_robot_startup_guide.md)

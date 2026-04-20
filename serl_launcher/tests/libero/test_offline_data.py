@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment-dependent
 
 if OmegaConf is not None:
     from serl_torch.examples.libero.config import parse_train_cfg
-    from serl_torch.examples.libero.offline_data import (
+    from serl_torch.examples.libero.env.offline_data import (
         resolve_and_validate_prepared_paths,
     )
 

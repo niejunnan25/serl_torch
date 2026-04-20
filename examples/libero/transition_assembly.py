@@ -9,13 +9,15 @@ from typing import Any
 
 import numpy as np
 
+from serl_launcher.residual.observation import build_chunk_residual_obs
+from serl_launcher.residual.observation import prepare_base_actions_chunk
 from serl_launcher.rollout.async_transition_assembly import (
     AsyncTransitionAssemblyCoordinator,
 )
+from serl_torch.examples.libero.env.observation import build_libero_state
+from serl_torch.examples.libero.env.observation import extract_libero_images
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_inputs
-from serl_torch.examples.libero.residual_observation import build_chunk_residual_obs
-from serl_torch.examples.libero.residual_observation import prepare_base_actions_chunk
 
 
 @dataclass(frozen=True)
@@ -147,9 +149,10 @@ def infer_chunk_residual_obs(
         chunk_horizon=chunk_horizon,
     )
     residual_obs = build_chunk_residual_obs(
-        obs=obs,
-        base_actions=base_actions,
+        robot_state=build_libero_state(obs),
+        images=extract_libero_images(obs),
         image_keys=image_keys,
+        base_actions=base_actions,
         residual_alpha=residual_alpha,
     )
     return np.asarray(base_actions, dtype=np.float32), residual_obs
@@ -523,9 +526,10 @@ def backfill_post_step_residual_obs_batch_aware(
             chunk_horizon=chunk_horizon,
         )
         next_residual_obs = build_chunk_residual_obs(
-            obs=post_step_obs,
-            base_actions=next_base_actions,
+            robot_state=build_libero_state(post_step_obs),
+            images=extract_libero_images(post_step_obs),
             image_keys=image_keys,
+            base_actions=next_base_actions,
             residual_alpha=residual_alpha,
         )
         base_action_chunks.append(np.asarray(next_base_actions, dtype=np.float32))
