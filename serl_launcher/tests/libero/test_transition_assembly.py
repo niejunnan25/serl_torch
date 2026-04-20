@@ -33,7 +33,7 @@ try:
     )
     from serl_torch.examples.libero.transition_assembly import PrefetchedDecisionObs
     from serl_torch.examples.libero.transition_assembly import (
-        RawChunkRecord,
+        ChunkExecutionRecord,
     )
     from serl_torch.examples.libero.transition_assembly import (
         assemble_chunk_step_transitions,
@@ -48,7 +48,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
     LiberoActorTransitionAssembler = object  # type: ignore[assignment]
     LiberoTransitionAssembler = object  # type: ignore[assignment]
     PrefetchedDecisionObs = object  # type: ignore[assignment]
-    RawChunkRecord = object  # type: ignore[assignment]
+    ChunkExecutionRecord = object  # type: ignore[assignment]
 
     def assemble_chunk_step_transitions(*args: object, **kwargs: object) -> object:
         raise _IMPORT_ERROR
@@ -104,7 +104,7 @@ class _FakeActorSyncAssembler:
     def process_chunk(
         self,
         *,
-        raw: RawChunkRecord,
+        raw: ChunkExecutionRecord,
         task_prompt: str,
     ) -> AssemblyResult:
         del raw, task_prompt
@@ -255,9 +255,9 @@ def _fake_libero_raw_chunk(
     obs_seeds: tuple[float, ...] = (10.0, 20.0),
     done: bool = False,
     truncated: bool = False,
-) -> RawChunkRecord:
+) -> ChunkExecutionRecord:
     executed_steps = len(obs_seeds)
-    return RawChunkRecord(
+    return ChunkExecutionRecord(
         episode_id=1,
         episode_step_start=0,
         residual_obs_before_chunk={
@@ -339,7 +339,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
 
     def test_raw_chunk_record_rejects_empty_chunk(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "no executed steps"):
-            RawChunkRecord.from_step_chunk_result(
+            ChunkExecutionRecord.from_env_chunk_result(
                 episode_id=1,
                 episode_step_start=0,
                 residual_obs_before_chunk={"state": np.asarray([0.0])},
@@ -360,7 +360,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
 
     def test_raw_chunk_record_rejects_num_steps_past_observations(self) -> None:
         with self.assertRaisesRegex(ValueError, "shorter than executed_steps"):
-            RawChunkRecord.from_step_chunk_result(
+            ChunkExecutionRecord.from_env_chunk_result(
                 episode_id=1,
                 episode_step_start=0,
                 residual_obs_before_chunk={"state": np.asarray([0.0])},
@@ -381,7 +381,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
 
     def test_raw_chunk_record_rejects_short_action_chunk(self) -> None:
         with self.assertRaisesRegex(ValueError, "action_chunk is shorter"):
-            RawChunkRecord.from_step_chunk_result(
+            ChunkExecutionRecord.from_env_chunk_result(
                 episode_id=1,
                 episode_step_start=0,
                 residual_obs_before_chunk={"state": np.asarray([0.0])},
@@ -410,7 +410,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
             base_actions=[base1, base2],
             residual_observations=[obs1, obs2],
         )
-        raw = RawChunkRecord.from_step_chunk_result(
+        raw = ChunkExecutionRecord.from_env_chunk_result(
             episode_id=3,
             episode_step_start=4,
             residual_obs_before_chunk=obs0,
@@ -447,7 +447,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
             base_actions=[np.asarray([[1.0]], dtype=np.float32)],
             residual_observations=[obs1],
         )
-        raw = RawChunkRecord.from_step_chunk_result(
+        raw = ChunkExecutionRecord.from_env_chunk_result(
             episode_id=1,
             episode_step_start=0,
             residual_obs_before_chunk=obs0,
@@ -479,7 +479,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
             base_actions=[np.asarray([[1.0]], dtype=np.float32)],
             residual_observations=[obs1],
         )
-        raw = RawChunkRecord.from_step_chunk_result(
+        raw = ChunkExecutionRecord.from_env_chunk_result(
             episode_id=1,
             episode_step_start=0,
             residual_obs_before_chunk=obs0,
@@ -560,7 +560,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
             image_keys=("image_rgb_0", "image_rgb_1"),
             residual_alpha=0.1,
         )
-        raw = RawChunkRecord.from_step_chunk_result(
+        raw = ChunkExecutionRecord.from_env_chunk_result(
             episode_id=5,
             episode_step_start=0,
             residual_obs_before_chunk={"state": np.asarray([0.0], dtype=np.float32)},

@@ -66,6 +66,7 @@ from serl_torch.examples.libero.async_eval import load_new_async_eval_results
 from serl_torch.examples.libero.async_eval import start_async_eval_worker
 from serl_torch.examples.libero.async_eval import summarize_async_eval_results
 from serl_torch.examples.libero.async_eval import wait_for_async_eval_worker
+from serl_torch.examples.libero.actor_data_plane import LiberoActorDataPlane
 from serl_torch.examples.libero.env.factory import create_env
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.offline_data import load_prepared_offline_replay
@@ -78,15 +79,7 @@ from serl_torch.examples.libero.residual_observation import (
     build_chunk_residual_sample_obs,
 )
 from serl_torch.examples.libero.residual_observation import prepare_base_actions_chunk
-from serl_torch.examples.libero.transition_assembly import (
-    AssemblyResult,
-)
-from serl_torch.examples.libero.transition_assembly import (
-    ChunkExecutionRecord,
-)
-from serl_torch.examples.libero.transition_assembly import (
-    LiberoActorTransitionAssembler,
-)
+from serl_torch.examples.libero.transition_assembly import ChunkExecutionRecord
 
 
 def actor(
@@ -106,22 +99,6 @@ def actor(
     chunk_horizon = cfg.residual.chunk_horizon
     residual_alpha = float(cfg.residual.alpha)
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
-    transition_assembler = LiberoActorTransitionAssembler(
-        cfg=cfg,
-        policy_client=policy_client,
-        logger=logger,
-    )
-    # Optimized actor dataflow:
-    # chunk execute -> post-hoc step transition assembly -> step-window replay.
-    # Replay still stores per-step transitions; this is not direct chunk replay.
-    if transition_assembler.async_transition_assembly_enabled:
-        logger.info(
-            "Async backfill enabled: mode=%s endpoint=%s:%s max_pending_chunks=%s",
-            str(cfg.backfill_policy.mode),
-            str(cfg.backfill_policy.host),
-            int(cfg.backfill_policy.port),
-            int(cfg.backfill_policy.max_pending_chunks),
-        )
 
     sample_obs = build_chunk_residual_sample_obs(
         action_dim=action_dim,
@@ -162,16 +139,13 @@ def actor(
     client.recv_network_callback(update_actor)
 
     timer = Timer()
-    steps_per_update = cfg.training.steps_per_update
     log_period = cfg.training.log_period
     max_env_steps = cfg.training.max_env_steps
     env_seed = cfg.env.seed
 
     env_steps = 0
-    committed_env_steps = 0
     episode_id = 0
     success_count = 0
-    current_task_prompt: str | None = None
     recent_episode_successes: deque[int] = deque(maxlen=20)
     actor_timer_log_path = run_dir / "actor_timers.jsonl"
     rollout_log_path = run_dir / str(
@@ -237,19 +211,15 @@ def actor(
         dynamic_ncols=True,
         leave=True,
     )
-
-    def _commit_assembled_chunks(assembled_chunks: list[AssemblyResult]) -> None:
-        nonlocal committed_env_steps
-        for assembled_chunk in assembled_chunks:
-            for transition in assembled_chunk.transitions:
-                data_store.insert(transition)
-            for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
-                next_committed_env_step = int(committed_env_steps + step_offset)
-                if next_committed_env_step % steps_per_update == 0:
-                    _update_trainer_transport(
-                        context=f"commit_step_{int(next_committed_env_step)}"
-                    )
-            committed_env_steps += int(assembled_chunk.env_steps_delta)
+    # Keep actor focused on rollout control; chunk post-processing and replay
+    # commit details live behind the data-plane boundary.
+    data_plane = LiberoActorDataPlane(
+        cfg=cfg,
+        policy_client=policy_client,
+        data_store=data_store,
+        update_trainer_transport=_update_trainer_transport,
+        logger=logger,
+    )
 
     try:
         while env_steps < max_env_steps:
@@ -257,40 +227,29 @@ def actor(
             reset_seed = env_seed
             init_episode_idx = episode_id - 1
             obs = env.reset(seed=reset_seed, init_episode_idx=init_episode_idx)
-            current_task_prompt = str(task_prompt)
-            prefetched = None
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
 
             while env_steps < max_env_steps:
-                if transition_assembler.async_transition_assembly_enabled:
-                    with timer.context("commit_replay"):
-                        _commit_assembled_chunks(transition_assembler.drain_ready())
-
                 timer.tick("total")
                 with timer.context("prepare_action_chunk"):
-                    if prefetched is None:
-                        base_policy_input = build_libero_policy_input(
-                            obs,
-                            task_prompt,
-                        )
-                        base_actions, _ = policy_client.infer(base_policy_input)
-                        base_actions = prepare_base_actions_chunk(
-                            base_actions=base_actions,
-                            chunk_horizon=chunk_horizon,
-                        )
-                        residual_obs = build_chunk_residual_obs(
-                            obs=obs,
-                            base_actions=base_actions,
-                            image_keys=image_keys,
-                            residual_alpha=residual_alpha,
-                        )
-                    else:
-                        base_actions = prefetched.base_actions
-                        residual_obs = prefetched.residual_obs
-                        prefetched = None
+                    base_policy_input = build_libero_policy_input(
+                        obs,
+                        task_prompt,
+                    )
+                    base_actions, _ = policy_client.infer(base_policy_input)
+                    base_actions = prepare_base_actions_chunk(
+                        base_actions=base_actions,
+                        chunk_horizon=chunk_horizon,
+                    )
+                    residual_obs = build_chunk_residual_obs(
+                        obs=obs,
+                        base_actions=base_actions,
+                        image_keys=image_keys,
+                        residual_alpha=residual_alpha,
+                    )
 
                     residual_actions = agent.sample_action(
                         residual_obs,
@@ -324,15 +283,11 @@ def actor(
                     chunk_result=chunk_result,
                 )
                 previous_env_steps = int(env_steps)
-                with timer.context("assemble_transitions"):
-                    assembled_chunks = transition_assembler.handle_chunk(
-                        raw=raw_chunk,
+                with timer.context("process_rollout_chunk"):
+                    data_plane.observe_chunk(
+                        raw_chunk=raw_chunk,
                         task_prompt=task_prompt,
                     )
-                if transition_assembler.async_transition_assembly_enabled:
-                    prefetched = None
-                elif assembled_chunks:
-                    prefetched = assembled_chunks[-1].prefetched
 
                 env_steps += int(raw_chunk.executed_steps)
                 progress_bar.update(int(raw_chunk.executed_steps))
@@ -350,12 +305,6 @@ def actor(
                     next_env_step = int(previous_env_steps + step_offset)
                     if next_env_step % log_period == 0:
                         should_log_timer = True
-
-                if transition_assembler.async_transition_assembly_enabled:
-                    with timer.context("commit_replay"):
-                        _commit_assembled_chunks(assembled_chunks)
-                else:
-                    _commit_assembled_chunks(assembled_chunks)
 
                 timer.tock("total")
 
@@ -375,13 +324,10 @@ def actor(
                 if episode_done:
                     break
 
-            if transition_assembler.async_transition_assembly_enabled:
-                with timer.context("commit_replay"):
-                    _commit_assembled_chunks(
-                        transition_assembler.finish_episode(
-                            block=bool(wait_for_episode_commit),
-                        )
-                    )
+            with timer.context("finish_rollout_data"):
+                data_plane.finish_episode(
+                    wait_for_episode_commit=bool(wait_for_episode_commit),
+                )
             _update_trainer_transport(context="episode_end")
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
@@ -431,13 +377,8 @@ def actor(
 
     finally:
         try:
-            if current_task_prompt is not None:
-                assembled_chunks = transition_assembler.finish_episode(
-                    block=True,
-                )
-                if assembled_chunks:
-                    with timer.context("commit_replay"):
-                        _commit_assembled_chunks(assembled_chunks)
+            with timer.context("finish_rollout_data"):
+                data_plane.close()
             _update_trainer_transport(context="shutdown")
             if bool(cfg.runtime.trainer_transport.wait_committed_on_shutdown):
                 client.wait_until_committed()
@@ -472,7 +413,6 @@ def actor(
                 policy_client_close()
             except Exception:  # noqa: BLE001
                 pass
-        transition_assembler.close()
 
 
 def learner(

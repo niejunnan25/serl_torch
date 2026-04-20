@@ -25,7 +25,7 @@ class PrefetchedDecisionObs:
 
 
 @dataclass(frozen=True)
-class RawChunkRecord:
+class ChunkExecutionRecord:
     episode_id: int
     episode_step_start: int
     residual_obs_before_chunk: dict[str, np.ndarray]
@@ -42,7 +42,7 @@ class RawChunkRecord:
     executed_steps: int
 
     @classmethod
-    def from_step_chunk_result(
+    def from_env_chunk_result(
         cls,
         *,
         episode_id: int,
@@ -50,7 +50,7 @@ class RawChunkRecord:
         residual_obs_before_chunk: dict[str, np.ndarray],
         action_chunk: np.ndarray,
         chunk_result: dict[str, Any],
-    ) -> "RawChunkRecord":
+    ) -> "ChunkExecutionRecord":
         post_step_observations = list(chunk_result["observations"])
         rewards = [float(value) for value in chunk_result["rewards"]]
         dones = [bool(value) for value in chunk_result["dones"]]
@@ -206,7 +206,7 @@ class LiberoTransitionAssembler:
     def process_chunk(
         self,
         *,
-        raw: RawChunkRecord,
+        raw: ChunkExecutionRecord,
         task_prompt: str,
     ) -> AssemblyResult:
         backfilled_base_actions, backfilled_residual_obs = (
@@ -283,7 +283,7 @@ class LiberoActorTransitionAssembler:
         self._last_submitted_chunk_seq: int | None = None
         self._max_pending_chunks = int(cfg.backfill_policy.max_pending_chunks)
         self._async_assembly: AsyncTransitionAssemblyCoordinator[
-            RawChunkRecord,
+            ChunkExecutionRecord,
             dict[str, Any],
             dict[str, np.ndarray],
             AssemblyResult,
@@ -346,7 +346,7 @@ class LiberoActorTransitionAssembler:
     def process_chunk(
         self,
         *,
-        raw: RawChunkRecord,
+        raw: ChunkExecutionRecord,
         task_prompt: str,
     ) -> AssemblyResult:
         return self._sync_assembler.process_chunk(
@@ -362,7 +362,7 @@ class LiberoActorTransitionAssembler:
     def handle_chunk(
         self,
         *,
-        raw: RawChunkRecord,
+        raw: ChunkExecutionRecord,
         task_prompt: str,
     ) -> list[AssemblyResult]:
         if self._async_assembly is None:
@@ -433,7 +433,7 @@ class LiberoActorTransitionAssembler:
 
     def _build_assembly_result(
         self,
-        raw: RawChunkRecord,
+        raw: ChunkExecutionRecord,
         next_residual_observations: list[dict[str, np.ndarray]],
     ) -> AssemblyResult:
         transitions = assemble_chunk_step_transitions(
@@ -590,7 +590,7 @@ __all__ = [
     "LiberoActorTransitionAssembler",
     "LiberoTransitionAssembler",
     "PrefetchedDecisionObs",
-    "RawChunkRecord",
+    "ChunkExecutionRecord",
     "assemble_chunk_step_transitions",
     "backfill_post_step_residual_obs",
     "backfill_post_step_residual_obs_batch_aware",
