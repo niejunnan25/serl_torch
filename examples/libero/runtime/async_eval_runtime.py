@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Local async-eval helpers for the LIBERO reference training loop."""
+"""Local async-eval runtime helpers for the LIBERO reference training loop."""
 
 import logging
 import sys
@@ -96,7 +96,7 @@ def start_async_eval_worker(
             "eval checkpoints are not deleted before the worker processes them"
         )
 
-    worker_script = Path(__file__).resolve().parent / "scripts" / "process_eval_queue.py"
+    worker_script = Path(__file__).resolve().parent / "async_eval_worker.py"
     if not worker_script.exists():
         raise FileNotFoundError(f"Missing async eval worker script: {worker_script}")
 

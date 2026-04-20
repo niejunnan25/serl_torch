@@ -18,16 +18,22 @@
 - 训练期 eval
 - residual observation schema 和 typed config
 
-当前真正的主入口有六个：
+当前最常用的入口有六个：
 
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
 - [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py)
-- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+- [scripts/run_residual_offline_prepare.py](scripts/run_residual_offline_prepare.py)
 - [scripts/serve_env.py](scripts/serve_env.py)
 - [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
 - [tools/serve_env.sh](tools/serve_env.sh)
 
-`scripts/process_eval_queue.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
+`runtime/async_eval_worker.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
+
+这里有个刻意保留的边界：
+
+- `scripts/` 放可直接 `python` 运行的厚入口
+- `env/` 放 LIBERO-specific adapter，包括和 LIBERO task / dataset / observation 强绑定的 offline helper
+- `runtime/` 只放训练 / 评估运行期编排相关 helper，不放 prepared dataset 规则
 
 ## 目录结构
 
@@ -41,20 +47,24 @@
   actor / learner 共用训练入口，通过 `runtime.role=actor|learner` 切角色
 - [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py)
   当前优化训练入口，actor 支持 `env.step_chunk(...)`、post-hoc assembly、async backfill 和 `async_commit` transport
-- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+- [scripts/run_residual_offline_prepare.py](scripts/run_residual_offline_prepare.py)
   离线数据准备入口，默认也读取 `configs/train_residual.yaml`
 - [scripts/serve_env.py](scripts/serve_env.py)
   LIBERO HTTP RPC env server
-- [offline_data.py](offline_data.py)
-  prepared offline dataset 的生成、manifest 校验和 replay 加载
+- [env/offline_data.py](env/offline_data.py)
+  LIBERO-specific offline helper；包含 task/dataset resolve、demo 转换和 prepared replay 加载入口
 - [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
   checkpoint eval 入口
-- [scripts/process_eval_queue.py](scripts/process_eval_queue.py)
-  训练期 eval worker
-- [async_eval.py](async_eval.py)
-  训练期 eval runtime
+- [runtime/async_eval_worker.py](runtime/async_eval_worker.py)
+  训练期 eval worker；由 learner 自动拉起
+- [runtime/async_eval_runtime.py](runtime/async_eval_runtime.py)
+  训练期 async eval runtime glue
+- [runtime/transition_assembly.py](runtime/transition_assembly.py)
+  optimized actor 的 post-hoc chunk transition assembly
 - [env/](env/)
   本地 env、remote env、观测解析、LIBERO 路径 bootstrap
+- [runtime/](runtime/)
+  example-local runtime support；放训练/评估编排 helper 和内部 worker entrypoint
 - [../../serl_launcher/serl_launcher/residual/observation.py](../../serl_launcher/serl_launcher/residual/observation.py)
   公共 residual observation schema
 - [tools/serve_env.sh](tools/serve_env.sh)
@@ -86,7 +96,7 @@
 
 - [docs/chunk_residual_mdp_discussion.md](docs/chunk_residual_mdp_discussion.md)
 
-### `run_residual_training_optimized.py` 这条实验线是什么
+### `run_residual_training_optimized.py` 这条优化线是什么
 
 `run_residual_training_optimized.py` 和 canonical 的
 [scripts/run_residual_training.py](scripts/run_residual_training.py) 最大的区别在 actor 数据流：
@@ -224,7 +234,7 @@ canonical 训练配置是：
 
 - [configs/train_residual.yaml](configs/train_residual.yaml)
 
-当前 `scripts/run_residual_training.py` 和 `scripts/prepare_offline_data.py` 都默认读取这份配置；也就是说，prepare / train 共用同一套 `task`、`policy`、`obs`、`residual` 默认值。
+当前 `scripts/run_residual_training.py` 和 `scripts/run_residual_offline_prepare.py` 都默认读取这份配置；也就是说，prepare / train 共用同一套 `task`、`policy`、`obs`、`residual` 默认值。
 
 当前默认关键参数：
 
@@ -365,7 +375,7 @@ policy.type=joyra policy.port=9001
 
 如果你想使用 residual offline data，当前 canonical 入口是：
 
-- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
+- [scripts/run_residual_offline_prepare.py](scripts/run_residual_offline_prepare.py)
 
 它默认也读取：
 
@@ -385,7 +395,7 @@ policy.type=joyra policy.port=9001
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/prepare_offline_data.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_offline_prepare.py \
   offline.enabled=true \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
@@ -447,7 +457,7 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training.py 
 
 ### 5.1 启动 optimized 实验线
 
-当前推荐把 [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py) 作为优化实验线；默认基线仍然是 [scripts/run_residual_training.py](scripts/run_residual_training.py)。
+当前推荐把 [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py) 作为优化线；默认基线仍然是 [scripts/run_residual_training.py](scripts/run_residual_training.py)。
 
 `optimized` 默认读取 [configs/train_residual_optimized.yaml](configs/train_residual_optimized.yaml)，其中：
 
@@ -804,8 +814,14 @@ outputs/libero/eval_residual/<suite>_task_<id>/<timestamp>/
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
 - [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
 - [env/](env/)
+- [runtime/](runtime/)
 - [../../serl_launcher/serl_launcher/residual/observation.py](../../serl_launcher/serl_launcher/residual/observation.py)
 - `serl_launcher/serl_launcher/policy/*`
 - `serl_launcher/serl_launcher/residual/*`
+
+其中：
+
+- `env/offline_data.py` 继续保留在 `env/`，因为它承载的是 LIBERO-specific offline 规则
+- `runtime/` 现在只放 `async eval` 和 `optimized actor transition assembly` 这类运行编排模块
 
 如果你在旧笔记里看到已经不存在的脚本名，请以当前目录树和这份 README 为准。

@@ -62,9 +62,13 @@ from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_torch.examples.libero.env.observation import build_libero_state
 from serl_torch.examples.libero.env.observation import extract_libero_images
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
-from serl_torch.examples.libero.transition_assembly import ChunkExecutionRecord
-from serl_torch.examples.libero.transition_assembly import PrefetchedDecisionObs
-from serl_torch.examples.libero.transition_assembly import (
+from serl_torch.examples.libero.runtime.transition_assembly import (
+    ChunkExecutionRecord,
+)
+from serl_torch.examples.libero.runtime.transition_assembly import (
+    PrefetchedDecisionObs,
+)
+from serl_torch.examples.libero.runtime.transition_assembly import (
     assemble_chunk_step_transitions,
 )
 

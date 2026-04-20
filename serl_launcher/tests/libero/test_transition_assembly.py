@@ -21,24 +21,26 @@ for candidate in (REPO_PARENT, SERL_LAUNCHER_ROOT):
 
 _IMPORT_ERROR: ModuleNotFoundError | None = None
 try:
-    from serl_torch.examples.libero.transition_assembly import AssemblyResult
-    from serl_torch.examples.libero.transition_assembly import (
+    from serl_torch.examples.libero.runtime.transition_assembly import AssemblyResult
+    from serl_torch.examples.libero.runtime.transition_assembly import (
         BatchAwareLiberoTransitionAssembler,
     )
-    from serl_torch.examples.libero.transition_assembly import (
+    from serl_torch.examples.libero.runtime.transition_assembly import (
         LiberoActorTransitionAssembler,
     )
-    from serl_torch.examples.libero.transition_assembly import (
+    from serl_torch.examples.libero.runtime.transition_assembly import (
         LiberoTransitionAssembler,
     )
-    from serl_torch.examples.libero.transition_assembly import PrefetchedDecisionObs
-    from serl_torch.examples.libero.transition_assembly import (
+    from serl_torch.examples.libero.runtime.transition_assembly import (
+        PrefetchedDecisionObs,
+    )
+    from serl_torch.examples.libero.runtime.transition_assembly import (
         ChunkExecutionRecord,
     )
-    from serl_torch.examples.libero.transition_assembly import (
+    from serl_torch.examples.libero.runtime.transition_assembly import (
         assemble_chunk_step_transitions,
     )
-    from serl_torch.examples.libero.transition_assembly import (
+    from serl_torch.examples.libero.runtime.transition_assembly import (
         backfill_post_step_residual_obs_batch_aware,
     )
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent

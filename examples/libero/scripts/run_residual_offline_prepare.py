@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Prepare LIBERO residual offline data artifacts."""
+"""Run LIBERO residual offline data preparation."""
 
 from dataclasses import replace
 import json
@@ -64,7 +64,9 @@ def prepare_offline_data(
     )
 
     if not task_spec.dataset_path.exists():
-        raise FileNotFoundError(f"Raw LIBERO demo dataset not found: {task_spec.dataset_path}")
+        raise FileNotFoundError(
+            f"Raw LIBERO demo dataset not found: {task_spec.dataset_path}"
+        )
 
     import h5py
 
@@ -202,7 +204,9 @@ def main(cfg: DictConfig) -> None:
     logger.info("Config:\n%s", json.dumps(cfg_to_log_payload(typed_cfg), indent=2))
 
     if not typed_cfg.offline.enabled:
-        raise ValueError("prepare_offline_data.py requires offline.enabled=true")
+        raise ValueError(
+            "run_residual_offline_prepare.py requires offline.enabled=true"
+        )
     if typed_cfg.offline.prepared_path is not None:
         logger.info(
             "ignoring offline.prepared_path during prepare: %s",
@@ -216,7 +220,7 @@ def main(cfg: DictConfig) -> None:
     set_global_seeds(typed_cfg.global_seed)
     offline_inputs = prepare_offline_data(typed_cfg, logger=logger)
     summary = {
-        "role": "prepare_offline_data",
+        "role": "run_residual_offline_prepare",
         "mode": "residual",
         "prepared_path": (
             None
