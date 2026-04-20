@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from collections import deque
+import logging
 import sys
+import time
+from types import SimpleNamespace
+import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -15,12 +21,17 @@ for candidate in (REPO_PARENT, SERL_LAUNCHER_ROOT):
 
 _IMPORT_ERROR: ModuleNotFoundError | None = None
 try:
+    from serl_torch.examples.libero.transition_assembly import AssemblyResult
     from serl_torch.examples.libero.transition_assembly import (
         BatchAwareLiberoTransitionAssembler,
     )
     from serl_torch.examples.libero.transition_assembly import (
+        LiberoActorTransitionAssembler,
+    )
+    from serl_torch.examples.libero.transition_assembly import (
         LiberoTransitionAssembler,
     )
+    from serl_torch.examples.libero.transition_assembly import PrefetchedDecisionObs
     from serl_torch.examples.libero.transition_assembly import (
         RawChunkRecord,
     )
@@ -32,8 +43,11 @@ try:
     )
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
     _IMPORT_ERROR = exc
+    AssemblyResult = object  # type: ignore[assignment]
     BatchAwareLiberoTransitionAssembler = object  # type: ignore[assignment]
+    LiberoActorTransitionAssembler = object  # type: ignore[assignment]
     LiberoTransitionAssembler = object  # type: ignore[assignment]
+    PrefetchedDecisionObs = object  # type: ignore[assignment]
     RawChunkRecord = object  # type: ignore[assignment]
 
     def assemble_chunk_step_transitions(*args: object, **kwargs: object) -> object:
@@ -64,6 +78,39 @@ class _FakeAssembler(LiberoTransitionAssembler):
     ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
         del observations, task_prompt
         return self._base_actions, self._residual_observations
+
+
+class _FakeActorSyncAssembler:
+    def __init__(
+        self,
+        *,
+        decision_obses: list[PrefetchedDecisionObs] | None = None,
+        assembled_chunks: list[AssemblyResult] | None = None,
+    ) -> None:
+        self._decision_obses = deque(decision_obses or [])
+        self._assembled_chunks = deque(assembled_chunks or [])
+
+    def infer_decision_obs(
+        self,
+        *,
+        obs: dict[str, object],
+        task_prompt: str,
+    ) -> PrefetchedDecisionObs:
+        del obs, task_prompt
+        if not self._decision_obses:
+            raise AssertionError("unexpected infer_decision_obs call")
+        return self._decision_obses.popleft()
+
+    def process_chunk(
+        self,
+        *,
+        raw: RawChunkRecord,
+        task_prompt: str,
+    ) -> AssemblyResult:
+        del raw, task_prompt
+        if not self._assembled_chunks:
+            raise AssertionError("unexpected process_chunk call")
+        return self._assembled_chunks.popleft()
 
 
 class _BatchOnlyPolicyClient:
@@ -138,6 +185,101 @@ def _fake_libero_obs(value: float) -> dict[str, object]:
         "agentview_image": pixel,
         "robot0_eye_in_hand_image": pixel,
     }
+
+
+def _fake_libero_cfg(*, async_enabled: bool) -> SimpleNamespace:
+    return SimpleNamespace(
+        obs=SimpleNamespace(
+            image_keys=("image_rgb_0", "image_rgb_1"),
+        ),
+        residual=SimpleNamespace(
+            alpha=0.1,
+            chunk_horizon=2,
+        ),
+        backfill_policy=SimpleNamespace(
+            enabled=bool(async_enabled),
+            mode="thread",
+            host="127.0.0.1",
+            port=9000,
+            max_pending_chunks=8,
+        ),
+        policy=SimpleNamespace(type="fake"),
+        env=SimpleNamespace(action_dim=1),
+    )
+
+
+def _fake_prefetched_decision(seed: float) -> PrefetchedDecisionObs:
+    return PrefetchedDecisionObs(
+        base_actions=np.asarray(
+            [[float(seed)], [float(seed) + 0.5]],
+            dtype=np.float32,
+        ),
+        residual_obs={
+            "state": np.asarray([float(seed)], dtype=np.float32),
+        },
+    )
+
+
+def _fake_actor_result(
+    *,
+    prefetched: PrefetchedDecisionObs | None,
+    next_obs_seed: float,
+    episode_done: bool = False,
+) -> AssemblyResult:
+    return AssemblyResult(
+        transitions=[
+            {
+                "observations": {"state": np.asarray([0.0], dtype=np.float32)},
+                "actions": np.asarray([0.1], dtype=np.float32),
+                "next_observations": {
+                    "state": np.asarray([next_obs_seed], dtype=np.float32)
+                },
+                "rewards": 1.0,
+                "masks": 1.0,
+                "dones": bool(episode_done),
+            }
+        ],
+        prefetched=prefetched,
+        next_obs={"marker": float(next_obs_seed)},
+        episode_done=bool(episode_done),
+        env_steps_delta=1,
+        episode_steps_delta=1,
+        episode_return_delta=1.0,
+        episode_success=False,
+        last_info={"marker": float(next_obs_seed)},
+    )
+
+
+def _fake_libero_raw_chunk(
+    *,
+    obs_seeds: tuple[float, ...] = (10.0, 20.0),
+    done: bool = False,
+    truncated: bool = False,
+) -> RawChunkRecord:
+    executed_steps = len(obs_seeds)
+    return RawChunkRecord(
+        episode_id=1,
+        episode_step_start=0,
+        residual_obs_before_chunk={
+            "state": np.asarray([-1.0], dtype=np.float32)
+        },
+        action_chunk=np.asarray(
+            [[float(index) + 0.1] for index in range(executed_steps)],
+            dtype=np.float32,
+        ),
+        post_step_observations=[
+            {"seed": float(value)} for value in obs_seeds
+        ],
+        rewards=[1.0 for _ in obs_seeds],
+        dones=[False for _ in obs_seeds],
+        infos=[{"env_done": False} for _ in obs_seeds],
+        final_obs={"seed": float(obs_seeds[-1])},
+        chunk_done=bool(done),
+        chunk_truncated=bool(truncated),
+        reward_sum=float(executed_steps),
+        chunk_info={"seed": float(obs_seeds[-1])},
+        executed_steps=executed_steps,
+    )
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"missing dependency: {_IMPORT_ERROR}")
@@ -439,6 +581,141 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertIsNotNone(result.prefetched)
         assert result.prefetched is not None
         self.assertTrue(np.allclose(result.prefetched.base_actions[:, 0], [2.0, 2.5]))
+
+
+@unittest.skipIf(_IMPORT_ERROR is not None, f"missing dependency: {_IMPORT_ERROR}")
+class LiberoActorTransitionAssemblerTest(unittest.TestCase):
+    def test_sync_path_reuses_prefetched_decision_obs(self) -> None:
+        assembler = LiberoActorTransitionAssembler(
+            cfg=_fake_libero_cfg(async_enabled=False),
+            policy_client=object(),
+            logger=logging.getLogger(__name__),
+        )
+        first_decision = _fake_prefetched_decision(1.0)
+        prefetched_decision = _fake_prefetched_decision(2.0)
+        assembler._sync_assembler = _FakeActorSyncAssembler(
+            decision_obses=[first_decision],
+            assembled_chunks=[
+                _fake_actor_result(
+                    prefetched=prefetched_decision,
+                    next_obs_seed=7.0,
+                )
+            ],
+        )
+
+        decision_obs = assembler.infer_decision_obs(
+            obs={"seed": 0.0},
+            task_prompt="task",
+        )
+        assembled = assembler.handle_chunk(
+            raw=_fake_libero_raw_chunk(obs_seeds=(10.0,)),
+            task_prompt="task",
+        )
+        reused = assembler.pop_prefetched_decision_obs()
+
+        self.assertIs(decision_obs, first_decision)
+        self.assertEqual(len(assembled), 1)
+        self.assertIs(assembled[0].prefetched, prefetched_decision)
+        self.assertIs(reused, prefetched_decision)
+        self.assertIsNone(assembler.pop_prefetched_decision_obs())
+
+    def test_async_path_backfills_full_chunk_without_next_decision_handoff(self) -> None:
+        fake_client = types.SimpleNamespace(close=lambda: None)
+        fake_typed_factory = types.ModuleType("serl_launcher.policy.typed_factory")
+        fake_typed_factory.build_policy_client = lambda cfg, logger: fake_client
+        with mock.patch.dict(
+            sys.modules,
+            {"serl_launcher.policy.typed_factory": fake_typed_factory},
+        ):
+            assembler = LiberoActorTransitionAssembler(
+                cfg=_fake_libero_cfg(async_enabled=True),
+                policy_client=object(),
+                logger=logging.getLogger(__name__),
+            )
+
+        assembler._sync_assembler = _FakeActorSyncAssembler(
+            decision_obses=[_fake_prefetched_decision(1.0)],
+        )
+        assembler._backfill_residual_observations = (
+            lambda *, observations, task_prompt, policy_client: [
+                {"state": np.asarray([float(obs["seed"])], dtype=np.float32)}
+                for obs in observations
+            ]
+        )
+
+        decision_obs = assembler.infer_decision_obs(
+            obs={"seed": 0.0},
+            task_prompt="task",
+        )
+        self.assertTrue(np.allclose(decision_obs.base_actions[:, 0], [1.0, 1.5]))
+
+        assembled = assembler.handle_chunk(
+            raw=_fake_libero_raw_chunk(),
+            task_prompt="task",
+        )
+        drained = list(assembled)
+        for _ in range(20):
+            if drained:
+                break
+            drained = assembler.drain_ready()
+            time.sleep(0.01)
+
+        self.assertEqual(len(drained), 1)
+        self.assertTrue(
+            np.allclose(
+                drained[0].transitions[-1]["next_observations"]["state"],
+                [20.0],
+            )
+        )
+
+    def test_finish_episode_blocks_until_pending_chunk_commits(self) -> None:
+        fake_client = types.SimpleNamespace(close=lambda: None)
+        fake_typed_factory = types.ModuleType("serl_launcher.policy.typed_factory")
+        fake_typed_factory.build_policy_client = lambda cfg, logger: fake_client
+        with mock.patch.dict(
+            sys.modules,
+            {"serl_launcher.policy.typed_factory": fake_typed_factory},
+        ):
+            assembler = LiberoActorTransitionAssembler(
+                cfg=_fake_libero_cfg(async_enabled=True),
+                policy_client=object(),
+                logger=logging.getLogger(__name__),
+            )
+
+        assembler._sync_assembler = _FakeActorSyncAssembler(
+            decision_obses=[_fake_prefetched_decision(1.0)],
+        )
+        def _slow_backfill(*, observations, task_prompt, policy_client):
+            del task_prompt, policy_client
+            time.sleep(0.05)
+            return [
+                {"state": np.asarray([float(obs["seed"])], dtype=np.float32)}
+                for obs in observations
+            ]
+
+        assembler._backfill_residual_observations = _slow_backfill
+
+        assembler.infer_decision_obs(
+            obs={"seed": 0.0},
+            task_prompt="task",
+        )
+        assembler.handle_chunk(
+            raw=_fake_libero_raw_chunk(),
+            task_prompt="task",
+        )
+
+        finished = assembler.finish_episode(
+            block=True,
+        )
+
+        self.assertEqual(len(finished), 1)
+        self.assertTrue(
+            np.allclose(
+                finished[0].transitions[-1]["next_observations"]["state"],
+                [20.0],
+            )
+        )
+        self.assertEqual(assembler.finish_episode(block=True), [])
 
 
 if __name__ == "__main__":

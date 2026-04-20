@@ -35,12 +35,12 @@ def _transition(step: int) -> dict:
     }
 
 
-def test_split_queue_transport_commits_without_duplicates() -> None:
+def test_async_commit_transport_commits_without_duplicates() -> None:
     trainer_port = _find_free_port()
     broadcast_port = _find_free_port()
     data_port = _find_free_port()
     transport_cfg = TrainerTransportConfig(
-        mode="split_queue",
+        mode="async_commit",
         data_port=int(data_port),
         control_timeout_ms=1000,
         data_queue_capacity=4,
@@ -130,12 +130,12 @@ class _SlowStore(DataStoreBase):
             self.items.append(item)
 
 
-def test_split_queue_control_plane_stays_responsive_under_backlog() -> None:
+def test_async_commit_control_plane_stays_responsive_under_backlog() -> None:
     trainer_port = _find_free_port()
     broadcast_port = _find_free_port()
     data_port = _find_free_port()
     transport_cfg = TrainerTransportConfig(
-        mode="split_queue",
+        mode="async_commit",
         data_port=int(data_port),
         control_timeout_ms=1000,
         data_queue_capacity=1,
@@ -167,6 +167,7 @@ def test_split_queue_control_plane_stays_responsive_under_backlog() -> None:
             actor_store.insert(_transition(step))
             assert actor.update() is True
         status = actor.get_transport_status("actor_env")
+        assert status["transport_mode"] == "async_commit"
         assert "accepted_update_id" in status
         assert "committed_update_id" in status
         assert int(status["accepted_update_id"]) >= int(status["committed_update_id"])

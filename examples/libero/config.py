@@ -11,7 +11,9 @@ from typing import cast
 
 from omegaconf import DictConfig
 
+from serl_launcher.common.trainer_transport import SUPPORTED_TRANSPORT_MODES
 from serl_launcher.common.trainer_transport import TrainerTransportConfig
+from serl_launcher.common.trainer_transport import validate_transport_mode
 from serl_launcher.utils.serialization import to_jsonable
 
 from .env.observation import resolve_libero_image_keys
@@ -158,6 +160,7 @@ class OfflinePrepareConfig:
     output_root: str
     expert_reference_scale: float
     clip_residual_to_unit: bool
+    filter_unrepresentable_steps: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +238,7 @@ class AsyncEvalConfig:
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
     training_starts: int
+    random_steps: int
     steps_per_update: int
     critic_actor_ratio: int
     max_env_steps: int
@@ -260,6 +264,7 @@ class EvalConfig:
     deterministic: bool
     checkpoint_path: str | None
     checkpoint_step: int | None
+    allow_random_policy: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,11 +546,12 @@ def _parse_trainer_transport_cfg(
     default_data_port: int,
 ) -> TrainerTransportConfig:
     raw_cfg = runtime_cfg.get("trainer_transport", {})
-    mode = _parse_choice(
-        raw_cfg.get("mode", "legacy_reqrep"),
+    raw_mode = _parse_choice(
+        raw_cfg.get("mode", "sync_commit"),
         "runtime.trainer_transport.mode",
-        allowed=("legacy_reqrep", "split_queue"),
+        allowed=SUPPORTED_TRANSPORT_MODES,
     )
+    mode = validate_transport_mode(raw_mode)
     return TrainerTransportConfig(
         mode=mode,
         data_port=_positive_int(
@@ -975,6 +981,9 @@ def _parse_offline_prepare_cfg(cfg: DictConfig) -> OfflinePrepareConfig:
         clip_residual_to_unit=bool(
             prepare_cfg.get("clip_residual_to_unit", True)
         ),
+        filter_unrepresentable_steps=bool(
+            prepare_cfg.get("filter_unrepresentable_steps", False)
+        ),
     )
 
 
@@ -1196,6 +1205,10 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
             training_cfg.get("training_starts", 0),
             "training.training_starts",
         ),
+        random_steps=_nonnegative_int(
+            training_cfg.get("random_steps", 0),
+            "training.random_steps",
+        ),
         steps_per_update=_positive_int(
             training_cfg.get("steps_per_update", 1),
             "training.steps_per_update",
@@ -1274,6 +1287,7 @@ def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
             eval_cfg.get("checkpoint_step", None),
             "eval.checkpoint_step",
         ),
+        allow_random_policy=bool(eval_cfg.get("allow_random_policy", False)),
     )
 
 

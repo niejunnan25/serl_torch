@@ -19,12 +19,12 @@ import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
-import torch
 from tqdm.auto import tqdm
 
 from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
+from serl_launcher.common.agent_acceleration import apply_torch_compile
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
@@ -85,60 +85,6 @@ from serl_torch.examples.libero.residual_observation import (
 )
 
 
-def _maybe_enable_torch_compile(
-    agent: Any,
-    *,
-    cfg: LiberoTrainConfig,
-    logger: logging.Logger,
-) -> Any:
-    compile_cfg = cfg.training.torch_compile
-    if not bool(compile_cfg.enabled):
-        return agent
-    if not hasattr(torch, "compile"):
-        raise RuntimeError(
-            "training.torch_compile.enabled=true but torch.compile is unavailable "
-            "in this PyTorch build"
-        )
-
-    target = str(compile_cfg.target)
-    if target not in {"critic", "actor_critic"}:
-        raise ValueError(
-            "training.torch_compile.target must be one of {'critic', 'actor_critic'}, "
-            f"got {target!r}"
-        )
-
-    compile_kwargs = {
-        "backend": str(compile_cfg.backend),
-        "mode": str(compile_cfg.mode),
-        "fullgraph": bool(compile_cfg.fullgraph),
-        "dynamic": bool(compile_cfg.dynamic),
-    }
-    logger.info(
-        "enable torch.compile: target=%s backend=%s mode=%s fullgraph=%s dynamic=%s",
-        target,
-        compile_kwargs["backend"],
-        compile_kwargs["mode"],
-        compile_kwargs["fullgraph"],
-        compile_kwargs["dynamic"],
-    )
-
-    agent.state.modules["critic"] = torch.compile(
-        agent.state.modules["critic"],
-        **compile_kwargs,
-    )
-    if "critic" in agent.state.target_modules:
-        agent.state.target_modules["critic"] = torch.compile(
-            agent.state.target_modules["critic"],
-            **compile_kwargs,
-        )
-    if target == "actor_critic":
-        agent.state.modules["actor"] = torch.compile(
-            agent.state.modules["actor"],
-            **compile_kwargs,
-        )
-    return agent
-
-
 def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
     env = create_env(cfg, logger)
     task_prompt = str(env.task_description)
@@ -167,12 +113,6 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
-    if bool(cfg.training.torch_compile.enabled):
-        logger.info(
-            "training.torch_compile.enabled=true is ignored on actor; compile applies "
-            "to learner updates only"
-        )
-
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
     client = TrainerClient(
         "actor_env",
@@ -449,7 +389,10 @@ def learner(
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
-    agent = _maybe_enable_torch_compile(agent, cfg=cfg, logger=logger)
+    agent = apply_torch_compile(
+        agent,
+        compile_cfg=cfg.training.torch_compile,
+    )
     observation_space = build_chunk_residual_observation_space(
         sample_obs=sample_obs,
         image_keys=image_keys,
@@ -468,10 +411,9 @@ def learner(
     offline_validation_stats: dict[str, Any] | None = None
     offline_load_stats: dict[str, Any] = {
         "files_total": 0,
-        "files_loaded": 0,
         "episodes_loaded": 0,
-        "inserted": 0,
-        "errors": 0,
+        "steps_loaded": 0,
+        "load_errors": 0,
     }
     wandb_cfg = WandBLogger.get_default_config()
     run_name = cfg.wandb.exp_name

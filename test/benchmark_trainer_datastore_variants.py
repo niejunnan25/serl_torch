@@ -513,7 +513,7 @@ class ScenarioServer:
             self.data_port = _find_free_port()
             self._reqrep = ThreadedReqRepServer(port=self.control_port, callback=self._handle_control)
             self._pull = ThreadedPullServer(port=int(self.data_port), callback=self._handle_data_direct)
-        elif transport == "split_queue":
+        elif transport == "async_commit":
             self.data_port = _find_free_port()
             self._worker = QueueWorker(
                 replay_store=self._replay_store,
@@ -800,11 +800,11 @@ def _make_scenarios() -> list[Scenario]:
             update_id_semantics="committed",
         ),
         Scenario(
-            name="plan_c_split_control_data_queue",
+            name="plan_c_async_commit",
             description="Plan C: control req/rep + data pipeline + worker queue + explicit accepted/committed separation",
             payload_kind="packed",
             replay_mode="vectorized",
-            transport_mode="split_queue",
+            transport_mode="async_commit",
             update_id_semantics="accepted",
         ),
     ]

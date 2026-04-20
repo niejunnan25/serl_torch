@@ -208,6 +208,7 @@ reference/
 
 # Temporary scratch files and directories
 tmp*
+temp_repo/
 examples/agibot_real/camera.txt
 examples/agibot_real/hal.txt
 

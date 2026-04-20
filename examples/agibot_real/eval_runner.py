@@ -12,6 +12,7 @@ import numpy as np
 from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
+from serl_launcher.common.agent_acceleration import apply_torch_compile
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.checkpoint_utils import load_checkpoint_payload
@@ -31,7 +32,6 @@ from serl_torch.examples.agibot_real.residual_observation import (
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_sample_obs,
 )
-from serl_torch.examples.agibot_real.torch_compile import maybe_enable_torch_compile
 
 
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
@@ -153,10 +153,9 @@ def run_eval(
         dict(checkpoint_payload),
         load_optimizers=False,
     )
-    agent = maybe_enable_torch_compile(
+    agent = apply_torch_compile(
         agent,
         compile_cfg=cfg.training.torch_compile,
-        logger=logger,
     )
     checkpoint_step = (
         int(checkpoint_payload["step"])

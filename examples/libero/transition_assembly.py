@@ -3,10 +3,15 @@ from __future__ import annotations
 """Post-hoc transition assembly helpers for LIBERO residual chunk rollout."""
 
 from dataclasses import dataclass
+import logging
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 
+from serl_launcher.rollout.async_transition_assembly import (
+    AsyncTransitionAssemblyCoordinator,
+)
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_inputs
 from serl_torch.examples.libero.residual_observation import build_chunk_residual_obs
@@ -107,6 +112,23 @@ class AssemblyResult:
     episode_return_delta: float
     episode_success: bool
     last_info: dict[str, Any]
+
+def _build_policy_endpoint_cfg(
+    cfg: Any,
+    *,
+    host: str,
+    port: int,
+) -> Any:
+    return SimpleNamespace(
+        policy=SimpleNamespace(
+            type=str(cfg.policy.type),
+            host=str(host),
+            port=int(port),
+        ),
+        env=SimpleNamespace(
+            action_dim=int(cfg.env.action_dim),
+        ),
+    )
 
 
 def infer_chunk_residual_obs(
@@ -225,6 +247,218 @@ class LiberoTransitionAssembler:
         )
 
 
+class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
+    def backfill_post_step_residual_obs(
+        self,
+        *,
+        observations: list[dict[str, Any]],
+        task_prompt: str,
+    ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
+        return backfill_post_step_residual_obs_batch_aware(
+            observations=observations,
+            task_prompt=task_prompt,
+            policy_client=self.policy_client,
+            chunk_horizon=self.chunk_horizon,
+            image_keys=self.image_keys,
+            residual_alpha=self.residual_alpha,
+        )
+
+
+class LiberoActorTransitionAssembler:
+    def __init__(
+        self,
+        *,
+        cfg: Any,
+        policy_client: Any,
+        logger: logging.Logger,
+    ) -> None:
+        self._logger = logger
+        self._sync_assembler = BatchAwareLiberoTransitionAssembler(
+            policy_client=policy_client,
+            chunk_horizon=int(cfg.residual.chunk_horizon),
+            image_keys=tuple(cfg.obs.image_keys),
+            residual_alpha=float(cfg.residual.alpha),
+        )
+        self._prefetched: PrefetchedDecisionObs | None = None
+        self._last_submitted_chunk_seq: int | None = None
+        self._max_pending_chunks = int(cfg.backfill_policy.max_pending_chunks)
+        self._async_assembly: AsyncTransitionAssemblyCoordinator[
+            RawChunkRecord,
+            dict[str, Any],
+            dict[str, np.ndarray],
+            AssemblyResult,
+        ] | None = None
+
+        if not bool(cfg.backfill_policy.enabled):
+            return
+
+        endpoint_cfg = _build_policy_endpoint_cfg(
+            cfg,
+            host=str(cfg.backfill_policy.host),
+            port=int(cfg.backfill_policy.port),
+        )
+        from serl_launcher.policy.typed_factory import build_policy_client
+
+        backfill_policy_client = build_policy_client(endpoint_cfg, logger=logger)
+        close_fn = getattr(backfill_policy_client, "close", None)
+        self._async_assembly = AsyncTransitionAssemblyCoordinator(
+            backfill_fn=lambda observations, task_prompt: self._backfill_residual_observations(
+                observations=observations,
+                task_prompt=task_prompt,
+                policy_client=backfill_policy_client,
+            ),
+            build_result_fn=self._build_assembly_result,
+            thread_name_prefix="libero-transition-assembly",
+            logger=logger,
+            close_fn=close_fn if callable(close_fn) else None,
+            close_error_message="ignored backfill policy client close error",
+        )
+        self._logger.info(
+            "transition assembler: async_transition_assembly enabled mode=%s endpoint=%s:%s max_pending_chunks=%s",
+            str(cfg.backfill_policy.mode),
+            str(cfg.backfill_policy.host),
+            int(cfg.backfill_policy.port),
+            int(self._max_pending_chunks),
+        )
+
+    @property
+    def async_transition_assembly_enabled(self) -> bool:
+        return self._async_assembly is not None
+
+    def infer_decision_obs(
+        self,
+        *,
+        obs: dict[str, Any],
+        task_prompt: str,
+    ) -> PrefetchedDecisionObs:
+        return self._sync_assembler.infer_decision_obs(
+            obs=obs,
+            task_prompt=task_prompt,
+        )
+
+    def pop_prefetched_decision_obs(self) -> PrefetchedDecisionObs | None:
+        if self._async_assembly is not None:
+            return None
+        decision_obs = self._prefetched
+        self._prefetched = None
+        return decision_obs
+
+    def process_chunk(
+        self,
+        *,
+        raw: RawChunkRecord,
+        task_prompt: str,
+    ) -> AssemblyResult:
+        return self._sync_assembler.process_chunk(
+            raw=raw,
+            task_prompt=task_prompt,
+        )
+
+    def drain_ready(self) -> list[AssemblyResult]:
+        if self._async_assembly is None:
+            return []
+        return self._async_assembly.pop_committable()
+
+    def handle_chunk(
+        self,
+        *,
+        raw: RawChunkRecord,
+        task_prompt: str,
+    ) -> list[AssemblyResult]:
+        if self._async_assembly is None:
+            assembled_chunk = self.process_chunk(
+                raw=raw,
+                task_prompt=task_prompt,
+            )
+            self._prefetched = assembled_chunk.prefetched
+            return [assembled_chunk]
+
+        self._last_submitted_chunk_seq = self._async_assembly.submit_chunk(
+            raw=raw,
+            observations=raw.post_step_observations,
+            task_prompt=task_prompt,
+        )
+        assembled_chunks = self._async_assembly.pop_committable()
+        while self._async_assembly.pending_count > int(self._max_pending_chunks):
+            assembled_chunks.extend(
+                self._async_assembly.pop_committable(
+                    block_until_seq=self._async_assembly.next_commit_chunk_seq
+                )
+            )
+        return assembled_chunks
+
+    def finish_episode(
+        self,
+        *,
+        block: bool = True,
+    ) -> list[AssemblyResult]:
+        self._prefetched = None
+        if self._async_assembly is None:
+            return []
+        if self._last_submitted_chunk_seq is None:
+            return []
+        if bool(block):
+            assembled_chunks = self._async_assembly.pop_committable(
+                block_until_seq=int(self._last_submitted_chunk_seq)
+            )
+            self._last_submitted_chunk_seq = None
+            return assembled_chunks
+        assembled_chunks = self._async_assembly.pop_committable()
+        if self._async_assembly.pending_count <= 0:
+            self._last_submitted_chunk_seq = None
+        return assembled_chunks
+
+    def close(self) -> None:
+        if self._async_assembly is not None:
+            self._async_assembly.close()
+
+    def _backfill_residual_observations(
+        self,
+        *,
+        observations: list[dict[str, Any]],
+        task_prompt: str,
+        policy_client: Any,
+    ) -> list[dict[str, np.ndarray]]:
+        _base_action_chunks, next_residual_observations = (
+            backfill_post_step_residual_obs_batch_aware(
+                observations=observations,
+                task_prompt=task_prompt,
+                policy_client=policy_client,
+                chunk_horizon=self._sync_assembler.chunk_horizon,
+                image_keys=self._sync_assembler.image_keys,
+                residual_alpha=self._sync_assembler.residual_alpha,
+            )
+        )
+        return next_residual_observations
+
+    def _build_assembly_result(
+        self,
+        raw: RawChunkRecord,
+        next_residual_observations: list[dict[str, np.ndarray]],
+    ) -> AssemblyResult:
+        transitions = assemble_chunk_step_transitions(
+            episode_id=int(raw.episode_id),
+            episode_step_start=int(raw.episode_step_start),
+            residual_obs_before_chunk=raw.residual_obs_before_chunk,
+            executed_actions=raw.action_chunk,
+            rewards=raw.rewards,
+            dones=raw.dones,
+            infos=raw.infos,
+            next_residual_observations=next_residual_observations,
+        )
+        return AssemblyResult(
+            transitions=transitions,
+            prefetched=None,
+            next_obs=dict(raw.final_obs),
+            episode_done=bool(raw.chunk_done or raw.chunk_truncated),
+            env_steps_delta=int(raw.executed_steps),
+            episode_steps_delta=int(raw.executed_steps),
+            episode_return_delta=float(raw.reward_sum),
+            episode_success=any(bool(info.get("env_done", False)) for info in raw.infos),
+            last_info=dict(raw.chunk_info),
+        )
+
+
 def backfill_post_step_residual_obs(
     *,
     observations: list[dict[str, Any]],
@@ -299,23 +533,6 @@ def backfill_post_step_residual_obs_batch_aware(
     return base_action_chunks, residual_observations
 
 
-class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
-    def backfill_post_step_residual_obs(
-        self,
-        *,
-        observations: list[dict[str, Any]],
-        task_prompt: str,
-    ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
-        return backfill_post_step_residual_obs_batch_aware(
-            observations=observations,
-            task_prompt=task_prompt,
-            policy_client=self.policy_client,
-            chunk_horizon=self.chunk_horizon,
-            image_keys=self.image_keys,
-            residual_alpha=self.residual_alpha,
-        )
-
-
 def assemble_chunk_step_transitions(
     *,
     episode_id: int,
@@ -369,10 +586,13 @@ def assemble_chunk_step_transitions(
 
 __all__ = [
     "AssemblyResult",
+    "BatchAwareLiberoTransitionAssembler",
+    "LiberoActorTransitionAssembler",
     "LiberoTransitionAssembler",
     "PrefetchedDecisionObs",
     "RawChunkRecord",
     "assemble_chunk_step_transitions",
     "backfill_post_step_residual_obs",
+    "backfill_post_step_residual_obs_batch_aware",
     "infer_chunk_residual_obs",
 ]

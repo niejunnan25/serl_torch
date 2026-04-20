@@ -18,22 +18,16 @@
 - 训练期 eval
 - residual observation schema 和 typed config
 
-当前真正的主入口有五个：
+当前真正的主入口有六个：
 
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py)
 - [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
 - [scripts/serve_env.py](scripts/serve_env.py)
 - [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
 - [tools/serve_env.sh](tools/serve_env.sh)
 
 `scripts/process_eval_queue.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
-
-另外当前还有两条 copy 相关入口：
-
-- [scripts/run_residual_training_copy_copy.py](scripts/run_residual_training_copy_copy.py)
-  当前 copy 主实验线，默认使用 `train_residual_copy_copy.yaml` 和 `split_queue` trainer transport
-- [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
-  旧 copy baseline，保留作 legacy 对照
 
 ## 目录结构
 
@@ -45,10 +39,8 @@
   typed config 定义与解析
 - [scripts/run_residual_training.py](scripts/run_residual_training.py)
   actor / learner 共用训练入口，通过 `runtime.role=actor|learner` 切角色
-- [scripts/run_residual_training_copy_copy.py](scripts/run_residual_training_copy_copy.py)
-  当前 copy 主实验线训练入口，actor 支持 `env.step_chunk(...)`、post-hoc assembly、async backfill 和 `split_queue` transport
-- [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
-  旧 copy baseline，保留作 legacy 对照
+- [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py)
+  当前优化训练入口，actor 支持 `env.step_chunk(...)`、post-hoc assembly、async backfill 和 `async_commit` transport
 - [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
   离线数据准备入口，默认也读取 `configs/train_residual.yaml`
 - [scripts/serve_env.py](scripts/serve_env.py)
@@ -96,37 +88,30 @@
 
 - [docs/chunk_residual_mdp_discussion.md](docs/chunk_residual_mdp_discussion.md)
 
-### `run_residual_training_copy_copy.py` 这条实验线是什么
+### `run_residual_training_optimized.py` 这条实验线是什么
 
-`run_residual_training_copy_copy.py` 和 canonical 的
+`run_residual_training_optimized.py` 和 canonical 的
 [scripts/run_residual_training.py](scripts/run_residual_training.py) 最大的区别在 actor 数据流：
 
 - canonical 版本：
   `step -> 立刻补 next_residual_obs -> 立刻写 step transition`
-- copy 版本：
+- optimized 版本：
   `step_chunk -> 收集 raw chunk -> post-hoc 组装 step transition -> 写 replay`
 
-所以 copy 版本里：
+所以 optimized 版本里：
 
 - env 执行单元是 chunk
 - replay 存储单元仍然是 step transition
 - learner 仍然从 step replay 采样 chunk window
 
-也就是说，copy 版本不是 direct chunk replay；它只是把 transition 的组装时机，从 inline step-wise assembly 改成了 post-hoc chunk assembly。
+也就是说，optimized 版本不是 direct chunk replay；它只是把 transition 的组装时机，从 inline step-wise assembly 改成了 post-hoc chunk assembly。
 
-当前 copy_copy 版本支持两种模式：
+当前 optimized 版本支持两种模式：
 
 - 默认同步模式：
   不传 `backfill_policy.*`，actor 在 `step_chunk(...)` 后同步完成整段 assembly
 - async backfill 模式：
-  传 `++backfill_policy.enabled=true` 后，actor 只负责控制推进，chunk 内 prefix 的 backfill 和 replay assembly 由后台线程完成；如果再配一个 dedicated backfill policy server，可以把这条后处理路径从主 decision policy 服务上分流出去
-
-当前 async copy_copy 版本还用了一个 `tail handoff` 机制：
-
-- nonterminal chunk 的最后一个 `next_observations`
-- 直接复用下一轮 actor 真正算出来的 `decision_obs`
-
-这样可以保证 chunk 边界上：
+  传 `++backfill_policy.enabled=true` 后，actor 只负责控制推进，chunk 内整段 backfill 和 replay assembly 由后台线程完成；如果再配一个 dedicated backfill policy server，可以把这条后处理路径从主 decision policy 服务上分流出去
 
 ```text
 chunk n 最后一步 next_observations
@@ -299,7 +284,22 @@ bash examples/libero/tools/serve_env.sh \
 - 尝试初始化 conda
 - 优先使用你显式指定的 Python / env
 - 默认尝试激活 `/vla/users/niejunnan/envs/libero`
-- 最终执行 `scripts/serve_env.py`
+- 最终执行 LIBERO env server 入口
+
+如果你更偏好手动激活 conda 环境并直接用 Python 启动，更推荐从 repo root 运行：
+
+```bash
+conda activate libero
+cd /path/to/serl_torch
+python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30000
+```
+
+这样只依赖 repo root，不需要再 `cd examples/libero`。如果你不想依赖当前工作目录，也可以直接运行脚本绝对路径：
+
+```bash
+conda activate libero
+python /path/to/serl_torch/examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30000
+```
 
 常见可覆盖环境变量：
 
@@ -386,8 +386,8 @@ policy.type=joyra policy.port=9001
 最常见的准备方式：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/prepare_offline_data.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/prepare_offline_data.py \
   offline.enabled=true \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
@@ -409,8 +409,8 @@ prepare 完成后，脚本会在终端打印下一步 learner 命令。
 ## 4. 启动 learner
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
   runtime.role=learner \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
@@ -420,8 +420,8 @@ conda run -n serl_torch python scripts/run_residual_training.py \
 如果你要加载 prepared offline data，最常见的 learner 命令是：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
   runtime.role=learner \
   offline.enabled=true \
   offline.prepared_path=data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1 \
@@ -439,39 +439,39 @@ hydra.run.dir=/abs/path/to/run_dir
 ## 5. 启动 actor
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
   runtime.role=actor \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
   encoder.resnet.model_name=/home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
 ```
 
-### 5.1 启动 copy 实验线
+### 5.1 启动 optimized 实验线
 
-当前推荐把 `run_residual_training_copy_copy.py` 作为 copy 主实验线；旧的 `run_residual_training_copy.py` 保留作 legacy baseline。
+当前推荐把 [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py) 作为优化实验线；默认基线仍然是 [scripts/run_residual_training.py](scripts/run_residual_training.py)。
 
-`copy_copy` 默认读取 [configs/train_residual_copy_copy.yaml](configs/train_residual_copy_copy.yaml)，其中：
+`optimized` 默认读取 [configs/train_residual_optimized.yaml](configs/train_residual_optimized.yaml)，其中：
 
-- `runtime.trainer_transport.mode=split_queue`
+- `runtime.trainer_transport.mode=async_commit`
 - `runtime.trainer_transport.data_port=5690`
 - `wait_committed_on_episode_end=false`
 - `wait_committed_on_shutdown=true`
 
 最常见的仍然是两种用法：
 
-- 同步 copy：
+- 同步 optimized：
   使用 `env.step_chunk(...)`，但 actor 仍在本进程同步完成 post-hoc assembly
 - async dedicated backfill：
   actor 主线程只负责控制推进，后台线程负责 assembly，并额外起一个 second policy server 专门服务 backfill
 
-#### 最小同步 copy 启动方式
+#### 最小同步 optimized 启动方式
 
 learner：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
   runtime.role=learner \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -485,8 +485,8 @@ conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
 actor：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
   runtime.role=actor \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -497,7 +497,7 @@ conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
 
-这时 copy actor 的语义是：
+这时 optimized actor 的语义是：
 
 ```text
 chunk execute -> synchronous post-hoc step transition assembly -> step-window replay
@@ -528,8 +528,8 @@ bash examples/libero/tools/serve_openpi_10000_policy.sh \
 learner 仍然不需要额外改动，继续只连主训练端口：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
   runtime.role=learner \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -543,8 +543,8 @@ conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
 actor 额外打开 `backfill_policy`：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
   runtime.role=actor \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -559,12 +559,11 @@ conda run -n serl_torch python scripts/run_residual_training_copy_copy.py \
   ++backfill_policy.max_pending_chunks=2
 ```
 
-这时 copy actor 的语义是：
+这时 optimized actor 的语义是：
 
 ```text
 chunk execute
--> async prefix backfill
--> tail handoff from next chunk decision obs
+-> async full-chunk backfill
 -> ordered step transition commit
 -> step-window replay
 ```
@@ -612,8 +611,8 @@ chunk execute
 最常见的启动方式：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
   runtime.role=learner \
   training.async_eval.enabled=true \
   training.async_eval.env.remote.host=127.0.0.1 \
@@ -663,8 +662,8 @@ uv run scripts/serve_policy.py \
 ```bash
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate /vla/users/niejunnan/envs/libero
-cd /home/hello/codebase/serl_torch/examples/libero
-python scripts/serve_env.py --host 127.0.0.1 --port 30100
+cd /home/hello/codebase/serl_torch
+python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30100
 ```
 
 3. eval env server
@@ -672,8 +671,8 @@ python scripts/serve_env.py --host 127.0.0.1 --port 30100
 ```bash
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate /vla/users/niejunnan/envs/libero
-cd /home/hello/codebase/serl_torch/examples/libero
-python scripts/serve_env.py --host 127.0.0.1 --port 30110
+cd /home/hello/codebase/serl_torch
+python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30110
 ```
 
 4. learner
@@ -682,8 +681,8 @@ python scripts/serve_env.py --host 127.0.0.1 --port 30110
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 export CUDA_VISIBLE_DEVICES=5
-cd /home/hello/codebase/serl_torch/examples/libero
-python scripts/run_residual_training.py \
+cd /home/hello/codebase/serl_torch
+python examples/libero/scripts/run_residual_training.py \
   --config-name train_residual_libero_spatial_task4 \
   runtime.role=learner \
   policy.port=30101 \
@@ -699,8 +698,8 @@ python scripts/run_residual_training.py \
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 export CUDA_VISIBLE_DEVICES=6
-cd /home/hello/codebase/serl_torch/examples/libero
-python scripts/run_residual_training.py \
+cd /home/hello/codebase/serl_torch
+python examples/libero/scripts/run_residual_training.py \
   --config-name train_residual_libero_spatial_task4 \
   runtime.role=actor \
   policy.port=30101 \
@@ -724,8 +723,8 @@ python scripts/run_residual_training.py \
 最常见的评估命令：
 
 ```bash
-cd /home/hello/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/evaluate_checkpoint.py \
+cd /home/hello/codebase/serl_torch
+conda run -n serl_torch python examples/libero/scripts/evaluate_checkpoint.py \
   eval.checkpoint_path=/abs/path/to/checkpoints \
   eval.episodes=20 \
   eval.deterministic=true \

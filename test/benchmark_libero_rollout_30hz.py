@@ -6,15 +6,15 @@ This benchmark compares four actor-side rollout shapes:
 
 1. baseline_step:
    Mirrors examples/libero/scripts/run_residual_training.py
-2. copy_sync:
+2. chunk_sync:
    Mirrors the synchronous chunk assembly path in
-   examples/libero/scripts/run_residual_training_copy.py
-3. copy_async:
+   examples/libero/scripts/run_residual_training_optimized.py
+3. chunk_async:
    Mirrors the async backfill / ordered commit path in
-   examples/libero/scripts/run_residual_training_copy.py
-4. copy_copy:
+   examples/libero/scripts/run_residual_training_optimized.py
+4. chunk_async_batch:
    Mirrors the batch-aware async backfill path in
-   examples/libero/scripts/run_residual_training_copy_copy.py
+   examples/libero/scripts/run_residual_training_optimized.py
 
 The environment is synthetic but shaped like LIBERO observations so the
 benchmark still exercises:
@@ -707,14 +707,14 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
     data_store = FakeDataStore(replay_insert_ms=float(cfg.replay_insert_ms))
 
     async_coord: BenchmarkAsyncChunkAssemblyCoordinator | None = None
-    if variant in {"copy_async", "copy_copy"}:
+    if variant in {"chunk_async", "chunk_async_batch"}:
         async_coord = BenchmarkAsyncChunkAssemblyCoordinator(
             stats=stats,
             policy_client=backfill_policy_client,
             chunk_horizon=int(cfg.chunk_horizon),
             image_keys=tuple(cfg.image_keys),
             residual_alpha=float(cfg.residual_alpha),
-            batch_aware=bool(variant == "copy_copy"),
+            batch_aware=bool(variant == "chunk_async_batch"),
         )
 
     env_steps = 0
@@ -749,7 +749,7 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
                 chunk_count += 1
                 with stats.context("total"):
                     with stats.context("sample_actions"):
-                        if variant in {"copy_async", "copy_copy"}:
+                        if variant in {"chunk_async", "chunk_async_batch"}:
                             decision_obs = _infer_decision_obs(
                                 stats=stats,
                                 metric_prefix="sample_actions.current",
@@ -851,7 +851,7 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
                             chunk_result=chunk_result,
                         )
 
-                        if variant == "copy_sync":
+                        if variant == "chunk_sync":
                             with stats.context("build_decision_obs"):
                                 backfilled_base_actions, backfilled_residual_obs = (
                                     _backfill_post_step_residual_obs(
@@ -895,7 +895,7 @@ def _run_variant(variant: str, cfg: BenchmarkConfig) -> VariantResult:
                                 )
                             else:
                                 prefetched = None
-                        elif variant in {"copy_async", "copy_copy"}:
+                        elif variant in {"chunk_async", "chunk_async_batch"}:
                             next_env_steps = int(env_steps + raw_chunk.executed_steps)
                             expect_tail_handoff = (
                                 not bool(raw_chunk.chunk_done or raw_chunk.chunk_truncated)
@@ -1078,7 +1078,7 @@ def _parse_args() -> BenchmarkConfig:
         "--chunk-horizon",
         type=int,
         default=5,
-        help="Chunk horizon used by both copy and baseline variants",
+        help="Chunk horizon used by both chunked and baseline variants",
     )
     parser.add_argument(
         "--residual-alpha",
@@ -1138,8 +1138,8 @@ def _parse_args() -> BenchmarkConfig:
     parser.add_argument(
         "--variants",
         nargs="+",
-        default=("baseline_step", "copy_sync", "copy_async", "copy_copy"),
-        choices=("baseline_step", "copy_sync", "copy_async", "copy_copy"),
+        default=("baseline_step", "chunk_sync", "chunk_async", "chunk_async_batch"),
+        choices=("baseline_step", "chunk_sync", "chunk_async", "chunk_async_batch"),
         help="Variants to benchmark",
     )
     parser.add_argument(

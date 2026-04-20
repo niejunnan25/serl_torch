@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import pickle
 import sys
@@ -20,11 +21,15 @@ if OmegaConf is not None:
     from serl_torch.examples.agibot_real.config import parse_train_cfg
     from serl_torch.examples.agibot_real.offline_data import load_prepared_offline_replay
     from serl_torch.examples.agibot_real.offline_data import (
+        _prepare_reference_episode_transitions,
+    )
+    from serl_torch.examples.agibot_real.offline_data import (
         resolve_and_validate_prepared_paths,
     )
     from serl_torch.examples.agibot_real.offline_data import (
         resolve_prepared_episode_files,
     )
+    from serl_launcher.residual.typed_action import ResidualActionSpec
 
 
 class _FakeReplayBuffer:
@@ -55,6 +60,15 @@ def _train_cfg_with_prepared_path(prepared_path: str) -> object:
     cfg.offline.enabled = True
     cfg.offline.prepared_path = prepared_path
     return parse_train_cfg(cfg)
+
+
+def _make_raw_obs() -> dict[str, object]:
+    return {
+        "state/pose": [0.0] * 14,
+        "image/head": [[[0, 0, 0]] * 8 for _ in range(8)],
+        "image/left_wrist": [[[0, 0, 0]] * 8 for _ in range(8)],
+        "image/right_wrist": [[[0, 0, 0]] * 8 for _ in range(8)],
+    }
 
 
 @unittest.skipIf(OmegaConf is None, "omegaconf is not installed")
@@ -91,6 +105,15 @@ class AgiBotOfflineDataTest(unittest.TestCase):
                     "action_mask": list(cfg.residual.action_mask),
                     "action_limits": list(cfg.residual.action_limits),
                     "clip_gripper": cfg.residual.clip_gripper,
+                    "expert_reference_scale": (
+                        cfg.offline.prepare.expert_reference_scale
+                    ),
+                    "clip_residual_to_unit": (
+                        cfg.offline.prepare.clip_residual_to_unit
+                    ),
+                    "filter_unrepresentable_steps": (
+                        cfg.offline.prepare.filter_unrepresentable_steps
+                    ),
                     "image_keys": list(cfg.obs.image_keys),
                     "vector_obs_keys": list(cfg.obs.vector_obs_keys),
                 },
@@ -116,8 +139,63 @@ class AgiBotOfflineDataTest(unittest.TestCase):
                 logger=_FakeLogger(),
             )
             self.assertEqual(stats["episodes_loaded"], 1)
-            self.assertEqual(stats["inserted"], 1)
+            self.assertEqual(stats["steps_loaded"], 1)
+            self.assertEqual(stats["load_errors"], 0)
             self.assertEqual(len(replay_buffer.inserted), 1)
+
+    def test_prepare_reference_episode_filters_unrepresentable_steps(self) -> None:
+        cfg = _train_cfg_with_prepared_path("/tmp/prepared")
+        cfg = dataclasses.replace(
+            cfg,
+            offline=dataclasses.replace(
+                cfg.offline,
+                prepare=dataclasses.replace(
+                    cfg.offline.prepare,
+                    filter_unrepresentable_steps=True,
+                ),
+            ),
+        )
+        action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=cfg.env.action_dim)
+        base_chunk = [[0.0] * cfg.env.action_dim for _ in range(cfg.residual.chunk_horizon)]
+        raw_steps = [
+            {
+                "observations": _make_raw_obs(),
+                "next_observations": _make_raw_obs(),
+                "expert_action": [2.0] + ([0.0] * (cfg.env.action_dim - 1)),
+                "base_chunk": base_chunk,
+                "reward": 0.0,
+                "done": False,
+            },
+            {
+                "observations": _make_raw_obs(),
+                "expert_action": [0.0] * cfg.env.action_dim,
+                "base_chunk": base_chunk,
+                "reward": 1.0,
+                "done": True,
+            },
+        ]
+
+        transitions, episode_stats = _prepare_reference_episode_transitions(
+            raw_steps=raw_steps,
+            episode_id=7,
+            task_prompt=cfg.task.prompt,
+            action_spec=action_spec,
+            image_keys=cfg.obs.image_keys,
+            base_policy=object(),
+            expert_reference_scale=cfg.offline.prepare.expert_reference_scale,
+            clip_residual_to_unit=cfg.offline.prepare.clip_residual_to_unit,
+            filter_unrepresentable_steps=cfg.offline.prepare.filter_unrepresentable_steps,
+            source_path=Path("/tmp/reference_episode.pkl"),
+        )
+
+        self.assertEqual(episode_stats["steps_total"], 2)
+        self.assertEqual(episode_stats["steps_unrepresentable"], 1)
+        self.assertEqual(episode_stats["steps_filtered"], 1)
+        self.assertEqual(episode_stats["steps_written"], 1)
+        self.assertEqual(len(transitions), 1)
+        self.assertEqual(transitions[0]["episode_id"], 7)
+        self.assertEqual(transitions[0]["episode_step"], 1)
+        self.assertTrue(transitions[0]["dones"])
 
     def test_validate_prepared_offline_rejects_manifestless_episode_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -51,16 +51,16 @@
   - [examples/libero/config.py](/home/hello/codebase/serl_torch/examples/libero/config.py:1)
   - [examples/agibot_real/config.py](/home/hello/codebase/serl_torch/examples/agibot_real/config.py:1)
 - copy 专用 yaml:
-  - [examples/libero/configs/train_residual_copy_copy.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/train_residual_copy_copy.yaml:1)
+  - [examples/libero/configs/train_residual_optimized.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/train_residual_optimized.yaml:1)
   - [examples/agibot_real/configs/train_residual_copy.yaml](/home/hello/codebase/serl_torch/examples/agibot_real/configs/train_residual_copy.yaml:1)
 - canonical train yaml 也显式声明了 `runtime.trainer_transport`
-- copy 脚本默认入口已切换：
-  - LIBERO `copy_copy`: [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py:1400)
+- 实验脚本默认入口已切换：
+  - LIBERO `optimized`: [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:1400)
   - AgiBot `copy`: [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:948)
 
 ### 1.4 训练脚本中的 transport observability
 
-copy 线现在会把这些 transport 指标带进 summary / timer jsonl：
+当前实验训练线会把这些 transport 指标带进 summary / timer jsonl：
 
 - `transport_mode`
 - `accepted_update_id`
@@ -70,7 +70,7 @@ copy 线现在会把这些 transport 指标带进 summary / timer jsonl：
 
 对应脚本：
 
-- [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py:1)
+- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:1)
 - [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:1)
 
 ## 2. 为什么“原型里提升很多”，而早先 smoke benchmark 看起来不明显
@@ -252,7 +252,7 @@ vs
 - [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py:1)
 - [examples/libero/config.py](/home/hello/codebase/serl_torch/examples/libero/config.py:1)
 - [examples/agibot_real/config.py](/home/hello/codebase/serl_torch/examples/agibot_real/config.py:1)
-- [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py:1)
+- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:1)
 - [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:1)
 
 ### 5.2 Targeted tests

@@ -48,8 +48,8 @@
 这篇文档会集中展开说明：
 
 - learner 侧 `bf16 + freeze critic grad`
-- replay `batch_insert()` + `split_queue`
-- OpenPI `infer_many()` + `copy_copy`
+- replay `batch_insert()` + `async_commit`
+- OpenPI `infer_many()` + optimized LIBERO residual training
 - actor 热路径上的 `build_decision_obs` 去负担
 
 如果你想快速讲清楚“这一周优化做了什么、为什么有效、提升体现在哪里”，建议优先看这篇。
@@ -137,14 +137,14 @@
 - `accepted_update_id` / `committed_update_id` 双语义
 - bounded queue 和 backpressure
 
-如果你要解释为什么这周会开始做 `split_queue` 这条线，这篇文档是关键材料。
+如果你要解释为什么这周会开始做 `async_commit` 这条线，这篇文档是关键材料。
 
 ### [2026-04-17-plan-c-vectorized-rollout-implementation-report.md](./2026-04-17-plan-c-vectorized-rollout-implementation-report.md)
 
 用途：
 
 - `Plan C` 在当前仓库里的实际实施报告
-- replay `batch_insert()` 和 `split_queue` 的真实 benchmark 复盘
+- replay `batch_insert()` 和 `async_commit` 的真实 benchmark 复盘
 
 这篇文档回答的是：
 
@@ -158,13 +158,13 @@
 
 用途：
 
-- AgiBot `copy` 训练线接入 `split_queue` 之后的人工检查清单
+- AgiBot `copy` 训练线接入 `async_commit` 之后的人工检查清单
 
 这篇不是设计文档，而是偏运维 / 实验检查单。
 
 适合在这些场景下阅读：
 
-- 你要验证 `copy` + `split_queue` 是否健康
+- 你要验证 `copy` + `async_commit` 是否健康
 - 你要观察 episode boundary、reset overlap、backpressure 是否正常
 
 ## 3. `docs/refactors/`：历史重构档案区

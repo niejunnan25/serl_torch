@@ -19,7 +19,7 @@ runtime:
   broadcast_port: 5489
   data_store_queue_size: 2000
   trainer_transport:
-    mode: legacy_reqrep
+    mode: sync_commit
     data_port: 5490
     control_timeout_ms: 800
     data_queue_capacity: 8
@@ -151,6 +151,7 @@ offline:
     output_root: data/residual/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
+    filter_unrepresentable_steps: false
 
 training:
   training_starts: 1000

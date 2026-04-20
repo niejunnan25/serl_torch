@@ -125,13 +125,13 @@ def main() -> None:
     args = parser.parse_args()
 
     results = {
-        "legacy_reqrep": _run_case(
-            mode="legacy_reqrep",
+        "sync_commit": _run_case(
+            mode="sync_commit",
             iterations=int(args.iterations),
             batch_size=int(args.batch_size),
         ),
-        "split_queue": _run_case(
-            mode="split_queue",
+        "async_commit": _run_case(
+            mode="async_commit",
             iterations=int(args.iterations),
             batch_size=int(args.batch_size),
         ),

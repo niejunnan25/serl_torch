@@ -36,6 +36,7 @@ from serl_launcher.residual.typed_action import ResidualActionSpec
 MANIFEST_FILENAME = "manifest.json"
 EPISODE_FILE_GLOB = "episode_*.pkl"
 OFFLINE_FORMAT_VERSION = "libero_offline_step_transitions_v1"
+UNIT_RESIDUAL_EPS = 1.0e-6
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -166,6 +167,9 @@ def _prepare_fingerprint(
         "clip_gripper": bool(cfg.residual.clip_gripper),
         "expert_reference_scale": float(cfg.offline.prepare.expert_reference_scale),
         "clip_residual_to_unit": bool(cfg.offline.prepare.clip_residual_to_unit),
+        "filter_unrepresentable_steps": bool(
+            cfg.offline.prepare.filter_unrepresentable_steps
+        ),
         "image_keys": [str(v) for v in cfg.obs.image_keys],
         "vector_obs_keys": (
             None
@@ -191,6 +195,11 @@ def _training_compatibility_signature(cfg: LiberoTrainConfig) -> dict[str, Any]:
         ),
         "action_limits": [float(v) for v in cfg.residual.action_limits],
         "clip_gripper": bool(cfg.residual.clip_gripper),
+        "expert_reference_scale": float(cfg.offline.prepare.expert_reference_scale),
+        "clip_residual_to_unit": bool(cfg.offline.prepare.clip_residual_to_unit),
+        "filter_unrepresentable_steps": bool(
+            cfg.offline.prepare.filter_unrepresentable_steps
+        ),
         "image_keys": [str(v) for v in cfg.obs.image_keys],
         "vector_obs_keys": (
             None
@@ -250,6 +259,11 @@ def _manifest_signature(
         "action_mask": manifest_fingerprint.get("action_mask", None),
         "action_limits": manifest_fingerprint.get("action_limits", None),
         "clip_gripper": manifest_fingerprint.get("clip_gripper", None),
+        "expert_reference_scale": manifest_fingerprint.get("expert_reference_scale", None),
+        "clip_residual_to_unit": manifest_fingerprint.get("clip_residual_to_unit", None),
+        "filter_unrepresentable_steps": bool(
+            manifest_fingerprint.get("filter_unrepresentable_steps", False)
+        ),
         "image_keys": manifest_fingerprint.get("image_keys", None),
         "vector_obs_keys": manifest_fingerprint.get("vector_obs_keys", None),
     }
@@ -290,27 +304,19 @@ def resolve_and_validate_prepared_paths(
             if candidate.exists():
                 manifest_path = candidate.resolve()
             else:
-                stats["paths_without_manifest"] = int(stats["paths_without_manifest"]) + 1
-                logger.warning(
-                    "prepared offline directory has no manifest; compatibility validation skipped: %s",
-                    path,
+                raise ValueError(
+                    "prepared offline directory must contain manifest.json for "
+                    f"compatibility validation: {path}"
                 )
         elif path.name == MANIFEST_FILENAME:
             manifest_path = path.resolve()
         elif path.suffix == ".pkl":
-            stats["paths_without_manifest"] = int(stats["paths_without_manifest"]) + 1
-            logger.warning(
-                "prepared offline episode file has no manifest; compatibility validation skipped: %s",
-                path,
+            raise ValueError(
+                "prepared offline episode file without manifest is no longer "
+                f"supported: {path}"
             )
         else:
             raise ValueError(f"Unsupported offline prepared path: {path}")
-
-        if manifest_path is None:
-            stats["paths_without_validation"] = int(
-                stats["paths_without_validation"]
-            ) + 1
-            continue
 
         manifest_paths.append(manifest_path)
         manifest = _read_manifest(manifest_path)
@@ -415,7 +421,7 @@ def _project_expert_action(
     action_spec: ResidualActionSpec,
     expert_reference_scale: float,
     clip_residual_to_unit: bool,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int, bool]:
     expert_arr = np.asarray(expert_action, dtype=np.float32).reshape(-1)
     base_arr = np.asarray(base_action, dtype=np.float32).reshape(-1)
     if expert_arr.shape != base_arr.shape:
@@ -425,29 +431,49 @@ def _project_expert_action(
 
     projected = np.asarray(base_arr, dtype=np.float32).copy()
     if action_spec.alpha <= 0.0:
+        step_unrepresentable = bool(
+            np.any(
+                np.abs(
+                    expert_arr[
+                        np.asarray(action_spec.control_indices, dtype=np.int64).reshape(-1)
+                    ]
+                    - base_arr[
+                        np.asarray(action_spec.control_indices, dtype=np.int64).reshape(-1)
+                    ]
+                )
+                > UNIT_RESIDUAL_EPS
+            )
+        )
         if action_spec.clip_gripper and projected.shape[0] > 0:
             projected[-1] = np.clip(projected[-1], -1.0, 1.0)
-        return projected, 0
+        return projected, 0, step_unrepresentable
 
     clipped_values = 0
+    step_unrepresentable = False
     limits = np.asarray(action_spec.residual_limits, dtype=np.float32).reshape(-1)
     control_indices = np.asarray(action_spec.control_indices, dtype=np.int64).reshape(-1)
     denom = limits * float(action_spec.alpha) * float(expert_reference_scale)
     for local_idx, action_idx in enumerate(control_indices):
         scale = float(denom[local_idx])
         if (not np.isfinite(scale)) or scale <= 0.0:
+            if abs(float(expert_arr[action_idx] - base_arr[action_idx])) > UNIT_RESIDUAL_EPS:
+                clipped_values += 1
+                step_unrepresentable = True
             continue
         residual_value = float(expert_arr[action_idx] - base_arr[action_idx]) / scale
+        if abs(residual_value) > (1.0 + UNIT_RESIDUAL_EPS):
+            clipped_values += 1
+            step_unrepresentable = True
         if clip_residual_to_unit:
             clipped_residual = float(np.clip(residual_value, -1.0, 1.0))
-            if not np.isclose(clipped_residual, residual_value):
-                clipped_values += 1
             residual_value = clipped_residual
         projected[action_idx] = base_arr[action_idx] + (residual_value * scale)
 
     if action_spec.clip_gripper and projected.shape[0] > 0:
         projected[-1] = np.clip(projected[-1], -1.0, 1.0)
-    return projected.astype(np.float32, copy=False), int(clipped_values)
+    return projected.astype(np.float32, copy=False), int(clipped_values), bool(
+        step_unrepresentable
+    )
 
 
 def _load_demo_payload(demo: Any) -> dict[str, np.ndarray]:
@@ -475,6 +501,7 @@ def _prepare_demo_transitions(
     policy_client: Any,
     expert_reference_scale: float,
     clip_residual_to_unit: bool,
+    filter_unrepresentable_steps: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     payload = _load_demo_payload(demo)
     expert_actions = payload["actions"]
@@ -513,7 +540,9 @@ def _prepare_demo_transitions(
         )
 
     transitions: list[dict[str, Any]] = []
-    clipped_values = 0
+    unrepresentable_values = 0
+    steps_unrepresentable = 0
+    steps_filtered = 0
     episode_return = 0.0
     for step_idx in range(num_steps):
         obs_raw = _build_frame_obs(payload, step_idx)
@@ -525,14 +554,19 @@ def _prepare_demo_transitions(
             residual_alpha=float(action_spec.alpha),
         )
 
-        final_action, step_clipped = _project_expert_action(
+        final_action, step_unrepresentable_values, step_unrepresentable = _project_expert_action(
             expert_action=expert_actions[step_idx],
             base_action=base_chunk[0],
             action_spec=action_spec,
             expert_reference_scale=expert_reference_scale,
             clip_residual_to_unit=clip_residual_to_unit,
         )
-        clipped_values += int(step_clipped)
+        unrepresentable_values += int(step_unrepresentable_values)
+        if step_unrepresentable:
+            steps_unrepresentable += 1
+            if filter_unrepresentable_steps:
+                steps_filtered += 1
+                continue
         reward = float(rewards[step_idx])
         episode_return += reward
         done = bool(dones[step_idx]) or bool(step_idx >= (num_steps - 1))
@@ -566,10 +600,13 @@ def _prepare_demo_transitions(
 
     episode_stats = {
         "episode_id": int(episode_id),
-        "episode_steps": int(num_steps),
+        "steps_total": int(num_steps),
+        "steps_written": int(len(transitions)),
+        "steps_unrepresentable": int(steps_unrepresentable),
+        "steps_filtered": int(steps_filtered),
         "episode_return": float(episode_return),
         "success": bool(num_steps > 0),
-        "clipped_values": int(clipped_values),
+        "unrepresentable_values": int(unrepresentable_values),
     }
     return transitions, episode_stats
 
@@ -613,6 +650,9 @@ def _write_manifest(
         "offline": {
             "expert_reference_scale": float(cfg.offline.prepare.expert_reference_scale),
             "clip_residual_to_unit": bool(cfg.offline.prepare.clip_residual_to_unit),
+            "filter_unrepresentable_steps": bool(
+                cfg.offline.prepare.filter_unrepresentable_steps
+            ),
         },
         "fingerprint": to_jsonable(fingerprint),
         "prepare_stats": to_jsonable(prepare_stats),
@@ -667,9 +707,12 @@ def prepare_current_task_offline_data(
     prepare_stats: dict[str, Any] = {
         "raw_dataset_path": str(task_spec.dataset_path),
         "prepared_dir": str(prepared_dir),
+        "episodes_total": 0,
+        "steps_total": 0,
+        "steps_unrepresentable": 0,
+        "steps_filtered": 0,
         "episodes_written": 0,
-        "transitions_written": 0,
-        "clipped_values": 0,
+        "steps_written": 0,
         "elapsed_sec": 0.0,
     }
     start_time = time.time()
@@ -708,18 +751,31 @@ def prepare_current_task_offline_data(
                     policy_client=policy_client,
                     expert_reference_scale=float(cfg.offline.prepare.expert_reference_scale),
                     clip_residual_to_unit=bool(cfg.offline.prepare.clip_residual_to_unit),
+                    filter_unrepresentable_steps=bool(
+                        cfg.offline.prepare.filter_unrepresentable_steps
+                    ),
                 )
-                episode_path = prepared_dir / f"episode_{int(episode_index):06d}.pkl"
-                with open(episode_path, "wb") as fp:
-                    pickle.dump(transitions, fp, protocol=pickle.HIGHEST_PROTOCOL)
-                episode_files.append(episode_path)
-                prepare_stats["episodes_written"] = int(prepare_stats["episodes_written"]) + 1
-                prepare_stats["transitions_written"] = int(
-                    prepare_stats["transitions_written"]
-                ) + int(len(transitions))
-                prepare_stats["clipped_values"] = int(
-                    prepare_stats["clipped_values"]
-                ) + int(episode_stats["clipped_values"])
+                prepare_stats["episodes_total"] = int(prepare_stats["episodes_total"]) + 1
+                prepare_stats["steps_total"] = int(prepare_stats["steps_total"]) + int(
+                    episode_stats["steps_total"]
+                )
+                prepare_stats["steps_unrepresentable"] = int(
+                    prepare_stats["steps_unrepresentable"]
+                ) + int(episode_stats["steps_unrepresentable"])
+                prepare_stats["steps_filtered"] = int(
+                    prepare_stats["steps_filtered"]
+                ) + int(episode_stats["steps_filtered"])
+                prepare_stats["steps_written"] = int(prepare_stats["steps_written"]) + int(
+                    episode_stats["steps_written"]
+                )
+                if transitions:
+                    episode_path = prepared_dir / f"episode_{int(episode_index):06d}.pkl"
+                    with open(episode_path, "wb") as fp:
+                        pickle.dump(transitions, fp, protocol=pickle.HIGHEST_PROTOCOL)
+                    episode_files.append(episode_path)
+                    prepare_stats["episodes_written"] = int(
+                        prepare_stats["episodes_written"]
+                    ) + 1
     finally:
         policy_client_close = getattr(policy_client, "close", None)
         if callable(policy_client_close):
@@ -738,9 +794,15 @@ def prepare_current_task_offline_data(
         prepare_stats=prepare_stats,
     )
     logger.info(
-        "Prepared offline dataset complete: episodes=%s transitions=%s manifest=%s",
+        "Offline prepare complete: episodes_total=%s steps_total=%s "
+        "steps_unrepresentable=%s steps_filtered=%s episodes_written=%s "
+        "steps_written=%s manifest=%s",
+        int(prepare_stats["episodes_total"]),
+        int(prepare_stats["steps_total"]),
+        int(prepare_stats["steps_unrepresentable"]),
+        int(prepare_stats["steps_filtered"]),
         int(prepare_stats["episodes_written"]),
-        int(prepare_stats["transitions_written"]),
+        int(prepare_stats["steps_written"]),
         manifest_path,
     )
     return OfflinePreparedInputs(
@@ -800,10 +862,9 @@ def load_prepared_offline_replay(
     episode_files = resolve_prepared_episode_files(prepared_paths)
     stats: dict[str, Any] = {
         "files_total": int(len(episode_files)),
-        "files_loaded": 0,
         "episodes_loaded": 0,
-        "inserted": 0,
-        "errors": 0,
+        "steps_loaded": 0,
+        "load_errors": 0,
     }
     if not episode_files:
         logger.warning("Prepared offline dataset paths resolved to zero episode files")
@@ -820,7 +881,7 @@ def load_prepared_offline_replay(
     for episode_path in episode_iter:
         if max_episodes is not None and stats["episodes_loaded"] >= int(max_episodes):
             break
-        if max_transitions is not None and stats["inserted"] >= int(max_transitions):
+        if max_transitions is not None and stats["steps_loaded"] >= int(max_transitions):
             break
         try:
             with open(episode_path, "rb") as fp:
@@ -828,25 +889,73 @@ def load_prepared_offline_replay(
             if not isinstance(transitions, list):
                 raise ValueError(f"prepared episode must be a list, got {type(transitions)}")
             for transition in transitions:
-                if max_transitions is not None and stats["inserted"] >= int(max_transitions):
+                if max_transitions is not None and stats["steps_loaded"] >= int(max_transitions):
                     break
                 if not isinstance(transition, dict):
                     raise ValueError(
                         f"prepared transition must be a dict, got {type(transition)}"
                     )
                 replay_buffer.insert(transition)
-                stats["inserted"] += 1
-            stats["files_loaded"] += 1
+                stats["steps_loaded"] += 1
             stats["episodes_loaded"] += 1
         except Exception as exc:  # noqa: BLE001
-            stats["errors"] += 1
+            stats["load_errors"] += 1
             logger.warning("failed to load prepared offline episode %s: %s", episode_path, exc)
 
+    manifest_paths: list[Path] = []
+    seen_manifest_paths: set[Path] = set()
+    for prepared_path in prepared_paths:
+        manifest_path: Path | None = None
+        if prepared_path.is_dir():
+            candidate = prepared_path / MANIFEST_FILENAME
+            if candidate.exists():
+                manifest_path = candidate.resolve()
+        elif prepared_path.name == MANIFEST_FILENAME:
+            manifest_path = prepared_path.resolve()
+        if manifest_path is None or manifest_path in seen_manifest_paths:
+            continue
+        seen_manifest_paths.add(manifest_path)
+        manifest_paths.append(manifest_path)
+
+    dataset_stats = {
+        "steps_total": 0,
+        "steps_unrepresentable": 0,
+        "steps_filtered": 0,
+        "steps_written": 0,
+    }
+    for manifest_path in manifest_paths:
+        manifest = _read_manifest(manifest_path)
+        if manifest is None:
+            continue
+        prepare_stats = manifest.get("prepare_stats", None)
+        if not isinstance(prepare_stats, dict):
+            continue
+        dataset_stats["steps_total"] += int(prepare_stats.get("steps_total", 0) or 0)
+        dataset_stats["steps_unrepresentable"] += int(
+            prepare_stats.get("steps_unrepresentable", 0) or 0
+        )
+        dataset_stats["steps_filtered"] += int(
+            prepare_stats.get("steps_filtered", 0) or 0
+        )
+        dataset_stats["steps_written"] += int(
+            prepare_stats.get(
+                "steps_written",
+                prepare_stats.get("transitions_written", 0),
+            )
+            or 0
+        )
+
     logger.info(
-        "Offline replay loaded: episodes=%s inserted=%s errors=%s",
+        "Offline replay loaded: files_total=%s episodes_loaded=%s steps_loaded=%s "
+        "load_errors=%s dataset_steps_total=%s dataset_steps_filtered=%s "
+        "dataset_steps_written=%s",
+        int(stats["files_total"]),
         int(stats["episodes_loaded"]),
-        int(stats["inserted"]),
-        int(stats["errors"]),
+        int(stats["steps_loaded"]),
+        int(stats["load_errors"]),
+        int(dataset_stats["steps_total"]),
+        int(dataset_stats["steps_filtered"]),
+        int(dataset_stats["steps_written"]),
     )
     return stats
 

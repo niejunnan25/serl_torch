@@ -19,7 +19,7 @@ runtime:
   broadcast_port: 5489
   data_store_queue_size: 2000
   trainer_transport:
-    mode: split_queue
+    mode: async_commit
     data_port: 5490
     control_timeout_ms: 2000
     data_queue_capacity: 8
@@ -44,7 +44,7 @@ backfill_policy:
   enabled: true
   host: ${policy.host}
   port: ${policy.port}
-  # This remains a backlog / staleness guard even with split_queue transport.
+  # This remains a backlog / staleness guard even with async_commit transport.
   # Start around 4 on real robot and only raise it if profiling shows the actor
   # is being needlessly back-pressured.
   max_pending_chunks: 4
@@ -146,6 +146,7 @@ offline:
     output_root: data/residual/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
+    filter_unrepresentable_steps: false
 
 training:
   training_starts: 1000

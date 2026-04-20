@@ -19,7 +19,7 @@
 - 训练数据仍然按 per-step transition 写入 replay，不是直接存 chunk
 - base policy 当前推荐用 JoyRA
 - copy 训练线支持 chunk 级 batched backfill
-- 默认 copy 配置已经启用 `split_queue` transport 和 async backfill
+- 默认 copy 配置已经启用 `async_commit` transport 和 async backfill
 - 如果再切到 dedicated backfill server，可以进一步降低控制时延竞争
 
 这条线和旧版本最大的区别是：
@@ -45,7 +45,7 @@
 这是当前默认 [train_residual_copy.yaml](configs/train_residual_copy.yaml) 的行为，因为：
 
 - `policy.type=joyra`
-- `runtime.trainer_transport.mode=split_queue`
+- `runtime.trainer_transport.mode=async_commit`
 - `backfill_policy.enabled=true`
 - `backfill_policy.port=${policy.port}`
 
@@ -88,7 +88,7 @@
 当你保持 `backfill_policy.enabled=true`，并把 `backfill_policy.port` 指到单独的 JoyRA server 端口时，copy 训练线会变成：
 
 - 主 actor 仍然只向主 policy server 发单样本 chunk 决策请求
-- backfill 走单独的 `_AsyncChunkAssemblyCoordinator`
+- transition assembly 走单独的 `AsyncTransitionAssemblyCoordinator`
 - 每个 chunk 只提交 1 个 backfill job
 - 非终止 chunk:
   回填 `H-1` 个 `post_step_observations`，最后一个 tail 由下一次 decision obs handoff
@@ -99,7 +99,7 @@
 这里的并行语义也要说清楚：
 
 - 对单个 chunk 的 backfill 来说，当前是 `1 个 chunk -> 1 次 batched infer_many RPC`
-- 对 actor 进程来说，当前只会有 1 条后台 backfill 流，因为 `_AsyncChunkAssemblyCoordinator` 的执行器是 `max_workers=1`
+- 对 actor 进程来说，当前只会有 1 条后台 transition assembly 流，因为 `AsyncTransitionAssemblyCoordinator` 的执行器是 `max_workers=1`
 - 对系统来说，只有当你把主 policy server 和 backfill server 分成两个独立 JoyRA 进程时，主控制推理和 backfill 推理才是“系统级并行”
 
 如果这两个 JoyRA server 再分别放到不同 GPU 上，例如：
@@ -131,7 +131,7 @@
 - [configs/train_residual_copy.yaml](configs/train_residual_copy.yaml)
   当前推荐 copy 训练配置
 - [configs/train_residual_optimized.yaml](configs/train_residual_optimized.yaml)
-  legacy `optimized` 配置，保留作 `legacy_reqrep` 对照
+  legacy `optimized` 配置，保留作 `sync_commit` 对照
 - [config.py](config.py)
   typed config 定义与解析
 - [scripts/run_residual_training_copy.py](scripts/run_residual_training_copy.py)
@@ -327,7 +327,7 @@ python examples/agibot_real/scripts/run_residual_training_copy.py \
 
 - `policy.type=joyra`
 - `policy.port=9001`
-- `runtime.trainer_transport.mode=split_queue`
+- `runtime.trainer_transport.mode=async_commit`
 - `runtime.trainer_transport.data_port=5490`
 - `backfill_policy.enabled=true`
 - `backfill_policy.port=${policy.port}`
@@ -342,7 +342,7 @@ python examples/agibot_real/scripts/run_residual_training_copy.py \
 
 怎么理解这份默认配置：
 
-- `mode=split_queue`
+- `mode=async_commit`
   代表 actor 和 learner 之间的数据面/控制面已经拆开，常规 `update()` 只追求 accepted，shutdown 时再等 committed
 - `enabled=true` 且 `port=${policy.port}`
   代表默认先走“异步 backfill on 主 server”，所以 staged reset 已经会生效
@@ -355,7 +355,7 @@ python examples/agibot_real/scripts/run_residual_training_copy.py \
 
 如果你想回退到旧的 trainer 通信方式，可以继续使用 [train_residual_optimized.yaml](configs/train_residual_optimized.yaml)。它保留的是：
 
-- `runtime.trainer_transport.mode=legacy_reqrep`
+- `runtime.trainer_transport.mode=sync_commit`
 - `backfill_policy.port=${policy.port}`
 - `backfill_policy.max_pending_chunks=10`
 

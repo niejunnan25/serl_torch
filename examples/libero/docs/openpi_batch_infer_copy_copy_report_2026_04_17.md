@@ -1,4 +1,6 @@
-# OpenPI `infer_many` + LIBERO `copy_copy` 实施与实测记录
+# OpenPI `infer_many` + LIBERO `optimized` 实施与实测记录
+
+注：本文文件名保留了当时的 `copy_copy` 命名，正文统一使用当前名称 `optimized`。
 
 ## 这次改了什么
 
@@ -9,7 +11,7 @@
 
 没有改 `/vla/users/niejunnan/codebase/openpi`。
 
-目标是把之前只在 JoyRA 路径可用的 chunk 级 batch backfill 能力，补到 OpenPI 上，让 `examples/libero/scripts/run_residual_training_copy_copy.py` 在 `policy.type=openpi` 时也能真正走：
+目标是把之前只在 JoyRA 路径可用的 chunk 级 batch backfill 能力，补到 OpenPI 上，让 `examples/libero/scripts/run_residual_training_optimized.py` 在 `policy.type=openpi` 时也能真正走：
 
 - 主 actor：单样本 `infer`
 - backfill：每个 chunk 一次 `infer_many`
@@ -46,9 +48,9 @@
   - 保持单样本 `infer(...)` 行为不变。
   - 加了 `close()`。
   - batch path 直接复用现有 websocket client 的 `infer(send_data)`，只是发送 payload 改成 `{"examples": ...}`，不依赖额外 client 包升级。
-- `examples/libero/scripts/run_residual_training_copy_copy.py`
+- `examples/libero/scripts/run_residual_training_optimized.py`
   - 修了一个 review 时发现的真实 bug：
-    - actor 之前会先调用 `_maybe_enable_torch_compile(...)`
+    - learner/eval 侧会调用 `apply_torch_compile(...)`
     - 然后再打印“actor 忽略 compile”
     - 这两个语义是冲突的
   - 现在 actor 只打印 ignore，不再真的 compile。
@@ -59,7 +61,7 @@
 
 ### 主 actor 路径
 
-`run_residual_training_copy_copy.py` 的 actor 仍然保持：
+`run_residual_training_optimized.py` 的 actor 仍然保持：
 
 1. 当前 observation 走 OpenPI 单样本 `infer(...)`
 2. 得到 base chunk
@@ -87,7 +89,7 @@
 
 ### 已修的问题
 
-- `copy_copy` actor 的 `torch_compile` 语义 bug 已修。
+- `optimized` actor 的 `torch_compile` 语义 bug 已修。
 - OpenPI server batch path 已补齐。
 - OpenPI client batch path 已补齐。
 - `PolicyRecorder.infer_many(...)` 已补，单样本 `PolicyRecorder.infer(...)` 的保存方式也顺手统一成 object save，避免原来 `np.asarray(data)` 这种不稳定存法。
@@ -99,7 +101,7 @@
     - `Failed to send message to 127.0.0.1:<trainer_port>: Resource temporarily unavailable`
     - `Failed to get last update id`
   - 说明 actor/learner 的 trainer socket 或 request/backpressure 也是明显瓶颈。
-- `copy_copy` learner 这次 summary 没有完全追上 actor 的 1000 env steps。
+- `optimized` learner 这次 summary 没有完全追上 actor 的 1000 env steps。
   - 因为我在 actor 跑完后手动中断了 learner，summary 停在：
     - `env_steps=520`
     - `replay_size=701`
@@ -142,7 +144,7 @@
 
 不是 HTTP env，也不是完整 actor/learner 链路。
 
-### 3. 1000-step 端到端：`copy_copy`
+### 3. 1000-step 端到端：`optimized`
 
 运行目录：
 
@@ -170,7 +172,7 @@ actor timer 最后一条平均值：
 - `build_decision_obs ~= 0.000078s`
 - `total ~= 0.5025s`
 
-这个很关键，说明 `copy_copy` 的 post-hoc 组装开销已经被压得很低了。
+这个很关键，说明 `optimized` 的 post-hoc 组装开销已经被压得很低了。
 
 ### 4. 1000-step 端到端：原始 `run_residual_training.py`
 
@@ -194,7 +196,7 @@ actor timer 最后一条平均值：
 - `build_decision_obs ~= 0.1077s`
 - `total ~= 0.8509s`
 
-这也很关键：原始 step-wise 训练线里，`build_decision_obs` 明显比 `copy_copy` 大很多。
+这也很关键：原始 step-wise 训练线里，`build_decision_obs` 明显比 `optimized` 大很多。
 
 ## 速度结论
 
@@ -210,7 +212,7 @@ OpenPI 真 batch 已经生效：
 
 按真正跑到 `env_steps=1000` 的日志时间计算：
 
-- `copy_copy`: `5.803 step/s`
+- `optimized`: `5.803 step/s`
 - `run_residual_training.py`: `5.105 step/s`
 
 提升约：
@@ -242,7 +244,7 @@ OpenPI 真 batch 已经生效：
 
 - OpenPI server 现在支持 batch request
 - OpenPI client 现在支持 `infer_many`
-- `copy_copy` 现在在 OpenPI backend 下，确实能走 chunk 级 batched backfill
+- `optimized` 现在在 OpenPI backend 下，确实能走 chunk 级 batched backfill
 
 ### 当前是否正确
 
@@ -251,7 +253,7 @@ OpenPI 真 batch 已经生效：
 - 单测过了
 - fake batch benchmark 证明模型侧真 batch 生效
 - 真实 1000-step 也跑通了
-- `copy_copy` 的 `build_decision_obs` 平均耗时已经接近被清空
+- `optimized` 的 `build_decision_obs` 平均耗时已经接近被清空
 
 ### 当前最值得继续做的事
 
@@ -261,7 +263,7 @@ OpenPI 真 batch 已经生效：
    - 这次两条线都出现了大量 timeout warning
    - 这已经不是 OpenPI batch 自己能解决的问题了
 2. async backfill 的 episode-end drain 语义
-   - 这次 `copy_copy` actor 已到 1000 steps，但 learner summary 没完全追平
+   - 这次 `optimized` actor 已到 1000 steps，但 learner summary 没完全追平
    - 如果要做更干净的 benchmark，最好让 learner 在 actor 完成后再自然 drain 一小段，而不是我这样手动打断
 
 ## 相关文件
@@ -269,7 +271,7 @@ OpenPI 真 batch 已经生效：
 - [serl_launcher/serl_launcher/policy/openpi/client.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/client.py)
 - [serl_launcher/serl_launcher/policy/openpi/request_builder.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/request_builder.py)
 - [serl_launcher/tests/policy/test_openpi_batch_client.py](/home/hello/codebase/serl_torch/serl_launcher/tests/policy/test_openpi_batch_client.py)
-- [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py)
+- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py)
 - [openpi-modified/src/openpi/policies/policy.py](/vla/users/niejunnan/codebase/openpi-modified/src/openpi/policies/policy.py)
 - [openpi-modified/src/openpi/serving/websocket_policy_server.py](/vla/users/niejunnan/codebase/openpi-modified/src/openpi/serving/websocket_policy_server.py)
 - [openpi-modified/scripts/serve_policy.py](/vla/users/niejunnan/codebase/openpi-modified/scripts/serve_policy.py)

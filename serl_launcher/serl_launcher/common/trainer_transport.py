@@ -34,6 +34,10 @@ except ImportError:  # pragma: no cover - zlib fallback remains tested.
 
 TransportMode = str
 
+SYNC_COMMIT_MODE = "sync_commit"
+ASYNC_COMMIT_MODE = "async_commit"
+SUPPORTED_TRANSPORT_MODES = (SYNC_COMMIT_MODE, ASYNC_COMMIT_MODE)
+
 
 @dataclass(frozen=True, slots=True)
 class TrainerTransportConfig:
@@ -45,6 +49,16 @@ class TrainerTransportConfig:
     commit_poll_ms: int
     wait_committed_on_episode_end: bool
     wait_committed_on_shutdown: bool
+
+
+def validate_transport_mode(mode: Any) -> TransportMode:
+    raw_mode = str(mode)
+    if raw_mode not in SUPPORTED_TRANSPORT_MODES:
+        allowed = ", ".join(repr(name) for name in SUPPORTED_TRANSPORT_MODES)
+        raise ValueError(
+            f"Unsupported trainer transport mode: {raw_mode!r}. Allowed values: {allowed}"
+        )
+    return raw_mode
 
 
 class ActorTrainerTransport(Protocol):
@@ -96,9 +110,9 @@ def build_actor_trainer_transport(
     wait_for_server: bool = False,
     log_level: int = logging.INFO,
 ) -> ActorTrainerTransport:
-    mode = str(getattr(transport_cfg, "mode", "legacy_reqrep"))
-    if mode == "legacy_reqrep":
-        return _LegacyReqRepActorTransport(
+    mode = validate_transport_mode(getattr(transport_cfg, "mode", SYNC_COMMIT_MODE))
+    if mode == SYNC_COMMIT_MODE:
+        return _SyncCommitActorTransport(
             store_name=store_name,
             server_ip=server_ip,
             trainer_port=int(trainer_port),
@@ -109,8 +123,8 @@ def build_actor_trainer_transport(
             timeout_ms=int(getattr(transport_cfg, "control_timeout_ms", 800)),
             log_level=int(log_level),
         )
-    if mode == "split_queue":
-        return _SplitQueueActorTransport(
+    if mode == ASYNC_COMMIT_MODE:
+        return _AsyncCommitActorTransport(
             store_name=store_name,
             server_ip=server_ip,
             trainer_port=int(trainer_port),
@@ -136,17 +150,17 @@ def build_learner_trainer_transport(
     request_types: Iterable[str] = (),
     log_level: int = logging.INFO,
 ) -> LearnerTrainerTransport:
-    mode = str(getattr(transport_cfg, "mode", "legacy_reqrep"))
-    if mode == "legacy_reqrep":
-        return _LegacyReqRepLearnerTransport(
+    mode = validate_transport_mode(getattr(transport_cfg, "mode", SYNC_COMMIT_MODE))
+    if mode == SYNC_COMMIT_MODE:
+        return _SyncCommitLearnerTransport(
             trainer_port=int(trainer_port),
             broadcast_port=int(broadcast_port),
             request_callback=request_callback,
             request_types=tuple(request_types),
             log_level=int(log_level),
         )
-    if mode == "split_queue":
-        return _SplitQueueLearnerTransport(
+    if mode == ASYNC_COMMIT_MODE:
+        return _AsyncCommitLearnerTransport(
             trainer_port=int(trainer_port),
             broadcast_port=int(broadcast_port),
             data_port=int(getattr(transport_cfg, "data_port")),
@@ -407,7 +421,7 @@ class _PullServer:
             self._thread.join(timeout=2.0)
 
 
-class _LegacyReqRepActorTransport:
+class _SyncCommitActorTransport:
     def __init__(
         self,
         *,
@@ -455,7 +469,7 @@ class _LegacyReqRepActorTransport:
         remote_last = self._client.get_server_last_update_id(target_name)
         accepted = -1 if remote_last is None else int(remote_last)
         return {
-            "transport_mode": "legacy_reqrep",
+            "transport_mode": SYNC_COMMIT_MODE,
             "store_name": target_name,
             "accepted_update_id": int(accepted),
             "committed_update_id": int(accepted),
@@ -469,7 +483,7 @@ class _LegacyReqRepActorTransport:
         _close_reqrep_client_endpoint(getattr(self._client, "req_rep_client", None))
 
 
-class _LegacyReqRepLearnerTransport:
+class _SyncCommitLearnerTransport:
     def __init__(
         self,
         *,
@@ -501,7 +515,7 @@ class _LegacyReqRepLearnerTransport:
     def get_transport_status(self, store_name: str) -> dict[str, Any]:
         last_update_id = int(self._server.last_update_id_map.get(str(store_name), -1))
         return {
-            "transport_mode": "legacy_reqrep",
+            "transport_mode": SYNC_COMMIT_MODE,
             "store_name": str(store_name),
             "accepted_update_id": int(last_update_id),
             "committed_update_id": int(last_update_id),
@@ -514,7 +528,7 @@ class _LegacyReqRepLearnerTransport:
         _close_broadcast_endpoint(getattr(self._server, "broadcast_server", None))
 
 
-class _SplitQueueLearnerTransport:
+class _AsyncCommitLearnerTransport:
     def __init__(
         self,
         *,
@@ -540,7 +554,7 @@ class _SplitQueueLearnerTransport:
         )
         self._stop_event = threading.Event()
         self._transport_signature = {
-            "mode": "split_queue",
+            "mode": ASYNC_COMMIT_MODE,
             "trainer_port": int(trainer_port),
             "broadcast_port": int(broadcast_port),
             "data_port": int(data_port),
@@ -616,7 +630,7 @@ class _SplitQueueLearnerTransport:
         self._worker_thread = threading.Thread(
             target=self._commit_worker,
             daemon=True,
-            name="trainer-split-queue-worker",
+            name="trainer-async-commit-worker",
         )
 
     def _commit_worker(self) -> None:
@@ -655,7 +669,7 @@ class _SplitQueueLearnerTransport:
             accepted = int(self._accepted_update_id_map.get(str(store_name), -1))
             committed = int(self._committed_update_id_map.get(str(store_name), -1))
         return {
-            "transport_mode": "split_queue",
+            "transport_mode": ASYNC_COMMIT_MODE,
             "store_name": str(store_name),
             "accepted_update_id": int(accepted),
             "committed_update_id": int(committed),
@@ -672,7 +686,7 @@ class _SplitQueueLearnerTransport:
         _close_broadcast_endpoint(self._broadcast_server)
 
 
-class _SplitQueueActorTransport:
+class _AsyncCommitActorTransport:
     def __init__(
         self,
         *,
@@ -709,7 +723,7 @@ class _SplitQueueActorTransport:
         )
         self._broadcast_client: BroadcastClient | None = None
         self._transport_signature = {
-            "mode": "split_queue",
+            "mode": ASYNC_COMMIT_MODE,
             "trainer_port": int(trainer_port),
             "broadcast_port": int(broadcast_port),
             "data_port": int(data_port),
@@ -741,7 +755,7 @@ class _SplitQueueActorTransport:
             time.sleep(2.0)
             response = self._control_client.send_msg({"type": "hash"})
         if response is None or not response.get("success", False):
-            raise RuntimeError("Failed to connect to split-queue trainer server")
+            raise RuntimeError("Failed to connect to async_commit trainer server")
         expected_hash = _transport_config_hash(self._transport_signature)
         if response.get("payload") != expected_hash:
             raise RuntimeError("Incompatible trainer transport config between actor and learner")

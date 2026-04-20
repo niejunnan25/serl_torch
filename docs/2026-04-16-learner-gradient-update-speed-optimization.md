@@ -10,7 +10,7 @@
   `examples/agibot_real/scripts/run_residual_training.py`
 - 可复用范围：
   `examples/libero/scripts/run_residual_training.py` 和当前实验用的
-  `examples/libero/scripts/run_residual_training_copy.py` 与 AgiBot learner 结构高度相似，本文大多数 learner 更新优化也适用。
+  `examples/libero/scripts/run_residual_training_optimized.py` 与 AgiBot learner 结构高度相似，本文大多数 learner 更新优化也适用。
 
 ## 0. 先说明这次日志的边界
 
@@ -712,4 +712,3 @@ learner heartbeat:
 ```
 
 这两项可能是吞吐提升最大的，但需要用成功率和 loss 曲线确认不会牺牲太多训练质量。
-

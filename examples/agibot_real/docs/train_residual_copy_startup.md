@@ -40,7 +40,7 @@
 - backfill server: `9011`
 - trainer port: `5488`
 - broadcast port: `5489`
-- split-queue data port: `5490`
+- async-commit data port: `5490`
 
 ## 终端 1: 主 JoyRA policy server
 
@@ -153,11 +153,11 @@ python examples/agibot_real/scripts/run_residual_training_copy.py \
 - `policy.port=9001`
 - `backfill_policy.enabled=true`
 - `backfill_policy.port=${policy.port}`
-- `runtime.trainer_transport.mode=split_queue`
+- `runtime.trainer_transport.mode=async_commit`
 
 也就是：
 
-- trainer 走新的 `split_queue`
+- trainer 走新的 `async_commit`
 - backfill 开着
 - 但主控制和 backfill 共用同一个 JoyRA server
 
@@ -176,7 +176,7 @@ actor 起来后，terminal controller 默认按键是：
 
 [../configs/train_residual_copy.yaml](../configs/train_residual_copy.yaml) 当前关键值是：
 
-- `runtime.trainer_transport.mode=split_queue`
+- `runtime.trainer_transport.mode=async_commit`
 - `runtime.trainer_transport.control_timeout_ms=2000`
 - `backfill_policy.enabled=true`
 - `backfill_policy.max_pending_chunks=4`

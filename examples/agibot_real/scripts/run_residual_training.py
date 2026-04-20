@@ -24,6 +24,7 @@ from tqdm.auto import tqdm
 from serl_launcher.agents.continuous.drq_typed_config import (
     create_drq_agent_from_typed_cfg,
 )
+from serl_launcher.common.agent_acceleration import apply_torch_compile
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
@@ -78,7 +79,6 @@ from serl_torch.examples.agibot_real.residual_observation import (
 from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_sample_obs,
 )
-from serl_torch.examples.agibot_real.torch_compile import maybe_enable_torch_compile
 
 
 def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -105,12 +105,6 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
-    if bool(cfg.training.torch_compile.enabled):
-        logger.info(
-            "training.torch_compile.enabled=true is ignored on actor; compile applies "
-            "to learner updates only"
-        )
-
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
     client = TrainerClient(
         "actor_env",
@@ -474,10 +468,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
-    agent = maybe_enable_torch_compile(
+    agent = apply_torch_compile(
         agent,
         compile_cfg=cfg.training.torch_compile,
-        logger=logger,
     )
     observation_space = build_chunk_residual_observation_space(
         sample_obs=sample_obs,
@@ -497,10 +490,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     offline_validation_stats: dict[str, Any] | None = None
     offline_load_stats: dict[str, Any] = {
         "files_total": 0,
-        "files_loaded": 0,
         "episodes_loaded": 0,
-        "inserted": 0,
-        "errors": 0,
+        "steps_loaded": 0,
+        "load_errors": 0,
     }
 
     wandb_cfg = WandBLogger.get_default_config()

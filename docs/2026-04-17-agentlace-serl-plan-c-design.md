@@ -7,9 +7,9 @@
 当前代码状态是：
 
 - 训练数据/控制传输已经不再直接依赖 `agentlace.trainer.TrainerClient` / `TrainerServer`
-- 当前 copy 训练线已经改为通过 [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py) 创建 transport
+- 当前实验训练线已经改为通过 [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py) 创建 transport
 - 外部 `agentlace` 现在只继续负责参数广播，不再负责 trainer data/control path
-- LIBERO `copy_copy` 和 AgiBot `copy` 都已经接入 typed `runtime.trainer_transport`
+- LIBERO `optimized` 和 AgiBot `copy` 都已经接入 typed `runtime.trainer_transport`
 
 因此，下面的很多章节应当理解为：
 
@@ -24,7 +24,7 @@
 当前接入点主要在：
 
 - LIBERO actor / learner:
-  [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py)
+  [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py)
 - AgiBot actor / learner:
   [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py)
 - transport 实现：
@@ -437,12 +437,12 @@ class RuntimeConfig:
 当前约定是：
 
 - canonical `train_residual*.yaml` 默认 `mode: legacy_reqrep`
-- `LIBERO copy_copy` 和 `AgiBot copy` 的专用 yaml 默认 `mode: split_queue`
+- `LIBERO optimized` 和 `AgiBot copy` 的专用 yaml 默认 `mode: split_queue`
 
 对应文件分别是：
 
-- LIBERO copy_copy:
-  [examples/libero/configs/train_residual_copy_copy.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/train_residual_copy_copy.yaml)
+- LIBERO optimized:
+  [examples/libero/configs/train_residual_optimized.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/train_residual_optimized.yaml)
 - AgiBot copy:
   [examples/agibot_real/configs/train_residual_copy.yaml](/home/hello/codebase/serl_torch/examples/agibot_real/configs/train_residual_copy.yaml)
 
@@ -552,7 +552,7 @@ class LearnerTrainerTransport(Protocol):
 
 第一批建议改这些：
 
-- [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py:472)
+- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:472)
 - [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:415)
 
 第二批再考虑：
@@ -564,7 +564,7 @@ class LearnerTrainerTransport(Protocol):
 
 当前 actor 调用 `client.update()` 的位置很多，例如：
 
-- LIBERO copy_copy: [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py:535)
+- LIBERO optimized: [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:535)
 - AgiBot copy: [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:540)
 
 Plan C 下，这些调用点原则上可以不改调用形状，但要改语义：
@@ -629,7 +629,7 @@ learner 训练主循环本身应尽量少改。
 
 受影响的 learner 接入点：
 
-- LIBERO learner: [examples/libero/scripts/run_residual_training_copy_copy.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_copy_copy.py:910)
+- LIBERO learner: [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:910)
 - AgiBot learner: [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:954)
 
 ### 11.2 learner 的 replay 可见性语义
@@ -741,7 +741,7 @@ Plan C 只是把慢操作从 control thread 挪开，不会凭空让 insert 变�
 - 已完成
 - 当前实现没有去改外部 `agentlace`，而是在仓库内自管 trainer transport
 
-### Phase 3：先在 LIBERO copy_copy 上灰度
+### Phase 3：先在 LIBERO optimized 线上灰度
 
 原因：
 
@@ -832,7 +832,7 @@ Plan C 只是把慢操作从 control thread 挪开，不会凭空让 insert 变�
 
 第一批，已接入：
 
-- `examples/libero/scripts/run_residual_training_copy_copy.py`
+- `examples/libero/scripts/run_residual_training_optimized.py`
 - `examples/agibot_real/scripts/run_residual_training_copy.py`
 
 第二批，当前仍保留 legacy：
