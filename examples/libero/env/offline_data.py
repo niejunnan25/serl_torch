@@ -263,7 +263,13 @@ def _precompute_base_chunks_for_steps(
     )
     for step_idx in step_iter:
         obs_raw = build_frame_obs(payload, step_idx)
-        policy_input = build_libero_policy_input(obs_raw, task_prompt)
+        robot_state = build_libero_state(obs_raw)
+        image_observations = extract_libero_images(obs_raw)
+        policy_input = build_libero_policy_input(
+            prompt=task_prompt,
+            state=robot_state,
+            images=image_observations,
+        )
         action_chunk, _ = policy_client.infer(policy_input)
         base_chunks.append(
             prepare_base_actions_chunk(

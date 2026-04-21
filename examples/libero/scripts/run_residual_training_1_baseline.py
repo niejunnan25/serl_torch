@@ -194,7 +194,13 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 timer.tick("total")
                 with timer.context("sample_actions"):
                     if prefetched is None:
-                        base_policy_input = build_libero_policy_input(obs, task_prompt)
+                        robot_state = build_libero_state(obs)
+                        image_observations = extract_libero_images(obs)
+                        base_policy_input = build_libero_policy_input(
+                            prompt=task_prompt,
+                            state=robot_state,
+                            images=image_observations,
+                        )
 
                         base_actions, _ = policy_client.infer(base_policy_input)
                         base_actions = prepare_base_actions_chunk(
@@ -203,8 +209,8 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                         )
 
                         residual_obs = build_chunk_residual_obs(
-                            robot_state=build_libero_state(obs),
-                            images=extract_libero_images(obs),
+                            robot_state=robot_state,
+                            images=image_observations,
                             image_keys=image_keys,
                             base_actions=base_actions,
                             residual_alpha=residual_alpha,
@@ -233,8 +239,12 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                         next_obs, reward, done, truncated, info = env.step(action)
 
                     with timer.context("build_decision_obs"):
+                        next_robot_state = build_libero_state(next_obs)
+                        next_image_observations = extract_libero_images(next_obs)
                         next_base_policy_input = build_libero_policy_input(
-                            next_obs, task_prompt
+                            prompt=task_prompt,
+                            state=next_robot_state,
+                            images=next_image_observations,
                         )
                         next_base_actions, _ = policy_client.infer(next_base_policy_input)
                         next_base_actions = prepare_base_actions_chunk(
@@ -243,8 +253,8 @@ def actor(cfg: LiberoTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                         )
 
                         next_residual_obs = build_chunk_residual_obs(
-                            robot_state=build_libero_state(next_obs),
-                            images=extract_libero_images(next_obs),
+                            robot_state=next_robot_state,
+                            images=next_image_observations,
                             image_keys=image_keys,
                             base_actions=next_base_actions,
                             residual_alpha=residual_alpha,

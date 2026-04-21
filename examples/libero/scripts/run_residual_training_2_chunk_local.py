@@ -5,14 +5,10 @@ from __future__ import annotations
 from collections import deque
 import json
 import logging
-import math
-import queue
 import sys
 import time
 from pathlib import Path
-from threading import Condition
 from threading import Lock
-from types import SimpleNamespace
 from typing import Any
 
 from agentlace.data.data_store import QueuedDataStore
@@ -20,7 +16,6 @@ import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
-from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
 from serl_launcher.agents.continuous.drq_typed_config import (
@@ -32,8 +27,6 @@ from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
 from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
 from serl_launcher.common.trainer_transport import build_actor_trainer_transport
 from serl_launcher.common.trainer_transport import build_learner_trainer_transport
-from serl_launcher.common.trainer_transport import _ReqRepClient
-from serl_launcher.common.trainer_transport import _ReqRepServer
 from serl_launcher.async_eval import append_async_eval_checkpoint_index
 from serl_launcher.async_eval import save_async_eval_checkpoint_payload
 from serl_launcher.common.training_observability import configure_eval_wandb_metrics
@@ -99,132 +92,19 @@ from serl_torch.examples.libero.runtime.async_eval_runtime import (
     wait_for_async_eval_worker,
 )
 from serl_torch.examples.libero.runtime.transition_assembly import (
-    BatchAwareLiberoTransitionAssembler,
+    AssemblyResult,
 )
 from serl_torch.examples.libero.runtime.transition_assembly import (
     ChunkExecutionRecord,
 )
 from serl_torch.examples.libero.runtime.transition_assembly import (
-    PrefetchedDecisionObs,
+    LiberoActorTransitionAssembler,
 )
-
-
-def _raw_runtime_role(cfg: DictConfig) -> str:
-    runtime_cfg = cfg.get("runtime", {})
-    return str(runtime_cfg.get("role", "actor"))
-
-
-def _parse_train_cfg_allow_processor(cfg: DictConfig) -> LiberoTrainConfig:
-    raw_role = _raw_runtime_role(cfg)
-    if raw_role in ("actor", "learner"):
-        return parse_train_cfg(cfg)
-    cfg_copy = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
-    if "runtime" not in cfg_copy:
-        cfg_copy["runtime"] = {}
-    cfg_copy["runtime"]["role"] = "actor"
-    return parse_train_cfg(cfg_copy)
-
-
-def _resolve_processor_transport_cfg(
-    raw_cfg: DictConfig,
-    *,
-    typed_cfg: LiberoTrainConfig,
-) -> dict[str, int | str]:
-    processor_cfg = raw_cfg.get("processor_transport", {})
-    default_port = int(typed_cfg.runtime.trainer_transport.data_port) + 10
-    default_timeout_ms = int(typed_cfg.runtime.trainer_transport.control_timeout_ms)
-    host = str(processor_cfg.get("host", "127.0.0.1"))
-    port = int(processor_cfg.get("port", default_port))
-    timeout_ms = int(processor_cfg.get("timeout_ms", default_timeout_ms))
-    queue_capacity = int(processor_cfg.get("queue_capacity", 4))
-    if port <= 0:
-        raise ValueError(f"processor_transport.port must be positive, got {port}")
-    if timeout_ms <= 0:
-        raise ValueError(
-            f"processor_transport.timeout_ms must be positive, got {timeout_ms}"
-        )
-    if queue_capacity <= 0:
-        raise ValueError(
-            "processor_transport.queue_capacity must be positive, "
-            f"got {queue_capacity}"
-        )
-    return {
-        "host": host,
-        "port": port,
-        "timeout_ms": timeout_ms,
-        "queue_capacity": queue_capacity,
-    }
-
-
-def _build_processor_submission_payload(
-    *,
-    chunk_seq: int,
-    episode_id: int,
-    episode_step_start: int,
-    task_prompt: str,
-    chunk_result: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "chunk_seq": int(chunk_seq),
-        "episode_id": int(episode_id),
-        "episode_step_start": int(episode_step_start),
-        "task_prompt": str(task_prompt),
-        "chunk_result": dict(chunk_result),
-    }
-
-
-def _reconstruct_chunk_execution_record(
-    *,
-    payload: dict[str, Any],
-    assembler: BatchAwareLiberoTransitionAssembler,
-) -> ChunkExecutionRecord:
-    chunk_result = dict(payload["chunk_result"])
-    steps = list(chunk_result.get("steps", ()))
-    if not steps:
-        raise ValueError("processor received empty chunk_result.steps")
-
-    start_obs = dict(dict(steps[0])["obs"])
-    task_prompt = str(payload["task_prompt"])
-    decision_obs: PrefetchedDecisionObs = assembler.infer_decision_obs(
-        obs=start_obs,
-        task_prompt=task_prompt,
-    )
-    action_chunk = np.stack(
-        [
-            np.asarray(dict(step)["action"], dtype=np.float32).reshape(-1)
-            for step in steps
-        ],
-        axis=0,
-    )
-    rewards = [float(dict(step)["reward"]) for step in steps]
-    dones = [bool(dict(step)["done"]) for step in steps]
-    infos = [dict(dict(step)["info"]) for step in steps]
-    post_step_observations = [dict(dict(step)["next_obs"]) for step in steps]
-    last_step = dict(steps[-1])
-    return ChunkExecutionRecord(
-        episode_id=int(payload["episode_id"]),
-        episode_step_start=int(payload["episode_step_start"]),
-        residual_obs_before_chunk=decision_obs.residual_obs,
-        action_chunk=action_chunk,
-        post_step_observations=post_step_observations,
-        rewards=rewards,
-        dones=dones,
-        infos=infos,
-        final_obs=dict(chunk_result.get("obs", last_step["next_obs"])),
-        chunk_done=bool(chunk_result.get("done", last_step["done"])),
-        chunk_truncated=bool(
-            chunk_result.get("truncated", last_step.get("truncated", False))
-        ),
-        reward_sum=float(chunk_result.get("reward_sum", sum(rewards))),
-        chunk_info=dict(chunk_result.get("info", last_step["info"])),
-        executed_steps=int(chunk_result.get("num_steps", len(steps))),
-    )
 
 
 def actor(
     cfg: LiberoTrainConfig,
     *,
-    raw_cfg: DictConfig,
     run_dir: Path,
     logger: logging.Logger,
 ) -> None:
@@ -234,29 +114,27 @@ def actor(
     policy_backend = describe_policy_backend(cfg)
     logger.info("Chunk policy backend: %s", policy_backend)
 
-    processor_transport_cfg = _resolve_processor_transport_cfg(raw_cfg, typed_cfg=cfg)
-    processor_client = _ReqRepClient(
-        server_ip=str(processor_transport_cfg["host"]),
-        port=int(processor_transport_cfg["port"]),
-        timeout_ms=int(processor_transport_cfg["timeout_ms"]),
-    )
-    processor_timeout_ms = int(processor_transport_cfg["timeout_ms"])
-    long_request_retry_limit = max(
-        5,
-        int(math.ceil(30_000.0 / float(max(1, processor_timeout_ms)))),
-    )
-    logger.info(
-        "Processor endpoint: host=%s port=%s queue_capacity=%s",
-        str(processor_transport_cfg["host"]),
-        int(processor_transport_cfg["port"]),
-        int(processor_transport_cfg["queue_capacity"]),
-    )
-
     image_keys = cfg.obs.image_keys
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
     residual_alpha = float(cfg.residual.alpha)
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
+    transition_assembler = LiberoActorTransitionAssembler(
+        cfg=cfg,
+        policy_client=policy_client,
+        logger=logger,
+    )
+    # Optimized actor dataflow:
+    # chunk execute -> post-hoc step transition assembly -> step-window replay.
+    # Replay still stores per-step transitions; this is not direct chunk replay.
+    if transition_assembler.async_transition_assembly_enabled:
+        logger.info(
+            "Async backfill enabled: mode=%s endpoint=%s:%s max_pending_chunks=%s",
+            str(cfg.backfill_policy.mode),
+            str(cfg.backfill_policy.host),
+            int(cfg.backfill_policy.port),
+            int(cfg.backfill_policy.max_pending_chunks),
+        )
 
     sample_obs = build_chunk_residual_sample_obs(
         state_dim=LIBERO_STATE_DIM,
@@ -277,6 +155,7 @@ def actor(
     )
 
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
+    
     client = build_actor_trainer_transport(
         store_name="actor_env",
         server_ip=cfg.runtime.trainer_host,
@@ -305,9 +184,10 @@ def actor(
     env_seed = cfg.env.seed
 
     env_steps = 0
+    committed_env_steps = 0
     episode_id = 0
     success_count = 0
-    chunk_seq = 0
+    current_task_prompt: str | None = None
     recent_episode_successes: deque[int] = deque(maxlen=20)
     actor_timer_log_path = run_dir / "actor_timers.jsonl"
     rollout_log_path = run_dir / str(
@@ -320,7 +200,6 @@ def actor(
         "env_steps": 0,
         "episodes": 0,
         "successes": 0,
-        "chunks_sent": 0,
         "timer_log_path": str(actor_timer_log_path),
         "episode_log_path": str(rollout_log_path),
     }
@@ -331,10 +210,8 @@ def actor(
         except Exception:  # noqa: BLE001
             return {"transport_mode": str(cfg.runtime.trainer_transport.mode)}
 
-    last_processor_status: dict[str, Any] = {}
     consecutive_update_failures = 0
     consecutive_stats_failures = 0
-    consecutive_processor_failures = 0
 
     def _update_trainer_transport(*, context: str) -> bool:
         nonlocal consecutive_update_failures
@@ -367,105 +244,9 @@ def actor(
             int(consecutive_stats_failures),
             _transport_status(),
         )
-
-    def _request_processor(
-        *,
-        request_type: str,
-        payload: dict[str, Any],
-        context: str,
-        retry_limit: int = 5,
-    ) -> dict[str, Any]:
-        nonlocal consecutive_processor_failures
-        while True:
-            response = processor_client.send_msg(
-                {
-                    "type": str(request_type),
-                    "payload": payload,
-                }
-            )
-            if response is not None and bool(response.get("success", False)):
-                raw_payload = response.get("payload", {})
-                if isinstance(raw_payload, dict):
-                    last_processor_status.clear()
-                    last_processor_status.update(raw_payload)
-                consecutive_processor_failures = 0
-                return dict(raw_payload) if isinstance(raw_payload, dict) else {}
-            consecutive_processor_failures += 1
-            logger.warning(
-                "processor request failed: type=%s context=%s consecutive_failures=%s processor_status=%s",
-                str(request_type),
-                str(context),
-                int(consecutive_processor_failures),
-                dict(last_processor_status),
-            )
-            if int(consecutive_processor_failures) >= int(retry_limit):
-                raise RuntimeError(
-                    f"processor request {str(request_type)!r} failed repeatedly; aborting actor run"
-                )
-            time.sleep(0.1)
-
-    def _wait_for_processor_server() -> None:
-        nonlocal consecutive_processor_failures
-        while True:
-            response = processor_client.send_msg({"type": "get-status"})
-            if response is not None and bool(response.get("success", False)):
-                raw_payload = response.get("payload", {})
-                if isinstance(raw_payload, dict):
-                    last_processor_status.clear()
-                    last_processor_status.update(raw_payload)
-                consecutive_processor_failures = 0
-                return
-            logger.info(
-                "waiting for processor server: host=%s port=%s",
-                str(processor_transport_cfg["host"]),
-                int(processor_transport_cfg["port"]),
-            )
-            time.sleep(1.0)
-
-    def _submit_chunk_to_processor(
-        *,
-        payload: dict[str, Any],
-        context: str,
-    ) -> None:
-        _request_processor(
-            request_type="submit-chunk",
-            payload=payload,
-            context=context,
-            retry_limit=5,
-        )
-
-    def _finish_episode_on_processor(
-        *,
-        last_chunk_seq: int | None,
-        episode_id: int,
-    ) -> None:
-        target_chunk_seq = -1 if last_chunk_seq is None else int(last_chunk_seq)
-        _request_processor(
-            request_type="finish-episode",
-            payload={
-                "episode_id": int(episode_id),
-                "last_chunk_seq": int(target_chunk_seq),
-            },
-            context=f"episode_{int(episode_id)}_finish",
-            retry_limit=int(long_request_retry_limit),
-        )
-
-    def _shutdown_processor(
-        *,
-        last_chunk_seq: int | None,
-    ) -> None:
-        target_chunk_seq = -1 if last_chunk_seq is None else int(last_chunk_seq)
-        _request_processor(
-            request_type="shutdown",
-            payload={
-                "last_chunk_seq": int(target_chunk_seq),
-            },
-            context="shutdown",
-            retry_limit=int(long_request_retry_limit),
-        )
-
-    _wait_for_processor_server()
-
+    wait_for_episode_commit = bool(
+        cfg.runtime.trainer_transport.wait_committed_on_episode_end
+    )
     progress_bar = tqdm(
         total=int(max_env_steps),
         desc="actor env_steps",
@@ -473,46 +254,75 @@ def actor(
         leave=True,
     )
 
+    def _commit_assembled_chunks(assembled_chunks: list[AssemblyResult]) -> None:
+        nonlocal committed_env_steps
+        for assembled_chunk in assembled_chunks:
+            for transition in assembled_chunk.transitions:
+                data_store.insert(transition)
+            for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
+                next_committed_env_step = int(committed_env_steps + step_offset)
+                if next_committed_env_step % steps_per_update == 0:
+                    _update_trainer_transport(
+                        context=f"commit_step_{int(next_committed_env_step)}"
+                    )
+            committed_env_steps += int(assembled_chunk.env_steps_delta)
+
     try:
         while env_steps < max_env_steps:
             episode_id += 1
             reset_seed = env_seed
             init_episode_idx = episode_id - 1
             obs = env.reset(seed=reset_seed, init_episode_idx=init_episode_idx)
+            current_task_prompt = str(task_prompt)
+            prefetched = None
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
-            episode_last_chunk_seq: int | None = None
             last_info: dict[str, Any] = {}
 
             while env_steps < max_env_steps:
+                if transition_assembler.async_transition_assembly_enabled:
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(transition_assembler.drain_ready())
+
                 timer.tick("total")
                 with timer.context("prepare_action_chunk"):
-                    base_policy_input = build_libero_policy_input(
-                        obs,
-                        task_prompt,
-                    )
-                    base_actions, _ = policy_client.infer(base_policy_input)
-                    base_actions = prepare_base_actions_chunk(
-                        base_actions=base_actions,
-                        chunk_horizon=chunk_horizon,
-                    )
-                    residual_obs = build_chunk_residual_obs(
-                        robot_state=build_libero_state(obs),
-                        images=extract_libero_images(obs),
-                        image_keys=image_keys,
-                        base_actions=base_actions,
-                        residual_alpha=residual_alpha,
-                    )
+                    if prefetched is None:
+                        robot_state = build_libero_state(obs)
+                        image_observations = extract_libero_images(obs)
+                        base_policy_input = build_libero_policy_input(
+                            prompt=task_prompt,
+                            state=robot_state,
+                            images=image_observations,
+                        )
+                        base_actions, _ = policy_client.infer(base_policy_input)
+                        base_actions = prepare_base_actions_chunk(
+                            base_actions=base_actions,
+                            chunk_horizon=chunk_horizon,
+                        )
+                        residual_obs = build_chunk_residual_obs(
+                            robot_state=robot_state,
+                            images=image_observations,
+                            image_keys=image_keys,
+                            base_actions=base_actions,
+                            residual_alpha=residual_alpha,
+                        )
+                    else:
+                        base_actions = prefetched.base_actions
+                        residual_obs = prefetched.residual_obs
+                        prefetched = None
+
                     residual_actions = agent.sample_action(
                         residual_obs,
                         deterministic=False,
                     )
+                    
                     final_actions = residual_action_spec.compose_chunk(
                         base_action_chunk=base_actions,
                         residual_action=residual_actions,
                     )
 
+                episode_done = False
                 should_log_timer = False
                 remaining_env_steps = max(0, int(max_env_steps - env_steps))
                 if remaining_env_steps <= 0:
@@ -526,51 +336,46 @@ def actor(
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
 
-                current_chunk_seq = int(chunk_seq)
-                submit_payload = _build_processor_submission_payload(
-                    chunk_seq=int(current_chunk_seq),
+                raw_chunk = ChunkExecutionRecord.from_env_chunk_result(
                     episode_id=int(episode_id),
                     episode_step_start=int(episode_steps),
-                    task_prompt=task_prompt,
+                    residual_obs_before_chunk=residual_obs,
+                    action_chunk=action_chunk,
                     chunk_result=chunk_result,
                 )
-                with timer.context("submit_processor_chunk"):
-                    _submit_chunk_to_processor(
-                        payload=submit_payload,
-                        context=(
-                            f"episode_{int(episode_id)}_chunk_{int(current_chunk_seq)}"
-                        ),
-                    )
-                chunk_seq += 1
-                episode_last_chunk_seq = int(current_chunk_seq)
-
-                executed_steps = int(
-                    chunk_result.get("num_steps", len(chunk_result.get("rewards", ())))
-                )
                 previous_env_steps = int(env_steps)
-                env_steps += int(executed_steps)
-                progress_bar.update(int(executed_steps))
-                episode_steps += int(executed_steps)
-                episode_return += float(chunk_result.get("reward_sum", 0.0))
-                infos = list(chunk_result.get("infos", ()))
+                with timer.context("assemble_transitions"):
+                    assembled_chunks = transition_assembler.handle_chunk(
+                        raw=raw_chunk,
+                        task_prompt=task_prompt,
+                    )
+                if transition_assembler.async_transition_assembly_enabled:
+                    prefetched = None
+                elif assembled_chunks:
+                    prefetched = assembled_chunks[-1].prefetched
+
+                env_steps += int(raw_chunk.executed_steps)
+                progress_bar.update(int(raw_chunk.executed_steps))
+                episode_steps += int(raw_chunk.executed_steps)
+                episode_return += float(raw_chunk.reward_sum)
                 episode_success = bool(
                     episode_success
-                    or any(bool(info.get("env_done", False)) for info in infos)
+                    or any(bool(info.get("env_done", False)) for info in raw_chunk.infos)
                 )
-                last_info = dict(chunk_result.get("info", infos[-1] if infos else {}))
-                obs = dict(chunk_result["obs"])
-                episode_done = bool(
-                    chunk_result.get("done", False) or chunk_result.get("truncated", False)
-                )
+                last_info = dict(raw_chunk.chunk_info)
+                obs = dict(raw_chunk.final_obs)
+                episode_done = bool(raw_chunk.chunk_done or raw_chunk.chunk_truncated)
 
-                for step_offset in range(1, int(executed_steps) + 1):
+                for step_offset in range(1, int(raw_chunk.executed_steps) + 1):
                     next_env_step = int(previous_env_steps + step_offset)
-                    if next_env_step % steps_per_update == 0:
-                        _update_trainer_transport(
-                            context=f"env_step_{int(next_env_step)}"
-                        )
                     if next_env_step % log_period == 0:
                         should_log_timer = True
+
+                if transition_assembler.async_transition_assembly_enabled:
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(assembled_chunks)
+                else:
+                    _commit_assembled_chunks(assembled_chunks)
 
                 timer.tock("total")
 
@@ -582,20 +387,21 @@ def actor(
                             "env_steps": int(env_steps),
                             "episode_id": int(episode_id),
                             "episode_steps": int(episode_steps),
-                            "chunk_seq": int(current_chunk_seq),
                             "timer": timer.get_average_times(),
                             "transport": _transport_status(),
-                            "processor": dict(last_processor_status),
                         },
                     )
 
                 if episode_done:
                     break
 
-            _finish_episode_on_processor(
-                last_chunk_seq=episode_last_chunk_seq,
-                episode_id=int(episode_id),
-            )
+            if transition_assembler.async_transition_assembly_enabled:
+                with timer.context("commit_replay"):
+                    _commit_assembled_chunks(
+                        transition_assembler.finish_episode(
+                            block=bool(wait_for_episode_commit),
+                        )
+                    )
             _update_trainer_transport(context="episode_end")
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
@@ -624,9 +430,10 @@ def actor(
                     "source": "rollout",
                     **episode_stats,
                     "transport": _transport_status(),
-                    "processor": dict(last_processor_status),
                 },
             )
+            if wait_for_episode_commit:
+                client.wait_until_committed()
             _send_rollout_stats(payload=episode_stats)
             progress_bar.set_postfix(
                 episode=int(episode_id),
@@ -634,21 +441,26 @@ def actor(
                 refresh=False,
             )
             logger.info(
-                "episode=%s success=%s steps=%s return=%.3f env_steps=%s chunks_sent=%s",
+                "episode=%s success=%s steps=%s return=%.3f env_steps=%s",
                 int(episode_id),
                 bool(episode_success),
                 int(episode_steps),
                 float(episode_return),
                 int(env_steps),
-                int(chunk_seq),
             )
 
     finally:
         try:
-            _shutdown_processor(
-                last_chunk_seq=(None if int(chunk_seq) <= 0 else int(chunk_seq - 1)),
-            )
+            if current_task_prompt is not None:
+                assembled_chunks = transition_assembler.finish_episode(
+                    block=True,
+                )
+                if assembled_chunks:
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(assembled_chunks)
             _update_trainer_transport(context="shutdown")
+            if bool(cfg.runtime.trainer_transport.wait_committed_on_shutdown):
+                client.wait_until_committed()
         except Exception:  # noqa: BLE001
             pass
         summary.update(
@@ -656,19 +468,13 @@ def actor(
                 "env_steps": int(env_steps),
                 "episodes": int(episode_id),
                 "successes": int(success_count),
-                "chunks_sent": int(chunk_seq),
                 "transport": _transport_status(),
-                "processor": dict(last_processor_status),
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2, ensure_ascii=False)
         try:
             client.stop()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            processor_client.close()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -686,376 +492,7 @@ def actor(
                 policy_client_close()
             except Exception:  # noqa: BLE001
                 pass
-
-
-def processor(
-    cfg: LiberoTrainConfig,
-    *,
-    raw_cfg: DictConfig,
-    run_dir: Path,
-    logger: logging.Logger,
-) -> None:
-    processor_transport_cfg = _resolve_processor_transport_cfg(raw_cfg, typed_cfg=cfg)
-    if bool(cfg.backfill_policy.enabled):
-        endpoint_cfg = SimpleNamespace(
-            policy=SimpleNamespace(
-                type=str(cfg.policy.type),
-                host=str(cfg.backfill_policy.host),
-                port=int(cfg.backfill_policy.port),
-            ),
-            env=SimpleNamespace(action_dim=int(cfg.env.action_dim)),
-        )
-        policy_client = build_policy_client(endpoint_cfg, logger=logger)
-        backfill_backend = (
-            f"{str(cfg.policy.type)}:{str(cfg.backfill_policy.host)}:"
-            f"{int(cfg.backfill_policy.port)}"
-        )
-    else:
-        policy_client = build_policy_client(cfg, logger=logger)
-        backfill_backend = describe_policy_backend(cfg)
-    logger.info("Processor backfill backend: %s", backfill_backend)
-
-    assembler = BatchAwareLiberoTransitionAssembler(
-        policy_client=policy_client,
-        chunk_horizon=int(cfg.residual.chunk_horizon),
-        image_keys=tuple(cfg.obs.image_keys),
-        residual_alpha=float(cfg.residual.alpha),
-    )
-
-    data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
-    client = build_actor_trainer_transport(
-        store_name="actor_env",
-        server_ip=cfg.runtime.trainer_host,
-        trainer_port=cfg.runtime.trainer_port,
-        broadcast_port=cfg.runtime.broadcast_port,
-        transport_cfg=cfg.runtime.trainer_transport,
-        data_store=data_store,
-        request_types=("send-stats",),
-        wait_for_server=True,
-        log_level=logger.level,
-    )
-
-    raw_chunk_queue: queue.Queue[dict[str, Any]] = queue.Queue(
-        maxsize=int(processor_transport_cfg["queue_capacity"])
-    )
-    progress_lock = Lock()
-    progress_cond = Condition(progress_lock)
-    committed_env_steps = 0
-    accepted_chunk_seq = -1
-    committed_chunk_seq = -1
-    accepting_submissions = True
-    stop_requested = False
-    processor_timer_log_path = run_dir / "processor_timers.jsonl"
-    timer = Timer()
-    steps_per_update = cfg.training.steps_per_update
-    log_period = cfg.training.log_period
-    summary: dict[str, Any] = {
-        "role": "processor",
-        "mode": "residual",
-        "transport_mode": str(cfg.runtime.trainer_transport.mode),
-        "accepted_chunk_seq": -1,
-        "committed_chunk_seq": -1,
-        "committed_env_steps": 0,
-        "timer_log_path": str(processor_timer_log_path),
-    }
-
-    def _transport_status() -> dict[str, Any]:
-        try:
-            return dict(client.get_transport_status("actor_env"))
-        except Exception:  # noqa: BLE001
-            return {"transport_mode": str(cfg.runtime.trainer_transport.mode)}
-
-    def _processor_status_snapshot() -> dict[str, Any]:
-        with progress_lock:
-            return {
-                "accepted_chunk_seq": int(accepted_chunk_seq),
-                "committed_chunk_seq": int(committed_chunk_seq),
-                "accepting_submissions": bool(accepting_submissions),
-                "stop_requested": bool(stop_requested),
-                "queue_depth": int(raw_chunk_queue.qsize()),
-            }
-
-    consecutive_update_failures = 0
-
-    def _update_trainer_transport(*, context: str) -> bool:
-        nonlocal consecutive_update_failures
-        ok = bool(client.update())
-        if ok:
-            consecutive_update_failures = 0
-            return True
-        consecutive_update_failures += 1
-        logger.warning(
-            "processor trainer transport update failed: context=%s consecutive_failures=%s status=%s",
-            str(context),
-            int(consecutive_update_failures),
-            _transport_status(),
-        )
-        if int(consecutive_update_failures) >= 5:
-            raise RuntimeError(
-                "processor trainer transport update failed repeatedly; aborting processor run"
-            )
-        return False
-
-    def _wait_until_chunk_committed(*, last_chunk_seq: int) -> None:
-        target_chunk_seq = int(last_chunk_seq)
-        if target_chunk_seq < 0:
-            return
-        with progress_cond:
-            while int(committed_chunk_seq) < int(target_chunk_seq):
-                if bool(stop_requested):
-                    raise RuntimeError(
-                        "processor stopped before target chunk committed: "
-                        f"target={int(target_chunk_seq)} committed={int(committed_chunk_seq)}"
-                    )
-                progress_cond.wait(timeout=0.1)
-
-    def _flush_processor_transport(*, context: str, wait_until_committed: bool) -> None:
-        _update_trainer_transport(context=context)
-        if bool(wait_until_committed):
-            if not client.wait_until_committed():
-                raise RuntimeError(
-                    f"processor wait_until_committed timed out: context={str(context)}"
-                )
-
-    def _control_callback(request: dict[str, Any]) -> dict[str, Any]:
-        nonlocal accepted_chunk_seq
-        nonlocal accepting_submissions
-        nonlocal stop_requested
-        request_type = str(request.get("type", ""))
-        if request_type == "get-status":
-            return {
-                "success": True,
-                "payload": {
-                    **_processor_status_snapshot(),
-                    "transport": _transport_status(),
-                },
-            }
-        if request_type == "finish-episode":
-            payload = dict(request.get("payload", {}) or {})
-            episode_id = int(payload.get("episode_id", -1))
-            last_chunk_seq = int(payload.get("last_chunk_seq", -1))
-            _wait_until_chunk_committed(last_chunk_seq=last_chunk_seq)
-            _flush_processor_transport(
-                context=f"episode_{int(episode_id)}_end",
-                wait_until_committed=bool(
-                    cfg.runtime.trainer_transport.wait_committed_on_episode_end
-                ),
-            )
-            return {
-                "success": True,
-                "payload": {
-                    **_processor_status_snapshot(),
-                    "transport": _transport_status(),
-                },
-            }
-        if request_type == "shutdown":
-            payload = dict(request.get("payload", {}) or {})
-            last_chunk_seq = int(payload.get("last_chunk_seq", -1))
-            with progress_cond:
-                accepting_submissions = False
-                progress_cond.notify_all()
-            _wait_until_chunk_committed(last_chunk_seq=last_chunk_seq)
-            _flush_processor_transport(
-                context="shutdown",
-                wait_until_committed=bool(
-                    cfg.runtime.trainer_transport.wait_committed_on_shutdown
-                ),
-            )
-            with progress_cond:
-                stop_requested = True
-                progress_cond.notify_all()
-            return {
-                "success": True,
-                "payload": {
-                    **_processor_status_snapshot(),
-                    "transport": _transport_status(),
-                },
-            }
-        if request_type != "submit-chunk":
-            return {
-                "success": False,
-                "message": f"unsupported processor request: {request_type}",
-            }
-        payload = dict(request.get("payload", {}) or {})
-        chunk_seq_value = int(payload.get("chunk_seq", -1))
-        with progress_lock:
-            accepted_snapshot = int(accepted_chunk_seq)
-            committed_snapshot = int(committed_chunk_seq)
-            accepting_snapshot = bool(accepting_submissions)
-            stop_snapshot = bool(stop_requested)
-            if int(chunk_seq_value) <= int(accepted_chunk_seq):
-                return {
-                    "success": True,
-                    "payload": {
-                        "accepted_chunk_seq": int(accepted_snapshot),
-                        "committed_chunk_seq": int(committed_snapshot),
-                        "accepting_submissions": bool(accepting_snapshot),
-                        "stop_requested": bool(stop_snapshot),
-                        "queue_depth": int(raw_chunk_queue.qsize()),
-                        "deduped": True,
-                    },
-                }
-        while True:
-            with progress_lock:
-                if (not bool(accepting_submissions)) or bool(stop_requested):
-                    return {
-                        "success": False,
-                        "message": "processor stopping",
-                    }
-            if stop_requested:
-                return {
-                    "success": False,
-                    "message": "processor stopping",
-                }
-            try:
-                raw_chunk_queue.put(dict(payload), timeout=0.1)
-                with progress_cond:
-                    accepted_chunk_seq = max(
-                        int(accepted_chunk_seq),
-                        int(chunk_seq_value),
-                    )
-                    accepted_snapshot = int(accepted_chunk_seq)
-                    committed_snapshot = int(committed_chunk_seq)
-                    accepting_snapshot = bool(accepting_submissions)
-                    stop_snapshot = bool(stop_requested)
-                    progress_cond.notify_all()
-                return {
-                    "success": True,
-                    "payload": {
-                        "accepted_chunk_seq": int(accepted_snapshot),
-                        "committed_chunk_seq": int(committed_snapshot),
-                        "accepting_submissions": bool(accepting_snapshot),
-                        "stop_requested": bool(stop_snapshot),
-                        "queue_depth": int(raw_chunk_queue.qsize()),
-                        "deduped": False,
-                    },
-                }
-            except queue.Full:
-                continue
-
-    control_server = _ReqRepServer(
-        port=int(processor_transport_cfg["port"]),
-        callback=_control_callback,
-    )
-    control_server.start(threaded=True)
-    logger.info(
-        "Processor control server listening on port=%s queue_capacity=%s",
-        int(processor_transport_cfg["port"]),
-        int(processor_transport_cfg["queue_capacity"]),
-    )
-
-    try:
-        while True:
-            try:
-                payload = raw_chunk_queue.get(timeout=0.1)
-            except queue.Empty:
-                if stop_requested:
-                    break
-                continue
-
-            chunk_seq_value = int(payload["chunk_seq"])
-            should_log_timer = False
-            try:
-                timer.tick("total")
-                with timer.context("reconstruct_raw_chunk"):
-                    raw_chunk = _reconstruct_chunk_execution_record(
-                        payload=payload,
-                        assembler=assembler,
-                    )
-                with timer.context("assemble_transitions"):
-                    assembled_chunk = assembler.process_chunk(
-                        raw=raw_chunk,
-                        task_prompt=str(payload["task_prompt"]),
-                    )
-                previous_committed_env_steps = int(committed_env_steps)
-                with timer.context("commit_replay"):
-                    for transition in assembled_chunk.transitions:
-                        data_store.insert(transition)
-                    for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
-                        next_committed_env_step = int(
-                            previous_committed_env_steps + step_offset
-                        )
-                        if next_committed_env_step % steps_per_update == 0:
-                            _update_trainer_transport(
-                                context=f"processor_commit_step_{int(next_committed_env_step)}"
-                            )
-                        if next_committed_env_step % log_period == 0:
-                            should_log_timer = True
-                    committed_env_steps = int(
-                        previous_committed_env_steps + assembled_chunk.env_steps_delta
-                    )
-                timer.tock("total")
-                with progress_cond:
-                    committed_chunk_seq = max(
-                        int(committed_chunk_seq),
-                        int(chunk_seq_value),
-                    )
-                    progress_cond.notify_all()
-                if should_log_timer:
-                    append_jsonl(
-                        processor_timer_log_path,
-                        {
-                            "source": "processor",
-                            "chunk_seq": int(chunk_seq_value),
-                            "committed_env_steps": int(committed_env_steps),
-                            "timer": timer.get_average_times(),
-                            "transport": _transport_status(),
-                            "processor": _processor_status_snapshot(),
-                        },
-                    )
-            except Exception:
-                logger.exception(
-                    "processor failed: chunk_seq=%s episode_id=%s",
-                    int(chunk_seq_value),
-                    int(payload.get("episode_id", -1)),
-                )
-                raise
-            finally:
-                raw_chunk_queue.task_done()
-    except KeyboardInterrupt:
-        logger.info("processor interrupted; shutting down gracefully")
-    finally:
-        try:
-            with progress_cond:
-                accepting_submissions = False
-                stop_requested = True
-                progress_cond.notify_all()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            _flush_processor_transport(
-                context="processor_finally",
-                wait_until_committed=False,
-            )
-        except Exception:  # noqa: BLE001
-            pass
-        summary.update(
-            {
-                "accepted_chunk_seq": int(_processor_status_snapshot()["accepted_chunk_seq"]),
-                "committed_chunk_seq": int(
-                    _processor_status_snapshot()["committed_chunk_seq"]
-                ),
-                "committed_env_steps": int(committed_env_steps),
-                "transport": _transport_status(),
-                "processor": _processor_status_snapshot(),
-            }
-        )
-        with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
-            json.dump(summary, fp, indent=2, ensure_ascii=False)
-        try:
-            control_server.stop()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            client.stop()
-        except Exception:  # noqa: BLE001
-            pass
-        policy_client_close = getattr(policy_client, "close", None)
-        if callable(policy_client_close):
-            try:
-                policy_client_close()
-            except Exception:  # noqa: BLE001
-                pass
+        transition_assembler.close()
 
 
 def learner(
@@ -1696,8 +1133,7 @@ def learner(
     config_name="train_residual_optimized",
 )
 def main(cfg: DictConfig) -> None:
-    raw_role = _raw_runtime_role(cfg)
-    typed_cfg = _parse_train_cfg_allow_processor(cfg)
+    typed_cfg = parse_train_cfg(cfg)
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1707,16 +1143,12 @@ def main(cfg: DictConfig) -> None:
     )
     logger = logging.getLogger("libero_residual")
     logger.info("Hydra run dir: %s", run_dir)
-    logger.info("Runtime role: %s", raw_role)
     logger.info("Config:\n%s", json.dumps(cfg_to_log_payload(typed_cfg), indent=2))
 
     set_global_seeds(typed_cfg.global_seed)
 
-    if raw_role == "actor":
-        actor(typed_cfg, raw_cfg=cfg, run_dir=run_dir, logger=logger)
-        return
-    if raw_role == "processor":
-        processor(typed_cfg, raw_cfg=cfg, run_dir=run_dir, logger=logger)
+    if typed_cfg.runtime.role == "actor":
+        actor(typed_cfg, run_dir=run_dir, logger=logger)
         return
     learner(typed_cfg, run_dir=run_dir, logger=logger)
 

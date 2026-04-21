@@ -11,7 +11,7 @@
 
 没有改 `/vla/users/niejunnan/codebase/openpi`。
 
-目标是把之前只在 JoyRA 路径可用的 chunk 级 batch backfill 能力，补到 OpenPI 上，让 `examples/libero/scripts/run_residual_training_optimized.py` 在 `policy.type=openpi` 时也能真正走：
+目标是把之前只在 JoyRA 路径可用的 chunk 级 batch backfill 能力，补到 OpenPI 上，让 `examples/libero/scripts/run_residual_training_2_chunk_local.py` 在 `policy.type=openpi` 时也能真正走：
 
 - 主 actor：单样本 `infer`
 - backfill：每个 chunk 一次 `infer_many`
@@ -48,7 +48,7 @@
   - 保持单样本 `infer(...)` 行为不变。
   - 加了 `close()`。
   - batch path 直接复用现有 websocket client 的 `infer(send_data)`，只是发送 payload 改成 `{"examples": ...}`，不依赖额外 client 包升级。
-- `examples/libero/scripts/run_residual_training_optimized.py`
+- `examples/libero/scripts/run_residual_training_2_chunk_local.py`
   - 修了一个 review 时发现的真实 bug：
     - learner/eval 侧会调用 `apply_torch_compile(...)`
     - 然后再打印“actor 忽略 compile”
@@ -61,7 +61,7 @@
 
 ### 主 actor 路径
 
-`run_residual_training_optimized.py` 的 actor 仍然保持：
+`run_residual_training_2_chunk_local.py` 的 actor 仍然保持：
 
 1. 当前 observation 走 OpenPI 单样本 `infer(...)`
 2. 得到 base chunk
@@ -174,7 +174,7 @@ actor timer 最后一条平均值：
 
 这个很关键，说明 `optimized` 的 post-hoc 组装开销已经被压得很低了。
 
-### 4. 1000-step 端到端：原始 `run_residual_training.py`
+### 4. 1000-step 端到端：原始 `run_residual_training_1_baseline.py`
 
 运行目录：
 
@@ -213,7 +213,7 @@ OpenPI 真 batch 已经生效：
 按真正跑到 `env_steps=1000` 的日志时间计算：
 
 - `optimized`: `5.803 step/s`
-- `run_residual_training.py`: `5.105 step/s`
+- `run_residual_training_1_baseline.py`: `5.105 step/s`
 
 提升约：
 
@@ -271,7 +271,7 @@ OpenPI 真 batch 已经生效：
 - [serl_launcher/serl_launcher/policy/openpi/client.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/client.py)
 - [serl_launcher/serl_launcher/policy/openpi/request_builder.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/request_builder.py)
 - [serl_launcher/tests/policy/test_openpi_batch_client.py](/home/hello/codebase/serl_torch/serl_launcher/tests/policy/test_openpi_batch_client.py)
-- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py)
+- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py)
 - [openpi-modified/src/openpi/policies/policy.py](/vla/users/niejunnan/codebase/openpi-modified/src/openpi/policies/policy.py)
 - [openpi-modified/src/openpi/serving/websocket_policy_server.py](/vla/users/niejunnan/codebase/openpi-modified/src/openpi/serving/websocket_policy_server.py)
 - [openpi-modified/scripts/serve_policy.py](/vla/users/niejunnan/codebase/openpi-modified/scripts/serve_policy.py)

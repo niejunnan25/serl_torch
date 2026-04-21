@@ -20,14 +20,36 @@
 
 当前最常用的入口有六个：
 
-- [scripts/run_residual_training.py](scripts/run_residual_training.py)
-- [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py)
+- [scripts/run_residual_training_1_baseline.py](scripts/run_residual_training_1_baseline.py)
+- [scripts/run_residual_training_2_chunk_local.py](scripts/run_residual_training_2_chunk_local.py)
 - [scripts/run_residual_offline_prepare.py](scripts/run_residual_offline_prepare.py)
 - [scripts/serve_env.py](scripts/serve_env.py)
 - [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
 - [tools/serve_env.sh](tools/serve_env.sh)
 
 `runtime/async_eval_worker.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
+
+## 训练脚本演化顺序
+
+`run_residual_training_1/2/3/4/5_*.py` 这组名字里的数字表示的是演化顺序，不表示“当前推荐程度”。
+
+- [scripts/run_residual_training_1_baseline.py](scripts/run_residual_training_1_baseline.py)
+  reference baseline；逐 step rollout，最适合拿来对照原始语义
+- [scripts/run_residual_training_2_chunk_local.py](scripts/run_residual_training_2_chunk_local.py)
+  当前最稳的优化线；chunk execute，但 transition 仍在 actor 本地后处理
+- [scripts/run_residual_training_3_split_proto.py](scripts/run_residual_training_3_split_proto.py)
+  第一代 split 原型；开始拆 `actor / processor / learner`
+- [scripts/run_residual_training_4_split_refined.py](scripts/run_residual_training_4_split_refined.py)
+  split 架构的过渡整理版；比 proto 更统一，但还不是最终 runtime 形态
+- [scripts/run_residual_training_5_split_pipeline.py](scripts/run_residual_training_5_split_pipeline.py)
+  最新的 split / pipeline 演化版本；角色边界最清楚，但仍然更偏架构演进线，而不是默认起跑线
+
+如果你只是想跑当前最稳定的训练入口，优先看：
+
+- baseline 对照：`1_baseline`
+- 日常优化实验：`2_chunk_local`
+
+如果你是在看 split 架构如何一步步演进，再按 `3 -> 4 -> 5` 去读。
 
 这里有个刻意保留的边界：
 
@@ -43,10 +65,16 @@
   当前 canonical 评估配置
 - [config.py](config.py)
   typed config 定义与解析
-- [scripts/run_residual_training.py](scripts/run_residual_training.py)
-  actor / learner 共用训练入口，通过 `runtime.role=actor|learner` 切角色
-- [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py)
-  当前优化训练入口，actor 支持 `env.step_chunk(...)`、post-hoc assembly、async backfill 和 `async_commit` transport
+- [scripts/run_residual_training_1_baseline.py](scripts/run_residual_training_1_baseline.py)
+  reference baseline 训练入口；actor / learner 共用，通过 `runtime.role=actor|learner` 切角色
+- [scripts/run_residual_training_2_chunk_local.py](scripts/run_residual_training_2_chunk_local.py)
+  当前最稳的优化训练入口；actor 支持 `env.step_chunk(...)`、post-hoc assembly、async backfill 和 `async_commit` transport
+- [scripts/run_residual_training_3_split_proto.py](scripts/run_residual_training_3_split_proto.py)
+  split 架构第一代原型；显式引入 `actor / processor / learner`
+- [scripts/run_residual_training_4_split_refined.py](scripts/run_residual_training_4_split_refined.py)
+  split 架构过渡整理版；协议和 session 使用更统一
+- [scripts/run_residual_training_5_split_pipeline.py](scripts/run_residual_training_5_split_pipeline.py)
+  当前最新的 split / pipeline 版本；更多协议与 transport 细节已经下沉到 `runtime/`
 - [scripts/run_residual_offline_prepare.py](scripts/run_residual_offline_prepare.py)
   离线数据准备入口，默认也读取 `configs/train_residual.yaml`
 - [scripts/serve_env.py](scripts/serve_env.py)
@@ -96,10 +124,10 @@
 
 - [docs/chunk_residual_mdp_discussion.md](docs/chunk_residual_mdp_discussion.md)
 
-### `run_residual_training_optimized.py` 这条优化线是什么
+### `run_residual_training_2_chunk_local.py` 这条优化线是什么
 
-`run_residual_training_optimized.py` 和 canonical 的
-[scripts/run_residual_training.py](scripts/run_residual_training.py) 最大的区别在 actor 数据流：
+`run_residual_training_2_chunk_local.py` 和 canonical 的
+[scripts/run_residual_training_1_baseline.py](scripts/run_residual_training_1_baseline.py) 最大的区别在 actor 数据流：
 
 - canonical 版本：
   `step -> 立刻补 next_residual_obs -> 立刻写 step transition`
@@ -182,9 +210,9 @@ pip install -e .
 
 这类绝对导入稳定成立。做完这一步之后，直接运行：
 
-- `python examples/libero/scripts/run_residual_training.py`
-- `python examples/libero/scripts/run_residual_training_optimized.py`
-- `python examples/libero/scripts/run_residual_training_optimized_split.py`
+- `python examples/libero/scripts/run_residual_training_1_baseline.py`
+- `python examples/libero/scripts/run_residual_training_2_chunk_local.py`
+- `python examples/libero/scripts/run_residual_training_3_split_proto.py`
 
 通常不需要再额外补仓库级 `PYTHONPATH`。
 
@@ -248,7 +276,7 @@ canonical 训练配置是：
 
 - [configs/train_residual.yaml](configs/train_residual.yaml)
 
-当前 `scripts/run_residual_training.py` 和 `scripts/run_residual_offline_prepare.py` 都默认读取这份配置；也就是说，prepare / train 共用同一套 `task`、`policy`、`obs`、`residual` 默认值。
+当前 `scripts/run_residual_training_1_baseline.py` 和 `scripts/run_residual_offline_prepare.py` 都默认读取这份配置；也就是说，prepare / train 共用同一套 `task`、`policy`、`obs`、`residual` 默认值。
 
 当前默认关键参数：
 
@@ -432,7 +460,7 @@ prepare 完成后，脚本会在终端打印下一步 learner 命令。
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_baseline.py \
   runtime.role=learner \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
@@ -443,7 +471,7 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training.py 
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_baseline.py \
   runtime.role=learner \
   offline.enabled=true \
   offline.prepared_path=data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1 \
@@ -462,7 +490,7 @@ hydra.run.dir=/abs/path/to/run_dir
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_baseline.py \
   runtime.role=actor \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
@@ -471,7 +499,9 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training.py 
 
 ### 5.1 启动 optimized 实验线
 
-当前推荐把 [scripts/run_residual_training_optimized.py](scripts/run_residual_training_optimized.py) 作为优化线；默认基线仍然是 [scripts/run_residual_training.py](scripts/run_residual_training.py)。
+当前推荐把 [scripts/run_residual_training_2_chunk_local.py](scripts/run_residual_training_2_chunk_local.py) 作为日常优化线；默认 reference baseline 仍然是 [scripts/run_residual_training_1_baseline.py](scripts/run_residual_training_1_baseline.py)。
+
+`3_split_proto / 4_split_refined / 5_split_pipeline` 属于 split 架构演进链。它们不是按“推荐程度”排出来的，而是按演化顺序排出来的；如果你只是要稳定跑实验，不必从 `5` 开始。
 
 `optimized` 默认读取 [configs/train_residual_optimized.yaml](configs/train_residual_optimized.yaml)，其中：
 
@@ -493,7 +523,7 @@ learner：
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_2_chunk_local.py \
   runtime.role=learner \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -508,7 +538,7 @@ actor：
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_2_chunk_local.py \
   runtime.role=actor \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -551,7 +581,7 @@ learner 仍然不需要额外改动，继续只连主训练端口：
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_2_chunk_local.py \
   runtime.role=learner \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -566,7 +596,7 @@ actor 额外打开 `backfill_policy`：
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training_optimized.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_2_chunk_local.py \
   runtime.role=actor \
   task.suite_name=libero_spatial \
   task.task_id=4 \
@@ -634,7 +664,7 @@ chunk execute
 
 ```bash
 cd /home/hello/codebase/serl_torch
-conda run -n serl_torch python examples/libero/scripts/run_residual_training.py \
+conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_baseline.py \
   runtime.role=learner \
   training.async_eval.enabled=true \
   training.async_eval.env.remote.host=127.0.0.1 \
@@ -704,7 +734,7 @@ source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 export CUDA_VISIBLE_DEVICES=5
 cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/run_residual_training.py \
+python examples/libero/scripts/run_residual_training_1_baseline.py \
   --config-name train_residual_libero_spatial_task4 \
   runtime.role=learner \
   policy.port=30101 \
@@ -721,7 +751,7 @@ source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 export CUDA_VISIBLE_DEVICES=6
 cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/run_residual_training.py \
+python examples/libero/scripts/run_residual_training_1_baseline.py \
   --config-name train_residual_libero_spatial_task4 \
   runtime.role=actor \
   policy.port=30101 \
@@ -825,7 +855,7 @@ outputs/libero/eval_residual/<suite>_task_<id>/<timestamp>/
 当前这条主线已经不再依赖很多旧入口。新的 LIBERO 工作最好围绕下面这些文件展开：
 
 - [config.py](config.py)
-- [scripts/run_residual_training.py](scripts/run_residual_training.py)
+- [scripts/run_residual_training_1_baseline.py](scripts/run_residual_training_1_baseline.py)
 - [scripts/run_residual_eval.py](scripts/run_residual_eval.py)
 - [env/](env/)
 - [runtime/](runtime/)

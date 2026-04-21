@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Reference-style LIBERO residual DRQ training script."""
+"""Pipeline-style LIBERO residual DRQ training script."""
 
 from collections import deque
 import json
@@ -99,17 +99,18 @@ from serl_torch.examples.libero.runtime.async_eval_runtime import (
 from serl_torch.examples.libero.runtime.async_eval_runtime import (
     wait_for_async_eval_worker,
 )
+from serl_torch.examples.libero.runtime.cadence import EnvStepCadenceTracker
+from serl_torch.examples.libero.runtime.processor_dispatch import (
+    QueuedProcessorSubmitter,
+)
+from serl_torch.examples.libero.runtime.processor_pipeline import (
+    RolloutProcessorPipeline,
+)
 from serl_torch.examples.libero.runtime.transition_assembly import (
     BatchAwareLiberoTransitionAssembler,
 )
 from serl_torch.examples.libero.runtime.processor_protocol import (
-    build_processor_submission_payload,
-)
-from serl_torch.examples.libero.runtime.processor_protocol import (
-    normalize_chunk_result,
-)
-from serl_torch.examples.libero.runtime.processor_protocol import (
-    reconstruct_chunk_execution_record,
+    extract_actor_rollout_chunk_summary,
 )
 
 TRAINER_REQUEST_TYPES = ("send-stats", "actor-progress")
@@ -127,8 +128,11 @@ def actor(
     policy_backend = describe_policy_backend(cfg)
     logger.info("Chunk policy backend: %s", policy_backend)
 
-    processor_client = ProcessorClient(
-        transport_config=cfg.runtime.processor_transport,
+    processor_submitter = QueuedProcessorSubmitter(
+        processor_client=ProcessorClient(
+            transport_config=cfg.runtime.processor_transport,
+            logger=logger,
+        ),
         logger=logger,
     )
 
@@ -200,11 +204,15 @@ def actor(
     log_period = cfg.training.log_period
     max_env_steps = cfg.training.max_env_steps
     env_seed = cfg.env.seed
+    actor_cadence_tracker = EnvStepCadenceTracker(
+        steps_per_update=steps_per_update,
+        log_period=log_period,
+    )
 
     env_steps = 0
     episode_id = 0
     success_count = 0
-    chunk_seq = 0
+    next_chunk_seq = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
     actor_timer_log_path = run_dir / "actor_timers.jsonl"
     rollout_log_path = run_dir / str(
@@ -222,7 +230,7 @@ def actor(
         "episode_log_path": str(rollout_log_path),
     }
 
-    processor_client.wait_until_ready()
+    processor_submitter.wait_until_ready()
 
     progress_bar = tqdm(
         total=max_env_steps,
@@ -233,20 +241,30 @@ def actor(
 
     try:
         while env_steps < max_env_steps:
+            processor_submitter.raise_if_failed()
+
             episode_id += 1
             reset_seed = env_seed
             init_episode_idx = episode_id - 1
-            obs = env.reset(seed=reset_seed, init_episode_idx=init_episode_idx)
+            current_obs = env.reset(seed=reset_seed, init_episode_idx=init_episode_idx)
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
-            episode_last_chunk_seq: int | None = None
-            last_info: dict[str, Any] = {}
+            episode_last_enqueued_chunk_seq: int | None = None
+            latest_env_info: dict[str, Any] = {}
 
             while env_steps < max_env_steps:
+                processor_submitter.raise_if_failed()
                 timer.tick("total")
                 with timer.context("prepare_action_chunk"):
-                    base_policy_input = build_libero_policy_input(obs, task_prompt)
+                    robot_state = build_libero_state(current_obs)
+                    image_observations = extract_libero_images(current_obs)
+                    
+                    base_policy_input = build_libero_policy_input(
+                        prompt=task_prompt,
+                        state=robot_state,
+                        images=image_observations,
+                    )
 
                     base_actions, _ = policy_client.infer(base_policy_input)
                     base_actions = prepare_base_actions_chunk(
@@ -254,8 +272,8 @@ def actor(
                         chunk_horizon=chunk_horizon,
                     )
                     residual_obs = build_chunk_residual_obs(
-                        robot_state=build_libero_state(obs),
-                        images=extract_libero_images(obs),
+                        robot_state=robot_state,
+                        images=image_observations,
                         image_keys=image_keys,
                         base_actions=base_actions,
                         residual_alpha=residual_alpha,
@@ -279,55 +297,44 @@ def actor(
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
-                normalized_chunk = normalize_chunk_result(dict(chunk_result))
 
-                current_chunk_seq = int(chunk_seq)
-                submit_payload = build_processor_submission_payload(
-                    chunk_seq=int(current_chunk_seq),
-                    episode_id=int(episode_id),
-                    episode_step_start=int(episode_steps),
-                    task_prompt=task_prompt,
-                    chunk_result=chunk_result,
-                )
-                with timer.context("submit_processor_chunk"):
-                    processor_client.submit(
-                        payload=submit_payload,
-                        context=(
-                            f"episode_{int(episode_id)}_chunk_{int(current_chunk_seq)}"
-                        ),
+                chunk_summary = extract_actor_rollout_chunk_summary(dict(chunk_result))
+
+                assigned_chunk_seq = int(next_chunk_seq)
+                with timer.context("enqueue_processor_chunk"):
+                    processor_submitter.submit_rollout_chunk(
+                        episode_id=int(episode_id),
+                        chunk_seq=int(assigned_chunk_seq),
+                        episode_step_start=int(episode_steps),
+                        task_prompt=task_prompt,
+                        chunk_result=chunk_result,
                     )
-                chunk_seq += 1
-                episode_last_chunk_seq = int(current_chunk_seq)
+                next_chunk_seq += 1
+                episode_last_enqueued_chunk_seq = int(assigned_chunk_seq)
 
-                executed_steps = int(normalized_chunk.executed_steps)
-                previous_env_steps = int(env_steps)
+                executed_steps = int(chunk_summary.executed_steps)
                 env_steps += int(executed_steps)
                 progress_bar.update(int(executed_steps))
                 episode_steps += int(executed_steps)
-                episode_return += float(normalized_chunk.reward_sum)
-                infos = list(normalized_chunk.infos)
+                episode_return += float(chunk_summary.reward_sum)
                 episode_success = bool(
-                    episode_success
-                    or any(bool(info.get("env_done", False)) for info in infos)
+                    episode_success or chunk_summary.episode_success
                 )
-                last_info = dict(normalized_chunk.chunk_info)
-                obs = dict(normalized_chunk.final_obs)
+                latest_env_info = dict(chunk_summary.chunk_info)
+                current_obs = dict(chunk_summary.final_obs)
                 episode_done = bool(
-                    normalized_chunk.chunk_done or normalized_chunk.chunk_truncated
+                    chunk_summary.chunk_done or chunk_summary.chunk_truncated
                 )
 
-                for step_offset in range(1, int(executed_steps) + 1):
-                    next_env_step = int(previous_env_steps + step_offset)
-                    if next_env_step % steps_per_update == 0:
-                        trainer_session.update(
-                            context=f"env_step_{int(next_env_step)}",
-                            failure_message=(
-                                "trainer transport update failed repeatedly; "
-                                "aborting actor run"
-                            ),
-                        )
-                    if next_env_step % log_period == 0:
-                        should_log_timer = True
+                should_log_timer = actor_cadence_tracker.advance(
+                    env_steps_after_chunk=int(env_steps),
+                    trainer_session=trainer_session,
+                    update_context_prefix="env_step",
+                    failure_message=(
+                        "trainer transport update failed repeatedly; "
+                        "aborting actor run"
+                    ),
+                )
 
                 timer.tock("total")
 
@@ -339,46 +346,33 @@ def actor(
                             "env_steps": int(env_steps),
                             "episode_id": int(episode_id),
                             "episode_steps": int(episode_steps),
-                            "chunk_seq": int(current_chunk_seq),
+                            "chunk_seq": int(assigned_chunk_seq),
                             "timer": timer.get_average_times(),
                             "transport": trainer_session.status(),
-                            "processor": processor_client.last_status(),
+                            "processor": processor_submitter.status_snapshot(),
                         },
                     )
 
                 if episode_done:
                     break
 
-            processor_client.finish(
-                last_chunk_seq=episode_last_chunk_seq,
-                episode_id=int(episode_id),
-            )
             trainer_session.update(
                 context="episode_end",
                 failure_message=(
                     "trainer transport update failed repeatedly; aborting actor run"
                 ),
             )
-            trainer_session.request(
-                "actor-progress",
-                build_actor_progress_payload(
-                    env_steps=int(env_steps),
-                    episode_id=int(episode_id),
-                    actor_done=bool(int(env_steps) >= int(max_env_steps)),
-                ),
-                context=f"episode_{int(episode_id)}_progress",
-                failure_message=(
-                    "trainer transport actor-progress failed repeatedly; "
-                    "aborting actor run"
-                ),
-                retry_until_exhausted=True,
-            )
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
             recent_success_rate_20 = float(sum(recent_episode_successes)) / float(
                 max(1, len(recent_episode_successes))
             )
-            episode_stats = build_rollout_stats_payload(
+            actor_progress_payload = build_actor_progress_payload(
+                env_steps=int(env_steps),
+                episode_id=int(episode_id),
+                actor_done=bool(int(env_steps) >= int(max_env_steps)),
+            )
+            rollout_stats_payload = build_rollout_stats_payload(
                 env_steps=int(env_steps),
                 rollout=build_rollout_payload(
                     episode_id=int(episode_id),
@@ -391,23 +385,23 @@ def actor(
                     ),
                     recent_success_rate_20=float(recent_success_rate_20),
                 ),
-                env_info=last_info,
+                env_info=latest_env_info,
+            )
+            processor_submitter.mark_episode_end(
+                last_chunk_seq=episode_last_enqueued_chunk_seq,
+                episode_id=int(episode_id),
+                actor_progress=actor_progress_payload,
+                rollout_stats=rollout_stats_payload,
             )
 
             append_jsonl(
                 rollout_log_path,
                 {
                     "source": "rollout",
-                    **episode_stats,
+                    **rollout_stats_payload,
                     "transport": trainer_session.status(),
-                    "processor": processor_client.last_status(),
+                    "processor": processor_submitter.status_snapshot(),
                 },
-            )
-            trainer_session.request(
-                "send-stats",
-                episode_stats,
-                context=f"episode_{int(episode_id)}_stats",
-                raise_on_exhaustion=False,
             )
             progress_bar.set_postfix(
                 episode=int(episode_id),
@@ -421,13 +415,15 @@ def actor(
                 int(episode_steps),
                 float(episode_return),
                 int(env_steps),
-                int(chunk_seq),
+                int(next_chunk_seq),
             )
 
     finally:
         try:
-            processor_client.shutdown(
-                last_chunk_seq=(None if int(chunk_seq) <= 0 else int(chunk_seq - 1)),
+            processor_submitter.shutdown(
+                last_chunk_seq=(
+                    None if int(next_chunk_seq) <= 0 else int(next_chunk_seq - 1)
+                ),
             )
             trainer_session.update(
                 context="shutdown",
@@ -442,9 +438,9 @@ def actor(
                 "env_steps": int(env_steps),
                 "episodes": int(episode_id),
                 "successes": int(success_count),
-                "chunks_sent": int(chunk_seq),
+                "chunks_sent": int(next_chunk_seq),
                 "transport": trainer_session.status(),
-                "processor": processor_client.last_status(),
+                "processor": processor_submitter.status_snapshot(),
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
@@ -454,7 +450,7 @@ def actor(
         except Exception:  # noqa: BLE001
             pass
         try:
-            processor_client.close()
+            processor_submitter.close()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -507,6 +503,7 @@ def processor(
         image_keys=cfg.obs.image_keys,
         residual_alpha=cfg.residual.alpha,
     )
+    processor_pipeline = RolloutProcessorPipeline.for_libero(assembler=assembler)
 
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
     client = TrainerClient(
@@ -535,11 +532,41 @@ def processor(
         log_prefix="processor trainer transport",
     )
 
+    def _publish_flushed_episode_markers(
+        flushed_markers: list[dict[str, Any]],
+    ) -> None:
+        for marker in flushed_markers:
+            episode_id = int(marker.get("episode_id", -1))
+            actor_progress = marker.get("actor_progress", None)
+            if isinstance(actor_progress, dict) and actor_progress:
+                trainer_session.request(
+                    "actor-progress",
+                    actor_progress,
+                    context=f"episode_{int(episode_id)}_progress",
+                    failure_message=(
+                        "processor trainer transport actor-progress failed repeatedly; "
+                        "aborting processor run"
+                    ),
+                    retry_until_exhausted=True,
+                )
+            rollout_stats = marker.get("rollout_stats", None)
+            if isinstance(rollout_stats, dict) and rollout_stats:
+                trainer_session.request(
+                    "send-stats",
+                    rollout_stats,
+                    context=f"episode_{int(episode_id)}_stats",
+                    raise_on_exhaustion=False,
+                )
+
     committed_env_steps = 0
     processor_timer_log_path = run_dir / "processor_timers.jsonl"
     timer = Timer()
     steps_per_update = cfg.training.steps_per_update
     log_period = cfg.training.log_period
+    processor_cadence_tracker = EnvStepCadenceTracker(
+        steps_per_update=steps_per_update,
+        log_period=log_period,
+    )
     summary: dict[str, Any] = {
         "role": "processor",
         "mode": "residual",
@@ -574,6 +601,10 @@ def processor(
         while True:
             payload = processor_server.get_chunk(timeout_s=0.1)
             if payload is None:
+                processor_server.flush_ready_episode_markers()
+                _publish_flushed_episode_markers(
+                    processor_server.consume_flushed_episode_markers()
+                )
                 if processor_server.should_stop():
                     break
                 continue
@@ -582,42 +613,32 @@ def processor(
             should_log_timer = False
             try:
                 timer.tick("total")
-                with timer.context("reconstruct_raw_chunk"):
-                    raw_chunk = reconstruct_chunk_execution_record(
-                        payload=payload,
-                        assembler=assembler,
-                    )
-                with timer.context("assemble_transitions"):
-                    assembled_chunk = assembler.process_chunk(
-                        raw=raw_chunk,
-                        task_prompt=str(payload["task_prompt"]),
-                    )
-                previous_committed_env_steps = int(committed_env_steps)
+                assembled_chunk = processor_pipeline.process_payload(
+                    payload=payload,
+                    timer=timer,
+                )
                 with timer.context("commit_replay"):
                     for transition in assembled_chunk.transitions:
                         data_store.insert(transition)
-                    for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
-                        next_committed_env_step = int(
-                            previous_committed_env_steps + step_offset
-                        )
-                        if next_committed_env_step % steps_per_update == 0:
-                            trainer_session.update(
-                                context=(
-                                    f"processor_commit_step_"
-                                    f"{int(next_committed_env_step)}"
-                                ),
-                                failure_message=(
-                                    "processor trainer transport update failed "
-                                    "repeatedly; aborting processor run"
-                                ),
-                            )
-                        if next_committed_env_step % log_period == 0:
-                            should_log_timer = True
-                    committed_env_steps = int(
-                        previous_committed_env_steps + assembled_chunk.env_steps_delta
+                    next_committed_env_steps = int(
+                        committed_env_steps + assembled_chunk.env_steps_delta
                     )
+                    should_log_timer = processor_cadence_tracker.advance(
+                        env_steps_after_chunk=int(next_committed_env_steps),
+                        trainer_session=trainer_session,
+                        update_context_prefix="processor_commit_step",
+                        failure_message=(
+                            "processor trainer transport update failed "
+                            "repeatedly; aborting processor run"
+                        ),
+                    )
+                    committed_env_steps = int(next_committed_env_steps)
                 timer.tock("total")
                 processor_server.mark_chunk_committed(chunk_seq=int(chunk_seq_value))
+                processor_server.flush_ready_episode_markers()
+                _publish_flushed_episode_markers(
+                    processor_server.consume_flushed_episode_markers()
+                )
                 if should_log_timer:
                     append_jsonl(
                         processor_timer_log_path,
@@ -644,6 +665,12 @@ def processor(
     finally:
         try:
             processor_server.request_stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _publish_flushed_episode_markers(
+                processor_server.consume_flushed_episode_markers()
+            )
         except Exception:  # noqa: BLE001
             pass
         try:

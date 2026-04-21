@@ -153,7 +153,7 @@
 - [serl_launcher/serl_launcher/data/data_store.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/data_store.py:104)
 - [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py:87)
 - [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:137)
-- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:471)
+- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:471)
 
 ### 2.1 原来的问题是什么
 
@@ -285,7 +285,7 @@
 
 - [serl_launcher/serl_launcher/policy/openpi/request_builder.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/request_builder.py:67)
 - [serl_launcher/serl_launcher/policy/openpi/client.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/client.py:159)
-- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:1)
+- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:1)
 
 ### 3.1 原来的问题是什么
 
@@ -354,7 +354,7 @@
 再看端到端 actor 吞吐：
 
 - `optimized = 5.803 step/s`
-- 原始 `run_residual_training.py = 5.105 step/s`
+- 原始 `run_residual_training_1_baseline.py = 5.105 step/s`
 - 提升约 `13.7%`
 
 端到端没有吃满 `2.336x` 很正常，因为现在新的主瓶颈已经不是 OpenPI 本身，而是：
@@ -378,7 +378,7 @@
 
 相关实现：
 
-- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:620)
+- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:620)
 - [test/benchmark_libero_rollout_30hz.py](/home/hello/codebase/serl_torch/test/benchmark_libero_rollout_30hz.py:15)
 
 ### 4.1 原来的问题是什么

@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 import unittest
 
+import numpy as np
+
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
@@ -15,11 +17,20 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - environment-dependent
     OmegaConf = None
 
+LIBERO_OFFLINE_IMPORTS_AVAILABLE = False
 if OmegaConf is not None:
-    from serl_torch.examples.libero.config import parse_train_cfg
-    from serl_torch.examples.libero.env.offline_data import (
-        resolve_and_validate_prepared_paths,
-    )
+    try:
+        from serl_torch.examples.libero.config import parse_train_cfg
+        from serl_torch.examples.libero.env.offline_data import (
+            _precompute_base_chunks_for_steps,
+            resolve_and_validate_prepared_paths,
+        )
+    except ModuleNotFoundError:  # pragma: no cover - environment-dependent
+        parse_train_cfg = None
+        _precompute_base_chunks_for_steps = None
+        resolve_and_validate_prepared_paths = None
+    else:
+        LIBERO_OFFLINE_IMPORTS_AVAILABLE = True
 
 
 class _FakeLogger:
@@ -44,8 +55,36 @@ def _train_cfg_with_prepared_path(prepared_path: str) -> object:
     return parse_train_cfg(cfg)
 
 
-@unittest.skipIf(OmegaConf is None, "omegaconf is not installed")
+@unittest.skipIf(
+    not LIBERO_OFFLINE_IMPORTS_AVAILABLE,
+    "libero offline test dependencies are not installed",
+)
 class LiberoOfflineDataTest(unittest.TestCase):
+    def test_precompute_base_chunks_uses_preparsed_policy_input_parts(self) -> None:
+        class _FakePolicyClient:
+            def infer(self, policy_input: object) -> tuple[np.ndarray, dict[str, object]]:
+                del policy_input
+                return np.full((2, 7), 0.5, dtype=np.float32), {}
+
+        payload = {
+            "actions": np.zeros((1, 7), dtype=np.float32),
+            "agentview_rgb": np.zeros((1, 8, 8, 3), dtype=np.uint8),
+            "eye_in_hand_rgb": np.zeros((1, 8, 8, 3), dtype=np.uint8),
+            "ee_pos": np.zeros((1, 3), dtype=np.float32),
+            "ee_ori": np.zeros((1, 3), dtype=np.float32),
+            "gripper_states": np.zeros((1, 2), dtype=np.float32),
+        }
+
+        base_chunks = _precompute_base_chunks_for_steps(
+            payload,
+            task_prompt="pick up the block",
+            policy_client=_FakePolicyClient(),
+            chunk_horizon=2,
+        )
+
+        self.assertEqual(base_chunks.shape, (1, 2, 7))
+        self.assertEqual(base_chunks.dtype, np.float32)
+
     def test_validate_prepared_offline_rejects_manifestless_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             prepared_dir = Path(tmpdir) / "prepared"

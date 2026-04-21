@@ -256,12 +256,23 @@ pretrained_models/microsoft--resnet-18
 
 ### LIBERO
 
-当前 canonical LIBERO 主线包括：
+当前 LIBERO 文档默认从 reference baseline 讲起，但训练脚本本身已经按演化顺序编号。最常见的三个落点是：
+
+- reference baseline:
+  `examples/libero/scripts/run_residual_training_1_baseline.py`
+- 当前最稳的优化线:
+  `examples/libero/scripts/run_residual_training_2_chunk_local.py`
+- 最新的 split / pipeline 演化版本:
+  `examples/libero/scripts/run_residual_training_5_split_pipeline.py`
+
+其中 `1/2/3/4/5` 的数字表示演化顺序，不表示“当前推荐程度”。
+
+当前 reference baseline LIBERO 主线包括：
 
 - config:
   `examples/libero/configs/train_residual.yaml`
 - actor / learner entrypoint:
-  `examples/libero/scripts/run_residual_training.py`
+  `examples/libero/scripts/run_residual_training_1_baseline.py`
 - env server:
   `examples/libero/scripts/serve_env.py`
 - checkpoint eval:

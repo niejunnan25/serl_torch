@@ -42,7 +42,7 @@
 
 相关代码:
 
-- `examples/libero/scripts/run_residual_training.py:600`
+- `examples/libero/scripts/run_residual_training_1_baseline.py:600`
 
 当前 learner 并不是“每轮只调一次 `update_high_utd`”。它先做额外 critic update，再调一次 `update_high_utd`:
 

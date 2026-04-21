@@ -244,7 +244,7 @@ def main(cfg: DictConfig) -> None:
     if offline_inputs.prepared_paths:
         prepared_path = str(offline_inputs.prepared_paths[0])
         logger.info(
-            "next learner command: python examples/libero/scripts/run_residual_training.py "
+            "next learner command: python examples/libero/scripts/run_residual_training_1_baseline.py "
             "runtime.role=learner offline.enabled=true "
             "offline.pretrain_steps=1000 offline.ratio=0.5 "
             "offline.prepared_path=%s",

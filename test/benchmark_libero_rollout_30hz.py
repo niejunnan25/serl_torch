@@ -5,16 +5,16 @@ from __future__ import annotations
 This benchmark compares four actor-side rollout shapes:
 
 1. baseline_step:
-   Mirrors examples/libero/scripts/run_residual_training.py
+   Mirrors examples/libero/scripts/run_residual_training_1_baseline.py
 2. chunk_sync:
    Mirrors the synchronous chunk assembly path in
-   examples/libero/scripts/run_residual_training_optimized.py
+   examples/libero/scripts/run_residual_training_2_chunk_local.py
 3. chunk_async:
    Mirrors the async backfill / ordered commit path in
-   examples/libero/scripts/run_residual_training_optimized.py
+   examples/libero/scripts/run_residual_training_2_chunk_local.py
 4. chunk_async_batch:
    Mirrors the batch-aware async backfill path in
-   examples/libero/scripts/run_residual_training_optimized.py
+   examples/libero/scripts/run_residual_training_2_chunk_local.py
 
 The environment is synthetic but shaped like LIBERO observations so the
 benchmark still exercises:
@@ -392,8 +392,14 @@ def _infer_decision_obs(
     image_keys: tuple[str, ...],
     residual_alpha: float,
 ) -> PrefetchedDecisionObs:
+    robot_state = build_libero_state(obs)
+    image_observations = extract_libero_images(obs)
     with stats.context(f"{metric_prefix}.build_policy_input"):
-        policy_input = build_libero_policy_input(obs, task_prompt)
+        policy_input = build_libero_policy_input(
+            prompt=task_prompt,
+            state=robot_state,
+            images=image_observations,
+        )
     with stats.context(f"{metric_prefix}.policy_infer"):
         base_actions, _ = policy_client.infer(policy_input)
     with stats.context(f"{metric_prefix}.prepare_base_actions"):
@@ -403,8 +409,8 @@ def _infer_decision_obs(
         )
     with stats.context(f"{metric_prefix}.build_residual_obs"):
         residual_obs = build_chunk_residual_obs(
-            robot_state=build_libero_state(obs),
-            images=extract_libero_images(obs),
+            robot_state=robot_state,
+            images=image_observations,
             image_keys=image_keys,
             base_actions=base_actions,
             residual_alpha=float(residual_alpha),
@@ -458,16 +464,30 @@ def _backfill_post_step_residual_obs_batch_aware(
     if not observations:
         return [], []
 
+    post_step_states = [build_libero_state(obs) for obs in observations]
+    post_step_images = [extract_libero_images(obs) for obs in observations]
     with stats.context(f"{metric_prefix}.build_policy_input_many"):
         policy_inputs = [
-            build_libero_policy_input(obs, task_prompt) for obs in observations
+            build_libero_policy_input(
+                prompt=task_prompt,
+                state=robot_state,
+                images=image_observations,
+            )
+            for robot_state, image_observations in zip(
+                post_step_states,
+                post_step_images,
+            )
         ]
     with stats.context(f"{metric_prefix}.policy_infer_many"):
         action_chunks, _ = policy_client.infer_many(policy_inputs)
 
     base_action_chunks: list[np.ndarray] = []
     residual_observations: list[dict[str, np.ndarray]] = []
-    for post_step_obs, raw_actions in zip(observations, action_chunks):
+    for robot_state, image_observations, raw_actions in zip(
+        post_step_states,
+        post_step_images,
+        action_chunks,
+    ):
         with stats.context(f"{metric_prefix}.prepare_base_actions"):
             base_actions = prepare_base_actions_chunk(
                 base_actions=raw_actions,
@@ -475,8 +495,8 @@ def _backfill_post_step_residual_obs_batch_aware(
             )
         with stats.context(f"{metric_prefix}.build_residual_obs"):
             residual_obs = build_chunk_residual_obs(
-                robot_state=build_libero_state(post_step_obs),
-                images=extract_libero_images(post_step_obs),
+                robot_state=robot_state,
+                images=image_observations,
                 image_keys=image_keys,
                 base_actions=base_actions,
                 residual_alpha=float(residual_alpha),

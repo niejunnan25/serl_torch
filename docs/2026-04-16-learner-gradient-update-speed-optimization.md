@@ -9,8 +9,8 @@
 - 主要代码路径：
   `examples/agibot_real/scripts/run_residual_training.py`
 - 可复用范围：
-  `examples/libero/scripts/run_residual_training.py` 和当前实验用的
-  `examples/libero/scripts/run_residual_training_optimized.py` 与 AgiBot learner 结构高度相似，本文大多数 learner 更新优化也适用。
+  `examples/libero/scripts/run_residual_training_1_baseline.py` 和当前实验用的
+  `examples/libero/scripts/run_residual_training_2_chunk_local.py` 与 AgiBot learner 结构高度相似，本文大多数 learner 更新优化也适用。
 
 ## 0. 先说明这次日志的边界
 

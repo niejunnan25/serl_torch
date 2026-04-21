@@ -17,7 +17,6 @@ from serl_launcher.rollout.async_transition_assembly import (
 from serl_torch.examples.libero.env.observation import build_libero_state
 from serl_torch.examples.libero.env.observation import extract_libero_images
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
-from serl_torch.examples.libero.env.policy_input import build_libero_policy_inputs
 
 
 @dataclass(frozen=True)
@@ -142,15 +141,21 @@ def infer_chunk_residual_obs(
     image_keys: tuple[str, ...],
     residual_alpha: float,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    policy_input = build_libero_policy_input(obs, task_prompt)
+    robot_state = build_libero_state(obs)
+    image_observations = extract_libero_images(obs)
+    policy_input = build_libero_policy_input(
+        prompt=task_prompt,
+        state=robot_state,
+        images=image_observations,
+    )
     base_actions, _ = policy_client.infer(policy_input)
     base_actions = prepare_base_actions_chunk(
         base_actions=base_actions,
         chunk_horizon=chunk_horizon,
     )
     residual_obs = build_chunk_residual_obs(
-        robot_state=build_libero_state(obs),
-        images=extract_libero_images(obs),
+        robot_state=robot_state,
+        images=image_observations,
         image_keys=image_keys,
         base_actions=base_actions,
         residual_alpha=residual_alpha,
@@ -510,7 +515,16 @@ def backfill_post_step_residual_obs_batch_aware(
             residual_alpha=residual_alpha,
         )
 
-    policy_inputs = build_libero_policy_inputs(observations, task_prompt)
+    post_step_states = [build_libero_state(obs) for obs in observations]
+    post_step_images = [extract_libero_images(obs) for obs in observations]
+    policy_inputs = [
+        build_libero_policy_input(
+            prompt=task_prompt,
+            state=robot_state,
+            images=image_observations,
+        )
+        for robot_state, image_observations in zip(post_step_states, post_step_images)
+    ]
     action_chunks, _batch_info = infer_many(policy_inputs)
     if len(action_chunks) != len(observations):
         raise ValueError(
@@ -520,14 +534,18 @@ def backfill_post_step_residual_obs_batch_aware(
 
     base_action_chunks: list[np.ndarray] = []
     residual_observations: list[dict[str, np.ndarray]] = []
-    for post_step_obs, raw_actions in zip(observations, action_chunks):
+    for robot_state, image_observations, raw_actions in zip(
+        post_step_states,
+        post_step_images,
+        action_chunks,
+    ):
         next_base_actions = prepare_base_actions_chunk(
             base_actions=raw_actions,
             chunk_horizon=chunk_horizon,
         )
         next_residual_obs = build_chunk_residual_obs(
-            robot_state=build_libero_state(post_step_obs),
-            images=extract_libero_images(post_step_obs),
+            robot_state=robot_state,
+            images=image_observations,
             image_keys=image_keys,
             base_actions=next_base_actions,
             residual_alpha=residual_alpha,

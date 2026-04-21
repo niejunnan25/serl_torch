@@ -24,7 +24,7 @@
 当前接入点主要在：
 
 - LIBERO actor / learner:
-  [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py)
+  [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py)
 - AgiBot actor / learner:
   [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py)
 - transport 实现：
@@ -552,19 +552,19 @@ class LearnerTrainerTransport(Protocol):
 
 第一批建议改这些：
 
-- [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:472)
+- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:472)
 - [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:415)
 
 第二批再考虑：
 
-- `run_residual_training.py`
+- `run_residual_training_1_baseline.py`
 - 其他 eval / prepare 相关训练辅助脚本
 
 ### 10.2 actor 的 `update()` 语义怎么变
 
 当前 actor 调用 `client.update()` 的位置很多，例如：
 
-- LIBERO optimized: [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:535)
+- LIBERO optimized: [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:535)
 - AgiBot copy: [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:540)
 
 Plan C 下，这些调用点原则上可以不改调用形状，但要改语义：
@@ -629,7 +629,7 @@ learner 训练主循环本身应尽量少改。
 
 受影响的 learner 接入点：
 
-- LIBERO learner: [examples/libero/scripts/run_residual_training_optimized.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_optimized.py:910)
+- LIBERO learner: [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:910)
 - AgiBot learner: [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:954)
 
 ### 11.2 learner 的 replay 可见性语义
@@ -832,12 +832,12 @@ Plan C 只是把慢操作从 control thread 挪开，不会凭空让 insert 变�
 
 第一批，已接入：
 
-- `examples/libero/scripts/run_residual_training_optimized.py`
+- `examples/libero/scripts/run_residual_training_2_chunk_local.py`
 - `examples/agibot_real/scripts/run_residual_training_copy.py`
 
 第二批，当前仍保留 legacy：
 
-- `examples/libero/scripts/run_residual_training.py`
+- `examples/libero/scripts/run_residual_training_1_baseline.py`
 - `examples/agibot_real/scripts/run_residual_training.py`
 
 ---
