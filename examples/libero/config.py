@@ -10,10 +10,12 @@ from typing import Literal
 from typing import cast
 
 from omegaconf import DictConfig
+from omegaconf import OmegaConf
 
 from serl_launcher.common.trainer_transport import SUPPORTED_TRANSPORT_MODES
 from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.common.trainer_transport import validate_transport_mode
+from serl_launcher.rollout import ProcessorTransportConfig
 from serl_launcher.utils.serialization import to_jsonable
 
 from .env.observation import resolve_libero_image_keys
@@ -38,6 +40,7 @@ class RuntimeConfig:
     broadcast_port: int
     data_store_queue_size: int
     trainer_transport: TrainerTransportConfig
+    processor_transport: ProcessorTransportConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -521,6 +524,10 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
         runtime_cfg=runtime_cfg,
         default_data_port=int(trainer_port + 2),
     )
+    processor_transport_cfg = _parse_processor_transport_cfg(
+        cfg,
+        trainer_transport_cfg=transport_cfg,
+    )
     return RuntimeConfig(
         role=cast(RuntimeRole, role),
         trainer_host=_required_str(
@@ -537,6 +544,7 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
             "runtime.data_store_queue_size",
         ),
         trainer_transport=transport_cfg,
+        processor_transport=processor_transport_cfg,
     )
 
 
@@ -580,6 +588,38 @@ def _parse_trainer_transport_cfg(
         wait_committed_on_shutdown=bool(
             raw_cfg.get("wait_committed_on_shutdown", True)
         ),
+    )
+
+
+def _parse_processor_transport_cfg(
+    cfg: DictConfig,
+    *,
+    trainer_transport_cfg: TrainerTransportConfig,
+) -> ProcessorTransportConfig:
+    processor_cfg = cfg.get("processor_transport", {})
+    port = _positive_int(
+        processor_cfg.get("port", int(trainer_transport_cfg.data_port) + 10),
+        "processor_transport.port",
+    )
+    timeout_ms = _positive_int(
+        processor_cfg.get(
+            "timeout_ms",
+            int(trainer_transport_cfg.control_timeout_ms),
+        ),
+        "processor_transport.timeout_ms",
+    )
+    queue_capacity = _positive_int(
+        processor_cfg.get("queue_capacity", 4),
+        "processor_transport.queue_capacity",
+    )
+    return ProcessorTransportConfig(
+        host=_required_str(
+            processor_cfg.get("host", "127.0.0.1"),
+            "processor_transport.host",
+        ),
+        port=int(port),
+        timeout_ms=int(timeout_ms),
+        queue_capacity=int(queue_capacity),
     )
 
 
@@ -1346,6 +1386,22 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     )
 
 
+def get_runtime_role(cfg: DictConfig) -> str:
+    runtime_cfg = cfg.get("runtime", {})
+    return str(runtime_cfg.get("role", "actor"))
+
+
+def parse_train_cfg_allow_processor(cfg: DictConfig) -> LiberoTrainConfig:
+    raw_role = get_runtime_role(cfg)
+    if raw_role in ("actor", "learner"):
+        return parse_train_cfg(cfg)
+    cfg_copy = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
+    if "runtime" not in cfg_copy:
+        cfg_copy["runtime"] = {}
+    cfg_copy["runtime"]["role"] = "actor"
+    return parse_train_cfg(cfg_copy)
+
+
 def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
@@ -1459,7 +1515,9 @@ __all__ = [
     "TrainingConfig",
     "WandbConfig",
     "cfg_to_log_payload",
+    "get_runtime_role",
     "parse_eval_cfg",
     "parse_train_cfg",
+    "parse_train_cfg_allow_processor",
     "train_cfg_to_eval_cfg",
 ]

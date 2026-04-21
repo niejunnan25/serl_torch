@@ -170,9 +170,23 @@ cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
+pip install -e .
 ```
 
-`agentlace` 需要手工安装。
+`agentlace` 默认会随 `serl_launcher/requirements.txt` / `serl_launcher/setup.py` 从 `niejunnan25/agentlace` 的 `885f5fc` 安装。
+
+这里的 `pip install -e .` 是 repo 根的 editable install。它负责让：
+
+- `import serl_torch.examples.libero...`
+- `import serl_torch.examples.agibot_real...`
+
+这类绝对导入稳定成立。做完这一步之后，直接运行：
+
+- `python examples/libero/scripts/run_residual_training.py`
+- `python examples/libero/scripts/run_residual_training_optimized.py`
+- `python examples/libero/scripts/run_residual_training_optimized_split.py`
+
+通常不需要再额外补仓库级 `PYTHONPATH`。
 
 如果你使用 `policy.type=openpi`，还需要：
 
@@ -183,7 +197,7 @@ pip install -e ./third_party/openpi-client
 这只安装 vendored 的 client 包。  
 如果你还要启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并设置 `OPENPI_ROOT`。
 
-如果不是 editable install，可以补：
+如果根 repo 和 `serl_launcher/` 这两个 editable install 都没做，可以补：
 
 ```bash
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH

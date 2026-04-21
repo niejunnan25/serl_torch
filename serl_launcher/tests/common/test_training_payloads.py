@@ -6,6 +6,8 @@ import numpy as np
 
 from serl_launcher.common.training_payloads import build_rollout_payload
 from serl_launcher.common.training_payloads import build_rollout_stats_payload
+from serl_launcher.common.training_payloads import build_actor_progress_payload
+from serl_launcher.common.training_payloads import parse_actor_progress_payload
 from serl_launcher.common.training_payloads import parse_rollout_stats_payload
 
 
@@ -66,6 +68,27 @@ class TrainingPayloadsTest(unittest.TestCase):
             },
         }
         self.assertIsNone(parse_rollout_stats_payload(payload))
+
+    def test_build_and_parse_actor_progress_payload(self) -> None:
+        payload = build_actor_progress_payload(
+            env_steps=321,
+            episode_id=9,
+            actor_done=True,
+        )
+        self.assertEqual(
+            payload,
+            {"env_steps": 321, "episode_id": 9, "actor_done": True},
+        )
+        parsed = parse_actor_progress_payload(payload)
+        self.assertEqual(parsed, payload)
+
+    def test_parse_invalid_actor_progress_payload_returns_none(self) -> None:
+        payload = {
+            "env_steps": 10,
+            "episode_id": "bad",
+            "actor_done": True,
+        }
+        self.assertIsNone(parse_actor_progress_payload(payload))
 
 
 if __name__ == "__main__":

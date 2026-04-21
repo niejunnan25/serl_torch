@@ -16,11 +16,18 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - environment-dependent
     OmegaConf = None
 
+_IMPORT_ERROR: ModuleNotFoundError | None = None
 if OmegaConf is not None:
-    from serl_torch.examples.libero.config import parse_train_cfg
+    try:
+        from serl_torch.examples.libero.config import parse_train_cfg_allow_processor
+        from serl_torch.examples.libero.config import parse_train_cfg
+    except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
+        _IMPORT_ERROR = exc
+else:
+    _IMPORT_ERROR = ModuleNotFoundError("omegaconf is not installed")
 
 
-@unittest.skipIf(OmegaConf is None, "omegaconf is not installed")
+@unittest.skipIf(_IMPORT_ERROR is not None, str(_IMPORT_ERROR))
 class LiberoConfigTest(unittest.TestCase):
     def test_parse_train_cfg_reads_backfill_policy_from_yaml(self) -> None:
         cfg = OmegaConf.load(
@@ -37,6 +44,15 @@ class LiberoConfigTest(unittest.TestCase):
         self.assertEqual(parsed.backfill_policy.port, 30001)
         self.assertEqual(parsed.backfill_policy.max_pending_chunks, 2)
         self.assertEqual(parsed.backfill_policy.mode, "thread")
+        self.assertEqual(
+            parsed.runtime.processor_transport.port,
+            int(parsed.runtime.trainer_transport.data_port) + 10,
+        )
+        self.assertEqual(
+            parsed.runtime.processor_transport.timeout_ms,
+            int(parsed.runtime.trainer_transport.control_timeout_ms),
+        )
+        self.assertEqual(parsed.runtime.processor_transport.queue_capacity, 4)
 
     def test_parse_train_cfg_requires_explicit_backfill_policy_block(self) -> None:
         cfg = OmegaConf.create(
@@ -77,6 +93,36 @@ class LiberoConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError,
             "backfill_policy.max_pending_chunks must be positive",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_allow_processor_uses_actor_fallback(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_optimized.yaml"
+        )
+        cfg.runtime.role = "processor"
+
+        parsed = parse_train_cfg_allow_processor(cfg)
+
+        self.assertEqual(parsed.runtime.role, "actor")
+
+    def test_parse_train_cfg_rejects_invalid_processor_transport_values(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_optimized.yaml"
+        )
+        cfg.processor_transport = {"queue_capacity": 0}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "processor_transport.queue_capacity must be positive",
         ):
             parse_train_cfg(cfg)
 

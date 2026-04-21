@@ -28,6 +28,12 @@ class RolloutStatsPayload(TypedDict):
     env_info: dict[str, Any]
 
 
+class ActorProgressPayload(TypedDict):
+    env_steps: int
+    episode_id: int
+    actor_done: bool
+
+
 def build_rollout_payload(
     *,
     episode_id: int,
@@ -74,6 +80,21 @@ def build_rollout_stats_payload(
     }
 
 
+def build_actor_progress_payload(
+    *,
+    env_steps: int,
+    episode_id: int,
+    actor_done: bool,
+) -> ActorProgressPayload:
+    """Build a normalized actor progress payload for coordinated shutdown."""
+
+    return {
+        "env_steps": int(env_steps),
+        "episode_id": int(episode_id),
+        "actor_done": bool(actor_done),
+    }
+
+
 def parse_rollout_stats_payload(
     payload: Mapping[str, Any],
 ) -> RolloutStatsPayload | None:
@@ -97,6 +118,23 @@ def parse_rollout_stats_payload(
         "env_steps": int(env_steps),
         "rollout": rollout,
         "env_info": env_info_payload,
+    }
+
+
+def parse_actor_progress_payload(
+    payload: Mapping[str, Any],
+) -> ActorProgressPayload | None:
+    """Parse and normalize an actor progress payload from transport."""
+
+    env_steps = _maybe_int(payload.get("env_steps", None))
+    episode_id = _maybe_int(payload.get("episode_id", None))
+    actor_done = _maybe_bool(payload.get("actor_done", None))
+    if env_steps is None or episode_id is None or actor_done is None:
+        return None
+    return {
+        "env_steps": int(env_steps),
+        "episode_id": int(episode_id),
+        "actor_done": bool(actor_done),
     }
 
 
