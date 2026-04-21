@@ -7,6 +7,8 @@ from threading import Thread
 from typing import Any
 from typing import Literal
 
+from .processor_protocol import build_processor_submission_payload
+
 
 @dataclass(frozen=True, slots=True)
 class _ProcessorCommand:
@@ -58,6 +60,27 @@ class QueuedProcessorSubmitter:
                 payload=dict(payload),
                 context=str(context),
             )
+        )
+
+    def submit_rollout_chunk(
+        self,
+        *,
+        episode_id: int,
+        chunk_seq: int,
+        episode_step_start: int,
+        task_prompt: str,
+        chunk_result: dict[str, Any],
+    ) -> None:
+        current_chunk_seq = int(chunk_seq)
+        self.submit_chunk(
+            payload=build_processor_submission_payload(
+                chunk_seq=int(current_chunk_seq),
+                episode_id=int(episode_id),
+                episode_step_start=int(episode_step_start),
+                task_prompt=task_prompt,
+                chunk_result=chunk_result,
+            ),
+            context=f"episode_{int(episode_id)}_chunk_{int(current_chunk_seq)}",
         )
 
     def finish_episode(

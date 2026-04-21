@@ -3,12 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .transition_assembly import BatchAwareLiberoTransitionAssembler
-from .transition_assembly import ChunkExecutionRecord
-from .transition_assembly import PrefetchedDecisionObs
+if TYPE_CHECKING:
+    from .transition_assembly import BatchAwareLiberoTransitionAssembler
+    from .transition_assembly import ChunkExecutionRecord
 
 
 @dataclass(frozen=True)
@@ -152,13 +153,15 @@ def reconstruct_chunk_execution_record_from_normalized(
     normalized_chunk: NormalizedChunkResult,
     assembler: BatchAwareLiberoTransitionAssembler,
 ) -> ChunkExecutionRecord:
+    from .transition_assembly import ChunkExecutionRecord
+
     steps = list(normalized_chunk.steps)
     if not steps:
         raise ValueError("processor received empty normalized chunk")
 
     start_obs = dict(dict(steps[0])["obs"])
     task_prompt = str(payload["task_prompt"])
-    decision_obs: PrefetchedDecisionObs = assembler.infer_decision_obs(
+    decision_obs = assembler.infer_decision_obs(
         obs=start_obs,
         task_prompt=task_prompt,
     )

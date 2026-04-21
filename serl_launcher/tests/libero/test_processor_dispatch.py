@@ -31,7 +31,16 @@ class _FakeProcessorClient:
         self.calls.append(("wait_until_ready", timeout_s, poll_interval_s))
 
     def submit(self, *, payload: dict[str, object], context: str) -> dict[str, object]:
-        self.calls.append(("submit", payload["chunk_seq"], context))
+        self.calls.append(
+            (
+                "submit",
+                payload["chunk_seq"],
+                payload.get("episode_id"),
+                payload.get("episode_step_start"),
+                payload.get("task_prompt"),
+                context,
+            )
+        )
         self._last_status = {"accepted_chunk_seq": int(payload["chunk_seq"])}
         return dict(self._last_status)
 
@@ -95,7 +104,13 @@ class QueuedProcessorSubmitterTest(unittest.TestCase):
         )
 
         submitter.wait_until_ready(timeout_s=1.5, poll_interval_s=0.05)
-        submitter.submit_chunk(payload={"chunk_seq": 3}, context="chunk_3")
+        submitter.submit_rollout_chunk(
+            episode_id=7,
+            chunk_seq=3,
+            episode_step_start=11,
+            task_prompt="pick up the block",
+            chunk_result={"steps": [{"reward": 1.0}]},
+        )
         submitter.mark_episode_end(
             episode_id=7,
             last_chunk_seq=3,
@@ -109,7 +124,7 @@ class QueuedProcessorSubmitterTest(unittest.TestCase):
             client.calls,
             [
                 ("wait_until_ready", 1.5, 0.05),
-                ("submit", 3, "chunk_3"),
+                ("submit", 3, 7, 11, "pick up the block", "episode_7_chunk_3"),
                 (
                     "mark_episode_end",
                     7,

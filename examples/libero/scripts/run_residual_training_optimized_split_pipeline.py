@@ -109,9 +109,6 @@ from serl_torch.examples.libero.runtime.transition_assembly import (
     BatchAwareLiberoTransitionAssembler,
 )
 from serl_torch.examples.libero.runtime.processor_protocol import (
-    build_processor_submission_payload,
-)
-from serl_torch.examples.libero.runtime.processor_protocol import (
     extract_actor_rollout_chunk_summary,
 )
 
@@ -290,19 +287,13 @@ def actor(
                 actor_chunk = extract_actor_rollout_chunk_summary(dict(chunk_result))
 
                 current_chunk_seq = int(chunk_seq)
-                submit_payload = build_processor_submission_payload(
-                    chunk_seq=int(current_chunk_seq),
-                    episode_id=int(episode_id),
-                    episode_step_start=int(episode_steps),
-                    task_prompt=task_prompt,
-                    chunk_result=chunk_result,
-                )
                 with timer.context("enqueue_processor_chunk"):
-                    processor_submitter.submit_chunk(
-                        payload=submit_payload,
-                        context=(
-                            f"episode_{int(episode_id)}_chunk_{int(current_chunk_seq)}"
-                        ),
+                    processor_submitter.submit_rollout_chunk(
+                        episode_id=int(episode_id),
+                        chunk_seq=int(current_chunk_seq),
+                        episode_step_start=int(episode_steps),
+                        task_prompt=task_prompt,
+                        chunk_result=chunk_result,
                     )
                 chunk_seq += 1
                 episode_last_chunk_seq = int(current_chunk_seq)
