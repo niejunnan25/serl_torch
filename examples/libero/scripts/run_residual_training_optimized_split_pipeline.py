@@ -99,6 +99,7 @@ from serl_torch.examples.libero.runtime.async_eval_runtime import (
 from serl_torch.examples.libero.runtime.async_eval_runtime import (
     wait_for_async_eval_worker,
 )
+from serl_torch.examples.libero.runtime.cadence import EnvStepCadenceTracker
 from serl_torch.examples.libero.runtime.processor_dispatch import (
     QueuedProcessorSubmitter,
 )
@@ -203,6 +204,10 @@ def actor(
     log_period = cfg.training.log_period
     max_env_steps = cfg.training.max_env_steps
     env_seed = cfg.env.seed
+    actor_cadence_tracker = EnvStepCadenceTracker(
+        steps_per_update=steps_per_update,
+        log_period=log_period,
+    )
 
     env_steps = 0
     episode_id = 0
@@ -299,7 +304,6 @@ def actor(
                 episode_last_chunk_seq = int(current_chunk_seq)
 
                 executed_steps = int(actor_chunk.executed_steps)
-                previous_env_steps = int(env_steps)
                 env_steps += int(executed_steps)
                 progress_bar.update(int(executed_steps))
                 episode_steps += int(executed_steps)
@@ -311,18 +315,15 @@ def actor(
                     actor_chunk.chunk_done or actor_chunk.chunk_truncated
                 )
 
-                for step_offset in range(1, int(executed_steps) + 1):
-                    next_env_step = int(previous_env_steps + step_offset)
-                    if next_env_step % steps_per_update == 0:
-                        trainer_session.update(
-                            context=f"env_step_{int(next_env_step)}",
-                            failure_message=(
-                                "trainer transport update failed repeatedly; "
-                                "aborting actor run"
-                            ),
-                        )
-                    if next_env_step % log_period == 0:
-                        should_log_timer = True
+                should_log_timer = actor_cadence_tracker.advance(
+                    env_steps_after_chunk=int(env_steps),
+                    trainer_session=trainer_session,
+                    update_context_prefix="env_step",
+                    failure_message=(
+                        "trainer transport update failed repeatedly; "
+                        "aborting actor run"
+                    ),
+                )
 
                 timer.tock("total")
 
@@ -549,6 +550,10 @@ def processor(
     timer = Timer()
     steps_per_update = cfg.training.steps_per_update
     log_period = cfg.training.log_period
+    processor_cadence_tracker = EnvStepCadenceTracker(
+        steps_per_update=steps_per_update,
+        log_period=log_period,
+    )
     summary: dict[str, Any] = {
         "role": "processor",
         "mode": "residual",
@@ -599,30 +604,22 @@ def processor(
                     payload=payload,
                     timer=timer,
                 )
-                previous_committed_env_steps = int(committed_env_steps)
                 with timer.context("commit_replay"):
                     for transition in assembled_chunk.transitions:
                         data_store.insert(transition)
-                    for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
-                        next_committed_env_step = int(
-                            previous_committed_env_steps + step_offset
-                        )
-                        if next_committed_env_step % steps_per_update == 0:
-                            trainer_session.update(
-                                context=(
-                                    f"processor_commit_step_"
-                                    f"{int(next_committed_env_step)}"
-                                ),
-                                failure_message=(
-                                    "processor trainer transport update failed "
-                                    "repeatedly; aborting processor run"
-                                ),
-                            )
-                        if next_committed_env_step % log_period == 0:
-                            should_log_timer = True
-                    committed_env_steps = int(
-                        previous_committed_env_steps + assembled_chunk.env_steps_delta
+                    next_committed_env_steps = int(
+                        committed_env_steps + assembled_chunk.env_steps_delta
                     )
+                    should_log_timer = processor_cadence_tracker.advance(
+                        env_steps_after_chunk=int(next_committed_env_steps),
+                        trainer_session=trainer_session,
+                        update_context_prefix="processor_commit_step",
+                        failure_message=(
+                            "processor trainer transport update failed "
+                            "repeatedly; aborting processor run"
+                        ),
+                    )
+                    committed_env_steps = int(next_committed_env_steps)
                 timer.tock("total")
                 processor_server.mark_chunk_committed(chunk_seq=int(chunk_seq_value))
                 processor_server.flush_ready_episode_markers()
