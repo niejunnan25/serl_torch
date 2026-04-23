@@ -5,17 +5,17 @@ libero_datasets_root: null
 
 task:
   suite_name: libero_spatial
-  task_id: 4
+  task_id: 9
 
 runtime:
   role: actor
   trainer_host: 127.0.0.1
-  trainer_port: 5688
-  broadcast_port: 5689
+  trainer_port: 5888
+  broadcast_port: 5889
   data_store_queue_size: 2000
   trainer_transport:
     mode: sync_commit
-    data_port: 5690
+    data_port: 5890
     control_timeout_ms: 800
     data_queue_capacity: 8
     data_socket_hwm: 8
@@ -25,14 +25,14 @@ runtime:
 
 wandb:
   project: libero
-  exp_name: ${task.suite_name}_task_${task.task_id}_residual_optimized
-  group: residual_optimized
+  exp_name: ${task.suite_name}_task_${task.task_id}_exp1_chunk_local
+  group: libero_spatial_task9_exp1
   debug: false
 
 policy:
   type: openpi
   host: localhost
-  port: 30001
+  port: 30401
 
 backfill_policy:
   enabled: false
@@ -50,7 +50,7 @@ env:
   seed: 7
   remote:
     host: 127.0.0.1
-    port: 30000
+    port: 30400
     timeout_sec: 180.0
 
 obs:
@@ -71,7 +71,7 @@ encoder:
   use_proprio: true
   proprio_latent_dim: 64
   resnet:
-    model_name: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings
@@ -114,7 +114,7 @@ replay:
 
 offline:
   enabled: true
-  prepared_path: data/residual/offline_data/libero_spatial_task_4/openpi_chunk5_alpha0p1
+  prepared_path: data/residual/offline_data/libero_spatial_task_9/openpi_chunk5_alpha0p1
   ratio: 0.5
   capacity: 50000
   load_max_episodes: null
@@ -126,7 +126,7 @@ offline:
     output_root: data/residual/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
-    filter_unrepresentable_steps: false
+    filter_unrepresentable_steps: true
 
 training:
   training_starts: 1000
@@ -151,7 +151,7 @@ training:
     dir: checkpoints
   async_eval:
     enabled: true
-    every_episodes: 20
+    every_episodes: 50
     episodes: 50
     start_episode_idx: 0
     max_env_steps_per_episode: null
@@ -167,15 +167,15 @@ training:
       backend: remote
       remote:
         host: 127.0.0.1
-        port: 30010
+        port: 30410
         timeout_sec: 180.0
 
 logging:
   summary_file: summary.json
 
 launch:
-  output_root: outputs/libero_optimized
+  output_root: outputs/exp1/${task.suite_name}_task${task.task_id}/chunk_local
 
 hydra:
   run:
-    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${launch.output_root}/${runtime.role}/${now:%Y-%m-%d_%H-%M-%S}

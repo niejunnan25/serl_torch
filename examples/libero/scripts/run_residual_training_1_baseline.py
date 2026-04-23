@@ -448,6 +448,7 @@ def learner(
     wandb_cfg.update(
         {
             "project": cfg.wandb.project,
+            "entity": cfg.wandb.entity,
             "exp_descriptor": run_name,
             "tag": [run_name],
             "group": cfg.wandb.group,

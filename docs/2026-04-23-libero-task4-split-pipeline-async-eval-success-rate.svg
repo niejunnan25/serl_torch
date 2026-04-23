@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="700" viewBox="0 0 1100 700">
+<rect width="100%" height="100%" fill="white" />
+<text x="550.0" y="38.0" font-size="28" fill="#222" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="bold">LIBERO TASK4 Split Pipeline Async Eval Success Rate</text>
+<text x="550.0" y="62.0" font-size="14" fill="#555" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">17 async eval checkpoints</text>
+<line x1="110.0" y1="610.0" x2="1040.0" y2="610.0" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="6 6" />
+<text x="96.0" y="615.0" font-size="14" fill="#444" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="normal">0.0</text>
+<line x1="110.0" y1="504.0" x2="1040.0" y2="504.0" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="6 6" />
+<text x="96.0" y="509.0" font-size="14" fill="#444" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="normal">0.2</text>
+<line x1="110.0" y1="398.0" x2="1040.0" y2="398.0" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="6 6" />
+<text x="96.0" y="403.0" font-size="14" fill="#444" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="normal">0.4</text>
+<line x1="110.0" y1="292.0" x2="1040.0" y2="292.0" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="6 6" />
+<text x="96.0" y="297.0" font-size="14" fill="#444" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="normal">0.6</text>
+<line x1="110.0" y1="186.0" x2="1040.0" y2="186.0" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="6 6" />
+<text x="96.0" y="191.0" font-size="14" fill="#444" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="normal">0.8</text>
+<line x1="110.0" y1="80.0" x2="1040.0" y2="80.0" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="6 6" />
+<text x="96.0" y="85.0" font-size="14" fill="#444" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="normal">1.0</text>
+<line x1="110.0" y1="80.0" x2="110.0" y2="610.0" stroke="#f0f0f0" stroke-width="1" />
+<text x="110.0" y="638.0" font-size="14" fill="#444" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">50</text>
+<line x1="284.4" y1="80.0" x2="284.4" y2="610.0" stroke="#f0f0f0" stroke-width="1" />
+<text x="284.4" y="638.0" font-size="14" fill="#444" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">200</text>
+<line x1="458.8" y1="80.0" x2="458.8" y2="610.0" stroke="#f0f0f0" stroke-width="1" />
+<text x="458.8" y="638.0" font-size="14" fill="#444" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">350</text>
+<line x1="691.2" y1="80.0" x2="691.2" y2="610.0" stroke="#f0f0f0" stroke-width="1" />
+<text x="691.2" y="638.0" font-size="14" fill="#444" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">550</text>
+<line x1="865.6" y1="80.0" x2="865.6" y2="610.0" stroke="#f0f0f0" stroke-width="1" />
+<text x="865.6" y="638.0" font-size="14" fill="#444" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">700</text>
+<line x1="1040.0" y1="80.0" x2="1040.0" y2="610.0" stroke="#f0f0f0" stroke-width="1" />
+<text x="1040.0" y="638.0" font-size="14" fill="#444" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">850</text>
+<line x1="110.0" y1="80.0" x2="110.0" y2="610.0" stroke="#111827" stroke-width="2" />
+<line x1="110.0" y1="610.0" x2="1040.0" y2="610.0" stroke="#111827" stroke-width="2" />
+<text x="550.0" y="674.0" font-size="18" fill="#222" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="normal">Train Episode ID</text>
+<text x="28" y="345.0" font-size="18" fill="#222" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" transform="rotate(-90 28 345.0)">Async Eval Success Rate</text>
+<polyline fill="none" stroke="#2563eb" stroke-width="3.5" points="110.0,228.4 168.1,217.8 226.2,239.0 284.4,239.0 342.5,281.4 400.6,249.6 458.8,249.6 516.9,260.2 575.0,260.2 633.1,281.4 691.2,334.4 749.4,260.2 807.5,270.8 865.6,281.4 923.8,270.8 981.9,302.6 1040.0,292.0" />
+<circle cx="110.0" cy="228.4" r="4" fill="#2563eb" />
+<circle cx="168.1" cy="217.8" r="4" fill="#2563eb" />
+<circle cx="226.2" cy="239.0" r="4" fill="#2563eb" />
+<circle cx="284.4" cy="239.0" r="4" fill="#2563eb" />
+<circle cx="342.5" cy="281.4" r="4" fill="#2563eb" />
+<circle cx="400.6" cy="249.6" r="4" fill="#2563eb" />
+<circle cx="458.8" cy="249.6" r="4" fill="#2563eb" />
+<circle cx="516.9" cy="260.2" r="4" fill="#2563eb" />
+<circle cx="575.0" cy="260.2" r="4" fill="#2563eb" />
+<circle cx="633.1" cy="281.4" r="4" fill="#2563eb" />
+<circle cx="691.2" cy="334.4" r="4" fill="#2563eb" />
+<circle cx="749.4" cy="260.2" r="4" fill="#2563eb" />
+<circle cx="807.5" cy="270.8" r="4" fill="#2563eb" />
+<circle cx="865.6" cy="281.4" r="4" fill="#2563eb" />
+<circle cx="923.8" cy="270.8" r="4" fill="#2563eb" />
+<circle cx="981.9" cy="302.6" r="4" fill="#2563eb" />
+<circle cx="1040.0" cy="292.0" r="6" fill="#dc2626" />
+<rect x="850.0" y="222.0" width="210" height="64" rx="8" fill="white" stroke="#d1d5db" />
+<text x="862.0" y="246.0" font-size="15" fill="#111" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-weight="bold">latest success_rate = 0.60</text>
+<text x="862.0" y="267.0" font-size="14" fill="#444" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-weight="normal">episode = 850</text>
+<line x1="1040.0" y1="292.0" x2="850.0" y2="254.0" stroke="#9ca3af" stroke-width="1.5" />
+</svg>

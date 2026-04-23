@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import logging
 from types import SimpleNamespace
 from typing import Any
+from typing import Sequence
 
 import numpy as np
 
@@ -41,6 +42,7 @@ class ChunkExecutionRecord:
     reward_sum: float
     chunk_info: dict[str, Any]
     executed_steps: int
+    start_obs: dict[str, Any] | None = None
 
     @classmethod
     def from_env_chunk_result(
@@ -163,6 +165,155 @@ def infer_chunk_residual_obs(
     return np.asarray(base_actions, dtype=np.float32), residual_obs
 
 
+def infer_chunk_residual_obs_many(
+    *,
+    observations: list[dict[str, Any]],
+    task_prompt: str,
+    policy_client: Any,
+    chunk_horizon: int,
+    image_keys: tuple[str, ...],
+    residual_alpha: float,
+) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
+    return infer_chunk_residual_obs_many_with_prompts(
+        observations=observations,
+        task_prompts=[str(task_prompt)] * len(observations),
+        policy_client=policy_client,
+        chunk_horizon=chunk_horizon,
+        image_keys=image_keys,
+        residual_alpha=residual_alpha,
+    )
+
+
+def infer_chunk_residual_obs_many_with_prompts(
+    *,
+    observations: list[dict[str, Any]],
+    task_prompts: Sequence[str],
+    policy_client: Any,
+    chunk_horizon: int,
+    image_keys: tuple[str, ...],
+    residual_alpha: float,
+) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
+    if not observations:
+        return [], []
+    prompt_list = [str(task_prompt) for task_prompt in task_prompts]
+    if len(prompt_list) != len(observations):
+        raise ValueError(
+            "task_prompts must align with observations for batched residual inference: "
+            f"got prompts={len(prompt_list)} observations={len(observations)}"
+        )
+
+    infer_many = getattr(policy_client, "infer_many", None)
+    if not callable(infer_many):
+        base_action_chunks: list[np.ndarray] = []
+        residual_observations: list[dict[str, np.ndarray]] = []
+        for obs, task_prompt in zip(observations, prompt_list):
+            base_actions, residual_obs = infer_chunk_residual_obs(
+                obs=obs,
+                task_prompt=task_prompt,
+                policy_client=policy_client,
+                chunk_horizon=chunk_horizon,
+                image_keys=image_keys,
+                residual_alpha=residual_alpha,
+            )
+            base_action_chunks.append(base_actions)
+            residual_observations.append(residual_obs)
+        return base_action_chunks, residual_observations
+
+    robot_states = [build_libero_state(obs) for obs in observations]
+    image_batches = [extract_libero_images(obs) for obs in observations]
+    policy_inputs = [
+        build_libero_policy_input(
+            prompt=prompt,
+            state=robot_state,
+            images=image_observations,
+        )
+        for prompt, robot_state, image_observations in zip(
+            prompt_list,
+            robot_states,
+            image_batches,
+        )
+    ]
+    action_chunks, _batch_info = infer_many(policy_inputs)
+    if len(action_chunks) != len(observations):
+        raise ValueError(
+            "infer_many returned a mismatched batch length: "
+            f"got {len(action_chunks)}, expected {len(observations)}"
+        )
+
+    base_action_chunks: list[np.ndarray] = []
+    residual_observations: list[dict[str, np.ndarray]] = []
+    for robot_state, image_observations, raw_actions in zip(
+        robot_states,
+        image_batches,
+        action_chunks,
+    ):
+        next_base_actions = prepare_base_actions_chunk(
+            base_actions=raw_actions,
+            chunk_horizon=chunk_horizon,
+        )
+        next_residual_obs = build_chunk_residual_obs(
+            robot_state=robot_state,
+            images=image_observations,
+            image_keys=image_keys,
+            base_actions=next_base_actions,
+            residual_alpha=residual_alpha,
+        )
+        base_action_chunks.append(np.asarray(next_base_actions, dtype=np.float32))
+        residual_observations.append(next_residual_obs)
+    return base_action_chunks, residual_observations
+
+
+def _build_chunk_assembly_result(
+    *,
+    raw: ChunkExecutionRecord,
+    residual_obs_before_chunk: dict[str, np.ndarray],
+    next_base_actions: Sequence[np.ndarray],
+    next_residual_observations: Sequence[dict[str, np.ndarray]],
+) -> AssemblyResult:
+    expected_steps = int(raw.executed_steps)
+    if len(next_base_actions) != expected_steps:
+        raise ValueError(
+            "next_base_actions must match raw.executed_steps: "
+            f"got {len(next_base_actions)} expected {expected_steps}"
+        )
+    if len(next_residual_observations) != expected_steps:
+        raise ValueError(
+            "next_residual_observations must match raw.executed_steps: "
+            f"got {len(next_residual_observations)} expected {expected_steps}"
+        )
+
+    transitions = assemble_chunk_step_transitions(
+        episode_id=int(raw.episode_id),
+        episode_step_start=int(raw.episode_step_start),
+        residual_obs_before_chunk=residual_obs_before_chunk,
+        executed_actions=raw.action_chunk,
+        rewards=raw.rewards,
+        dones=raw.dones,
+        infos=raw.infos,
+        next_residual_observations=list(next_residual_observations),
+    )
+
+    episode_done = bool(raw.chunk_done or raw.chunk_truncated)
+    prefetched = None
+    if not episode_done and expected_steps > 0:
+        prefetched = PrefetchedDecisionObs(
+            base_actions=np.asarray(next_base_actions[-1], dtype=np.float32),
+            residual_obs=dict(next_residual_observations[-1]),
+        )
+
+    return AssemblyResult(
+        transitions=transitions,
+        prefetched=prefetched,
+        next_obs=dict(raw.final_obs),
+        episode_done=episode_done,
+        env_steps_delta=expected_steps,
+        episode_steps_delta=expected_steps,
+        episode_return_delta=float(raw.reward_sum),
+        episode_success=any(bool(info.get("env_done", False)) for info in raw.infos),
+        last_info=dict(raw.chunk_info),
+    )
+
+
 class LiberoTransitionAssembler:
     def __init__(
         self,
@@ -270,6 +421,100 @@ class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
             image_keys=self.image_keys,
             residual_alpha=self.residual_alpha,
         )
+
+    def process_chunk(
+        self,
+        *,
+        raw: ChunkExecutionRecord,
+        task_prompt: str,
+    ) -> AssemblyResult:
+        if raw.start_obs is None:
+            return super().process_chunk(
+                raw=raw,
+                task_prompt=task_prompt,
+            )
+        return self.process_chunk_batch(
+            raw_chunks=(raw,),
+            task_prompts=(task_prompt,),
+        )[0]
+
+    def process_chunk_batch(
+        self,
+        *,
+        raw_chunks: Sequence[ChunkExecutionRecord],
+        task_prompts: Sequence[str],
+    ) -> list[AssemblyResult]:
+        raw_list = list(raw_chunks)
+        prompt_list = [str(task_prompt) for task_prompt in task_prompts]
+        if len(raw_list) != len(prompt_list):
+            raise ValueError(
+                "raw_chunks and task_prompts must have the same length: "
+                f"got raw_chunks={len(raw_list)} task_prompts={len(prompt_list)}"
+            )
+        if not raw_list:
+            return []
+
+        assembled_results: list[AssemblyResult | None] = [None] * len(raw_list)
+        batchable_specs: list[tuple[int, int]] = []
+        batched_observations: list[dict[str, Any]] = []
+        batched_prompts: list[str] = []
+
+        for idx, (raw, task_prompt) in enumerate(zip(raw_list, prompt_list)):
+            if raw.start_obs is None:
+                assembled_results[idx] = super().process_chunk(
+                    raw=raw,
+                    task_prompt=task_prompt,
+                )
+                continue
+
+            observation_count = int(raw.executed_steps) + 1
+            batchable_specs.append((idx, observation_count))
+            batched_observations.append(dict(raw.start_obs))
+            batched_prompts.append(task_prompt)
+            batched_observations.extend(list(raw.post_step_observations))
+            batched_prompts.extend([task_prompt] * int(raw.executed_steps))
+
+        if batchable_specs:
+            batched_base_actions, batched_residual_obs = (
+                infer_chunk_residual_obs_many_with_prompts(
+                    observations=batched_observations,
+                    task_prompts=batched_prompts,
+                    policy_client=self.policy_client,
+                    chunk_horizon=self.chunk_horizon,
+                    image_keys=self.image_keys,
+                    residual_alpha=self.residual_alpha,
+                )
+            )
+            offset = 0
+            for idx, observation_count in batchable_specs:
+                current_base_actions = batched_base_actions[offset : offset + observation_count]
+                current_residual_obs = batched_residual_obs[offset : offset + observation_count]
+                if len(current_residual_obs) != int(observation_count):
+                    raise ValueError(
+                        "combined chunk residual backfill returned an unexpected length slice: "
+                        f"got {len(current_residual_obs)} expected {int(observation_count)}"
+                    )
+                assembled_results[idx] = _build_chunk_assembly_result(
+                    raw=raw_list[idx],
+                    residual_obs_before_chunk=current_residual_obs[0],
+                    next_base_actions=current_base_actions[1:],
+                    next_residual_observations=current_residual_obs[1:],
+                )
+                offset += int(observation_count)
+            if offset != len(batched_residual_obs):
+                raise ValueError(
+                    "combined chunk residual backfill left unused outputs: "
+                    f"consumed {offset} of {len(batched_residual_obs)}"
+                )
+
+        final_results: list[AssemblyResult] = []
+        for idx, assembled in enumerate(assembled_results):
+            if assembled is None:
+                raise RuntimeError(
+                    f"chunk batch assembly did not produce a result for index {idx}"
+                )
+            final_results.append(assembled)
+        return final_results
 
 
 class LiberoActorTransitionAssembler:
@@ -501,58 +746,14 @@ def backfill_post_step_residual_obs_batch_aware(
     image_keys: tuple[str, ...],
     residual_alpha: float,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
-    if not observations:
-        return [], []
-
-    infer_many = getattr(policy_client, "infer_many", None)
-    if not callable(infer_many):
-        return backfill_post_step_residual_obs(
-            observations=observations,
-            task_prompt=task_prompt,
-            policy_client=policy_client,
-            chunk_horizon=chunk_horizon,
-            image_keys=image_keys,
-            residual_alpha=residual_alpha,
-        )
-
-    post_step_states = [build_libero_state(obs) for obs in observations]
-    post_step_images = [extract_libero_images(obs) for obs in observations]
-    policy_inputs = [
-        build_libero_policy_input(
-            prompt=task_prompt,
-            state=robot_state,
-            images=image_observations,
-        )
-        for robot_state, image_observations in zip(post_step_states, post_step_images)
-    ]
-    action_chunks, _batch_info = infer_many(policy_inputs)
-    if len(action_chunks) != len(observations):
-        raise ValueError(
-            "infer_many returned a mismatched batch length: "
-            f"got {len(action_chunks)}, expected {len(observations)}"
-        )
-
-    base_action_chunks: list[np.ndarray] = []
-    residual_observations: list[dict[str, np.ndarray]] = []
-    for robot_state, image_observations, raw_actions in zip(
-        post_step_states,
-        post_step_images,
-        action_chunks,
-    ):
-        next_base_actions = prepare_base_actions_chunk(
-            base_actions=raw_actions,
-            chunk_horizon=chunk_horizon,
-        )
-        next_residual_obs = build_chunk_residual_obs(
-            robot_state=robot_state,
-            images=image_observations,
-            image_keys=image_keys,
-            base_actions=next_base_actions,
-            residual_alpha=residual_alpha,
-        )
-        base_action_chunks.append(np.asarray(next_base_actions, dtype=np.float32))
-        residual_observations.append(next_residual_obs)
-    return base_action_chunks, residual_observations
+    return infer_chunk_residual_obs_many(
+        observations=observations,
+        task_prompt=task_prompt,
+        policy_client=policy_client,
+        chunk_horizon=chunk_horizon,
+        image_keys=image_keys,
+        residual_alpha=residual_alpha,
+    )
 
 
 def assemble_chunk_step_transitions(
@@ -617,4 +818,6 @@ __all__ = [
     "backfill_post_step_residual_obs",
     "backfill_post_step_residual_obs_batch_aware",
     "infer_chunk_residual_obs",
+    "infer_chunk_residual_obs_many",
+    "infer_chunk_residual_obs_many_with_prompts",
 ]

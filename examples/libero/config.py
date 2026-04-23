@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import replace
@@ -46,6 +47,7 @@ class RuntimeConfig:
 @dataclass(frozen=True, slots=True)
 class WandbConfig:
     project: str
+    entity: str | None
     exp_name: str
     group: str | None
     debug: bool
@@ -188,6 +190,14 @@ class BackfillPolicyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessorBatchingConfig:
+    enabled: bool
+    max_batch_chunks: int
+    max_batch_obs: int
+    max_wait_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class MixedPrecisionConfig:
     enabled: bool
     dtype: str
@@ -287,6 +297,7 @@ class LiberoTrainConfig:
     wandb: WandbConfig
     policy: PolicyConfig
     backfill_policy: BackfillPolicyConfig
+    processor_batching: ProcessorBatchingConfig
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
@@ -628,6 +639,7 @@ def _parse_wandb_cfg(cfg: DictConfig, *, task: TaskConfig) -> WandbConfig:
     default_exp_name = f"{task.suite_name}_task_{task.task_id}_residual"
     return WandbConfig(
         project=_required_str(wandb_cfg.get("project", "libero"), "wandb.project"),
+        entity=_optional_str(wandb_cfg.get("entity", os.environ.get("WANDB_ENTITY"))),
         exp_name=_required_str(
             wandb_cfg.get("exp_name", default_exp_name),
             "wandb.exp_name",
@@ -717,6 +729,27 @@ def _parse_remote_env_cfg(remote_cfg: Any, *, field_prefix: str) -> RemoteEnvCon
         timeout_sec=_positive_float(
             remote_cfg.get("timeout_sec", 120.0),
             f"{field_prefix}.timeout_sec",
+        ),
+    )
+
+
+def _parse_processor_batching_cfg(
+    cfg: DictConfig,
+) -> ProcessorBatchingConfig:
+    batching_cfg = cfg.get("processor_batching", {})
+    return ProcessorBatchingConfig(
+        enabled=bool(batching_cfg.get("enabled", False)),
+        max_batch_chunks=_positive_int(
+            batching_cfg.get("max_batch_chunks", 4),
+            "processor_batching.max_batch_chunks",
+        ),
+        max_batch_obs=_positive_int(
+            batching_cfg.get("max_batch_obs", 24),
+            "processor_batching.max_batch_obs",
+        ),
+        max_wait_ms=_nonnegative_int(
+            batching_cfg.get("max_wait_ms", 3),
+            "processor_batching.max_wait_ms",
         ),
     )
 
@@ -1373,6 +1406,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         wandb=_parse_wandb_cfg(cfg, task=task),
         policy=policy,
         backfill_policy=_parse_backfill_policy_cfg(cfg),
+        processor_batching=_parse_processor_batching_cfg(cfg),
         env=env,
         obs=obs,
         residual=residual,
@@ -1504,6 +1538,7 @@ __all__ = [
     "OptimizerType",
     "PolicyBackend",
     "PolicyConfig",
+    "ProcessorBatchingConfig",
     "RemoteEnvConfig",
     "ReplayConfig",
     "ResidualConfig",

@@ -4,9 +4,9 @@
 
 当前仓库里的 `docs/` 到底在记录什么，哪些文档值得优先看，哪些更适合作为历史 refactor 档案来查。
 
-截至 `2026-04-17`，当前 `docs/` 下共有：
+截至 `2026-04-23`，当前 `docs/` 下共有：
 
-- 根目录主题文档 `8` 篇（不含本 README）
+- 根目录主题文档 `11` 篇（不含本 README）
 - `docs/refactors/` 历史文档 `28` 篇
 
 ## 1. `docs/` 目录主要记录什么
@@ -38,6 +38,38 @@
 
 根目录下这批文档，基本可以理解为当前仓库里最“主线”的设计与优化记录。
 
+### [2026-04-23-libero-exp1-startup-commands.md](./2026-04-23-libero-exp1-startup-commands.md)
+
+用途：
+
+- 给 `exp1` 下的两组 LIBERO task4 对比实验整理一份可直接启动的命令清单
+- 明确 `2_chunk optimized` 和 `5_split serl` 各自需要起哪些进程
+
+这篇文档会直接给出：
+
+- `env server`
+- `async eval env server`
+- `decision policy server`
+- `backfill policy server`，仅 `5_split` 需要
+- `learner / processor / actor`
+
+如果你当前的目标不是看设计演进，而是直接把 `exp1` 两组实验启动起来，这篇应该优先看。
+
+### [2026-04-23-libero-task9-exp1-startup-commands.md](./2026-04-23-libero-task9-exp1-startup-commands.md)
+
+用途：
+
+- 给 `exp1` 下的 task9 两组对比实验整理一份可直接启动的命令清单
+- 明确 `chunk_local` 和 `split_pipeline` 在 task9 上各自需要起哪些进程和端口
+
+这篇文档会直接给出：
+
+- task9 的两份 `exp1` 配置名
+- 对应的 `env / eval env / decision policy / backfill policy / learner / processor / actor`
+- 一套互不冲突的 task9 端口规划
+
+如果你已经把 task4 那组跑通，现在要切到 task9，这篇应该直接看。
+
 ### [2026-04-17-weekly-optimization-highlights.md](./2026-04-17-weekly-optimization-highlights.md)
 
 用途：
@@ -53,6 +85,26 @@
 - actor 热路径上的 `build_decision_obs` 去负担
 
 如果你想快速讲清楚“这一周优化做了什么、为什么有效、提升体现在哪里”，建议优先看这篇。
+
+### [2026-04-23-libero-residual-training-1-to-5-comparison.md](./2026-04-23-libero-residual-training-1-to-5-comparison.md)
+
+用途：
+
+- 系统梳理 LIBERO `run_residual_training_1/2/3/4/5` 五个脚本到底有什么区别
+- 解释这五版分别解决什么问题、它们的演化顺序是什么、以及当前更推荐哪一版
+
+这篇文档会重点说明：
+
+- 哪些东西在五版里其实没有变
+- `1 -> 2` 为什么是最关键的一步
+- `3 -> 4 -> 5` 为什么更像 split 架构的演进链，而不是默认实验入口的替代链
+- 为什么“最新版本”不等于“默认最推荐版本”
+
+如果你经常会问下面这些问题，这篇建议优先看：
+
+- 为什么仓库里同时有 `1_baseline`、`2_chunk_local`、`3_split_proto`、`4_split_refined`、`5_split_pipeline`
+- 我现在跑实验到底该从哪一个入口起步
+- 如果要继续做 split 架构，该基于哪一版继续演进
 
 ### [2026-04-13-mainline-review-findings.md](./2026-04-13-mainline-review-findings.md)
 
@@ -248,10 +300,11 @@
 
 推荐顺序：
 
-1. [2026-04-16-agibot-transition-dataflow-and-refactor-plan.md](./2026-04-16-agibot-transition-dataflow-and-refactor-plan.md)
-2. [2026-04-17-agentlace-serl-plan-c-design.md](./2026-04-17-agentlace-serl-plan-c-design.md)
-3. [refactors/2026-04-12-agibot-chunk-replay-note.md](./refactors/2026-04-12-agibot-chunk-replay-note.md)
-4. [refactors/2026-04-08-serl-launcher-training-phase1.md](./refactors/2026-04-08-serl-launcher-training-phase1.md)
+1. [2026-04-23-libero-residual-training-1-to-5-comparison.md](./2026-04-23-libero-residual-training-1-to-5-comparison.md)
+2. [2026-04-16-agibot-transition-dataflow-and-refactor-plan.md](./2026-04-16-agibot-transition-dataflow-and-refactor-plan.md)
+3. [2026-04-17-agentlace-serl-plan-c-design.md](./2026-04-17-agentlace-serl-plan-c-design.md)
+4. [refactors/2026-04-12-agibot-chunk-replay-note.md](./refactors/2026-04-12-agibot-chunk-replay-note.md)
+5. [refactors/2026-04-08-serl-launcher-training-phase1.md](./refactors/2026-04-08-serl-launcher-training-phase1.md)
 
 ### 4.3 查“这轮性能优化到底提升了什么”
 

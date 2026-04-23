@@ -431,7 +431,10 @@ def actor(
             request_type="submit-chunk",
             payload=payload,
             context=context,
-            retry_limit=5,
+            # Chunk submission can see transient backpressure while the prototype
+            # processor pipeline is warming up. Reuse the long-request budget so
+            # actor startup does not abort during temporary queue saturation.
+            retry_limit=int(long_request_retry_limit),
         )
 
     def _finish_episode_on_processor(
@@ -1121,6 +1124,7 @@ def learner(
     wandb_cfg.update(
         {
             "project": cfg.wandb.project,
+            "entity": cfg.wandb.entity,
             "exp_descriptor": run_name,
             "tag": [run_name],
             "group": cfg.wandb.group,

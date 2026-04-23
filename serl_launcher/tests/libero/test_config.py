@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[3] / "serl_launcher"
@@ -44,6 +46,11 @@ class LiberoConfigTest(unittest.TestCase):
         self.assertEqual(parsed.backfill_policy.port, 30001)
         self.assertEqual(parsed.backfill_policy.max_pending_chunks, 2)
         self.assertEqual(parsed.backfill_policy.mode, "thread")
+        self.assertIsNone(parsed.wandb.entity)
+        self.assertFalse(parsed.processor_batching.enabled)
+        self.assertEqual(parsed.processor_batching.max_batch_chunks, 4)
+        self.assertEqual(parsed.processor_batching.max_batch_obs, 24)
+        self.assertEqual(parsed.processor_batching.max_wait_ms, 3)
         self.assertEqual(
             parsed.runtime.processor_transport.port,
             int(parsed.runtime.trainer_transport.data_port) + 10,
@@ -125,6 +132,51 @@ class LiberoConfigTest(unittest.TestCase):
             "processor_transport.queue_capacity must be positive",
         ):
             parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_rejects_invalid_processor_batching_values(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_5_split_serl_recommended.yaml"
+        )
+        cfg.processor_batching.max_batch_obs = 0
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "processor_batching.max_batch_obs must be positive",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_reads_wandb_entity_from_env(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual.yaml"
+        )
+
+        with patch.dict(os.environ, {"WANDB_ENTITY": "niejunnan"}, clear=False):
+            parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.wandb.entity, "niejunnan")
+
+    def test_parse_train_cfg_prefers_explicit_wandb_entity(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.wandb.entity = "explicit-team"
+
+        with patch.dict(os.environ, {"WANDB_ENTITY": "niejunnan"}, clear=False):
+            parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.wandb.entity, "explicit-team")
 
 
 if __name__ == "__main__":

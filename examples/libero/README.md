@@ -74,7 +74,7 @@
 - [scripts/run_residual_training_4_split_refined.py](scripts/run_residual_training_4_split_refined.py)
   split 架构过渡整理版；协议和 session 使用更统一
 - [scripts/run_residual_training_5_split_pipeline.py](scripts/run_residual_training_5_split_pipeline.py)
-  当前最新的 split / pipeline 版本；更多协议与 transport 细节已经下沉到 `runtime/`
+  当前最新的 split / pipeline 版本；更多协议与 transport 细节已经下沉到 `runtime/`，processor 侧要求显式配置 dedicated `backfill_policy`
 - [scripts/run_residual_offline_prepare.py](scripts/run_residual_offline_prepare.py)
   离线数据准备入口，默认也读取 `configs/train_residual.yaml`
 - [scripts/serve_env.py](scripts/serve_env.py)
@@ -760,6 +760,79 @@ python examples/libero/scripts/run_residual_training_1_baseline.py \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
+
+### `exp1` task4 / task9 对比实验
+
+如果你要直接跑当前整理好的 `exp1` 对比实验，建议先看两份完整命令清单：
+
+- task4:
+  [../../docs/2026-04-23-libero-exp1-startup-commands.md](../../docs/2026-04-23-libero-exp1-startup-commands.md)
+- task9:
+  [../../docs/2026-04-23-libero-task9-exp1-startup-commands.md](../../docs/2026-04-23-libero-task9-exp1-startup-commands.md)
+
+这四份配置当前都已经统一到：
+
+- `offline.enabled=true`
+- `offline.prepare.filter_unrepresentable_steps=true`
+- `training.async_eval.enabled=true`
+- `training.async_eval.every_episodes=50`
+- `training.async_eval.episodes=50`
+
+最常用的训练入口命令如下。
+
+task4 `chunk_local`：
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate serl_torch
+cd /vla/users/niejunnan/codebase/serl_torch
+python examples/libero/scripts/run_residual_training_2_chunk_local.py \
+  --config-name exp1/train_residual_task4_exp1_chunk_local \
+  runtime.role=learner \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+task4 `split_pipeline`：
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate serl_torch
+cd /vla/users/niejunnan/codebase/serl_torch
+python examples/libero/scripts/run_residual_training_5_split_pipeline.py \
+  --config-name exp1/train_residual_task4_exp1_split_pipeline \
+  runtime.role=learner \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+task9 `chunk_local`：
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate serl_torch
+cd /vla/users/niejunnan/codebase/serl_torch
+python examples/libero/scripts/run_residual_training_2_chunk_local.py \
+  --config-name exp1/train_residual_task9_exp1_chunk_local \
+  runtime.role=learner \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+task9 `split_pipeline`：
+
+```bash
+source /vla/miniconda3/etc/profile.d/conda.sh
+conda activate serl_torch
+cd /vla/users/niejunnan/codebase/serl_torch
+python examples/libero/scripts/run_residual_training_5_split_pipeline.py \
+  --config-name exp1/train_residual_task9_exp1_split_pipeline \
+  runtime.role=learner \
+  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
+  libero_datasets_root=/vla/users/niejunnan/datasets
+```
+
+如果你要直接按多终端方式启动 `env / eval env / decision policy / backfill policy / processor / actor`，不要自己手拼，直接照上面两份 `docs/` 文档里的端口和 GPU 分配执行。
 
 ## 8. 跑 checkpoint eval
 

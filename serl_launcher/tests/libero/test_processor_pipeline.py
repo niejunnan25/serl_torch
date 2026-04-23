@@ -87,6 +87,9 @@ def _fake_chunk_payload() -> dict[str, object]:
 
 
 class _FakeAssembler:
+    def __init__(self) -> None:
+        self.batch_calls: list[tuple[int, list[str]]] = []
+
     def infer_decision_obs(
         self,
         *,
@@ -117,6 +120,18 @@ class _FakeAssembler:
             episode_success=True,
             last_info={"env_done": True},
         )
+
+    def process_chunk_batch(
+        self,
+        *,
+        raw_chunks: list[object],
+        task_prompts: list[str],
+    ) -> list[AssemblyResult]:
+        self.batch_calls.append((len(raw_chunks), list(task_prompts)))
+        return [
+            self.process_chunk(raw=raw_chunk, task_prompt=task_prompt)
+            for raw_chunk, task_prompt in zip(raw_chunks, task_prompts)
+        ]
 
 
 class _TagTransitionStage(ProcessorTransitionStage):
@@ -157,6 +172,20 @@ class RolloutProcessorPipelineTest(unittest.TestCase):
         self.assertTrue(assembled.episode_done)
         self.assertEqual(assembled.transitions[0]["reward"], 3.0)
         self.assertEqual(assembled.transitions[0]["tagged"], True)
+
+    def test_pipeline_process_payload_batch_uses_assembler_batch_api(self) -> None:
+        assembler = _FakeAssembler()
+        pipeline = RolloutProcessorPipeline.for_libero(
+            assembler=assembler,  # type: ignore[arg-type]
+        )
+
+        assembled_chunks = pipeline.process_payload_batch(
+            (_fake_chunk_payload(), _fake_chunk_payload())
+        )
+
+        self.assertEqual(len(assembled_chunks), 2)
+        self.assertEqual(assembler.batch_calls, [(2, ["stack blocks", "stack blocks"])])
+        self.assertTrue(all(assembled.episode_done for assembled in assembled_chunks))
 
 
 if __name__ == "__main__":

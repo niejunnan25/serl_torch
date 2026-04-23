@@ -166,15 +166,17 @@ class ProcessorProtocolTest(unittest.TestCase):
         self.assertEqual(record.executed_steps, 2)
         self.assertEqual(record.reward_sum, 4.0)
         self.assertEqual(record.action_chunk.shape, (2, 2))
-        self.assertTrue(np.array_equal(record.action_chunk[0], np.asarray([0.1, 0.2])))
+        self.assertTrue(np.allclose(record.action_chunk[0], np.asarray([0.1, 0.2])))
+        self.assertEqual(record.residual_obs_before_chunk, {})
+        self.assertIsNotNone(record.start_obs)
+        assert record.start_obs is not None
         self.assertTrue(
             np.array_equal(
-                record.residual_obs_before_chunk["state"],
-                np.asarray([9.0, 8.0], dtype=np.float32),
+                record.start_obs["robot0_eef_pos"],
+                np.asarray([1.0, 1.1, 1.2], dtype=np.float32),
             )
         )
-        self.assertEqual(len(assembler.calls), 1)
-        self.assertEqual(assembler.calls[0][1], "pick up the block")
+        self.assertEqual(len(assembler.calls), 0)
 
 
 if __name__ == "__main__":

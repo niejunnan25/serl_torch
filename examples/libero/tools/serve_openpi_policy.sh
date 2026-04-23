@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OPENPI_ROOT="${OPENPI_ROOT:-/vla/users/niejunnan/codebase/openpi}"
+OPENPI_ROOT="${OPENPI_ROOT:-/vla/users/niejunnan/codebase/openpi-modified}"
 DEFAULT_POLICY_DIR="/vla/users/niejunnan/openpi-assets/checkpoints/pi0_libero"
 PORT="40001"
 GPU_ID="${GPU_ID:-0}"

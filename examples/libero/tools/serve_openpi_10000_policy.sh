@@ -18,7 +18,7 @@ format_cmd() {
     printf "%s" "$formatted"
 }
 
-DEFAULT_OPENPI_ROOT="/vla/users/niejunnan/codebase/openpi"
+DEFAULT_OPENPI_ROOT="/vla/users/niejunnan/codebase/openpi-modified"
 DEFAULT_POLICY_CONFIG="pi0_libero_baseline_10_bs32_150000"
 DEFAULT_POLICY_DIR="/vla/users/niejunnan/assets/openpi-assets/serl_torch_ckpt/pi0_10000"
 DEFAULT_OPENPI_CONDA_ENV="openpi-modified"

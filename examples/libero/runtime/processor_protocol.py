@@ -154,17 +154,13 @@ def reconstruct_chunk_execution_record_from_normalized(
     assembler: BatchAwareLiberoTransitionAssembler,
 ) -> ChunkExecutionRecord:
     from .transition_assembly import ChunkExecutionRecord
+    del assembler
 
     steps = list(normalized_chunk.steps)
     if not steps:
         raise ValueError("processor received empty normalized chunk")
 
     start_obs = dict(dict(steps[0])["obs"])
-    task_prompt = str(payload["task_prompt"])
-    decision_obs = assembler.infer_decision_obs(
-        obs=start_obs,
-        task_prompt=task_prompt,
-    )
     action_chunk = np.stack(
         [
             np.asarray(dict(step)["action"], dtype=np.float32).reshape(-1)
@@ -175,7 +171,7 @@ def reconstruct_chunk_execution_record_from_normalized(
     return ChunkExecutionRecord(
         episode_id=int(payload["episode_id"]),
         episode_step_start=int(payload["episode_step_start"]),
-        residual_obs_before_chunk=decision_obs.residual_obs,
+        residual_obs_before_chunk={},
         action_chunk=action_chunk,
         post_step_observations=list(normalized_chunk.post_step_observations),
         rewards=list(normalized_chunk.rewards),
@@ -187,6 +183,7 @@ def reconstruct_chunk_execution_record_from_normalized(
         reward_sum=float(normalized_chunk.reward_sum),
         chunk_info=dict(normalized_chunk.chunk_info),
         executed_steps=int(normalized_chunk.executed_steps),
+        start_obs=start_obs,
     )
 
 

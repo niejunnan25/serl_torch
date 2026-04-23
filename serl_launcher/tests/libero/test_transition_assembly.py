@@ -119,12 +119,14 @@ class _BatchOnlyPolicyClient:
     def __init__(self) -> None:
         self.infer_many_calls = 0
         self.infer_calls = 0
+        self.batch_sizes: list[int] = []
 
     def infer_many(
         self,
         policy_inputs: list[object],
     ) -> tuple[list[np.ndarray], dict[str, object]]:
         self.infer_many_calls += 1
+        self.batch_sizes.append(len(policy_inputs))
         actions: list[np.ndarray] = []
         for index, _policy_input in enumerate(policy_inputs, start=1):
             actions.append(
@@ -555,26 +557,32 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertTrue(np.allclose(base_actions[0][:, 0], [1.0, 1.25]))
         self.assertTrue(np.allclose(base_actions[1][:, 0], [2.0, 2.25]))
 
-    def test_batch_aware_assembler_process_chunk_keeps_prefetch_contract(self) -> None:
+    def test_batch_aware_assembler_process_chunk_batches_start_and_post_step_obs(
+        self,
+    ) -> None:
+        policy_client = _BatchOnlyPolicyClient()
         assembler = BatchAwareLiberoTransitionAssembler(
-            policy_client=_BatchOnlyPolicyClient(),
+            policy_client=policy_client,
             chunk_horizon=2,
             image_keys=("image_rgb_0", "image_rgb_1"),
             residual_alpha=0.1,
         )
-        raw = ChunkExecutionRecord.from_env_chunk_result(
+        raw = ChunkExecutionRecord(
             episode_id=5,
             episode_step_start=0,
-            residual_obs_before_chunk={"state": np.asarray([0.0], dtype=np.float32)},
+            residual_obs_before_chunk={},
             action_chunk=np.asarray([[0.1], [0.2]], dtype=np.float32),
-            chunk_result=_fake_chunk_result(
-                observations=[_fake_libero_obs(1.0), _fake_libero_obs(2.0)],
-                rewards=[0.0, 1.0],
-                dones=[False, False],
-                infos=[{"env_done": False}, {"env_done": False}],
-                done=False,
-                truncated=False,
-            ),
+            post_step_observations=[_fake_libero_obs(1.0), _fake_libero_obs(2.0)],
+            rewards=[0.0, 1.0],
+            dones=[False, False],
+            infos=[{"env_done": False}, {"env_done": False}],
+            final_obs=_fake_libero_obs(2.0),
+            chunk_done=False,
+            chunk_truncated=False,
+            reward_sum=1.0,
+            chunk_info={"env_done": False},
+            executed_steps=2,
+            start_obs=_fake_libero_obs(0.0),
         )
 
         result = assembler.process_chunk(raw=raw, task_prompt="move")
@@ -582,7 +590,88 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertFalse(result.episode_done)
         self.assertIsNotNone(result.prefetched)
         assert result.prefetched is not None
-        self.assertTrue(np.allclose(result.prefetched.base_actions[:, 0], [2.0, 2.5]))
+        self.assertEqual(policy_client.infer_many_calls, 1)
+        self.assertEqual(policy_client.infer_calls, 0)
+        self.assertEqual(policy_client.batch_sizes, [3])
+        self.assertIn("robot_proprio", result.transitions[0]["observations"])
+        self.assertTrue(
+            np.allclose(
+                result.transitions[0]["observations"]["robot_proprio"][0, :3],
+                [0.0, 0.1, 0.2],
+            )
+        )
+        self.assertTrue(np.allclose(result.prefetched.base_actions[:, 0], [3.0, 3.5]))
+
+    def test_batch_aware_assembler_process_chunk_batch_merges_multiple_chunks(
+        self,
+    ) -> None:
+        policy_client = _BatchOnlyPolicyClient()
+        assembler = BatchAwareLiberoTransitionAssembler(
+            policy_client=policy_client,
+            chunk_horizon=2,
+            image_keys=("image_rgb_0", "image_rgb_1"),
+            residual_alpha=0.1,
+        )
+        raw_chunks = [
+            ChunkExecutionRecord(
+                episode_id=5,
+                episode_step_start=0,
+                residual_obs_before_chunk={},
+                action_chunk=np.asarray([[0.1], [0.2]], dtype=np.float32),
+                post_step_observations=[_fake_libero_obs(1.0), _fake_libero_obs(2.0)],
+                rewards=[0.0, 1.0],
+                dones=[False, False],
+                infos=[{"env_done": False}, {"env_done": False}],
+                final_obs=_fake_libero_obs(2.0),
+                chunk_done=False,
+                chunk_truncated=False,
+                reward_sum=1.0,
+                chunk_info={"env_done": False},
+                executed_steps=2,
+                start_obs=_fake_libero_obs(0.0),
+            ),
+            ChunkExecutionRecord(
+                episode_id=5,
+                episode_step_start=2,
+                residual_obs_before_chunk={},
+                action_chunk=np.asarray([[0.3], [0.4]], dtype=np.float32),
+                post_step_observations=[_fake_libero_obs(11.0), _fake_libero_obs(12.0)],
+                rewards=[1.0, 1.5],
+                dones=[False, False],
+                infos=[{"env_done": False}, {"env_done": False}],
+                final_obs=_fake_libero_obs(12.0),
+                chunk_done=False,
+                chunk_truncated=False,
+                reward_sum=2.5,
+                chunk_info={"env_done": False},
+                executed_steps=2,
+                start_obs=_fake_libero_obs(10.0),
+            ),
+        ]
+
+        results = assembler.process_chunk_batch(
+            raw_chunks=raw_chunks,
+            task_prompts=("move", "stack"),
+        )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(policy_client.infer_many_calls, 1)
+        self.assertEqual(policy_client.infer_calls, 0)
+        self.assertEqual(policy_client.batch_sizes, [6])
+        self.assertTrue(
+            np.allclose(
+                results[0].transitions[0]["observations"]["robot_proprio"][0, :3],
+                [0.0, 0.1, 0.2],
+            )
+        )
+        self.assertTrue(
+            np.allclose(
+                results[1].transitions[0]["observations"]["robot_proprio"][0, :3],
+                [10.0, 10.1, 10.2],
+            )
+        )
+        self.assertTrue(np.allclose(results[0].prefetched.base_actions[:, 0], [3.0, 3.5]))
+        self.assertTrue(np.allclose(results[1].prefetched.base_actions[:, 0], [6.0, 6.5]))
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"missing dependency: {_IMPORT_ERROR}")

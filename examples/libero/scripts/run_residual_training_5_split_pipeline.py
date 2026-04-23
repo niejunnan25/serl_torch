@@ -116,6 +116,56 @@ from serl_torch.examples.libero.runtime.processor_protocol import (
 TRAINER_REQUEST_TYPES = ("send-stats", "actor-progress")
 
 
+def _record_timer_duration(
+    *,
+    timer: Timer,
+    stage_name: str,
+    duration_s: float,
+    count: int,
+) -> None:
+    timer.times[str(stage_name)] += float(duration_s)
+    timer.counts[str(stage_name)] += max(1, int(count))
+
+
+def _processor_backfill_obs_count(payload: dict[str, Any]) -> int:
+    chunk_result = dict(payload.get("chunk_result", {}))
+    steps = list(chunk_result.get("steps", ()))
+    executed_steps = int(chunk_result.get("num_steps", len(steps)))
+    if executed_steps <= 0:
+        executed_steps = len(steps)
+    return max(1, int(executed_steps) + 1)
+
+
+def _collect_processor_payload_batch(
+    *,
+    processor_server: ProcessorServer,
+    first_payload: dict[str, Any],
+    batching_cfg: Any,
+) -> list[dict[str, Any]]:
+    payload_batch = [dict(first_payload)]
+    if not bool(getattr(batching_cfg, "enabled", False)):
+        return payload_batch
+
+    max_batch_chunks = max(1, int(getattr(batching_cfg, "max_batch_chunks", 1)))
+    max_batch_obs = max(1, int(getattr(batching_cfg, "max_batch_obs", 1)))
+    max_wait_s = max(0.0, float(getattr(batching_cfg, "max_wait_ms", 0)) / 1000.0)
+    batch_obs = _processor_backfill_obs_count(first_payload)
+    if len(payload_batch) >= max_batch_chunks or batch_obs >= max_batch_obs:
+        return payload_batch
+
+    deadline = time.monotonic() + float(max_wait_s)
+    while len(payload_batch) < int(max_batch_chunks) and batch_obs < int(max_batch_obs):
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0.0:
+            break
+        next_payload = processor_server.get_chunk(timeout_s=float(remaining_s))
+        if next_payload is None:
+            break
+        payload_batch.append(dict(next_payload))
+        batch_obs += _processor_backfill_obs_count(next_payload)
+    return payload_batch
+
+
 def actor(
     cfg: LiberoTrainConfig,
     *,
@@ -259,7 +309,7 @@ def actor(
                 with timer.context("prepare_action_chunk"):
                     robot_state = build_libero_state(current_obs)
                     image_observations = extract_libero_images(current_obs)
-                    
+
                     base_policy_input = build_libero_policy_input(
                         prompt=task_prompt,
                         state=robot_state,
@@ -478,24 +528,29 @@ def processor(
 ) -> None:
     runtime_cfg = cfg.runtime
     trainer_transport_cfg = runtime_cfg.trainer_transport
-    if cfg.backfill_policy.enabled:
-        endpoint_cfg = SimpleNamespace(
-            policy=SimpleNamespace(
-                type=cfg.policy.type,
-                host=cfg.backfill_policy.host,
-                port=cfg.backfill_policy.port,
-            ),
-            env=SimpleNamespace(action_dim=cfg.env.action_dim),
+
+    if not cfg.backfill_policy.enabled:
+        raise ValueError(
+            "processor requires a dedicated backfill policy backend; "
+            "set backfill_policy.enabled=true and configure "
+            "backfill_policy.host/backfill_policy.port explicitly"
         )
-        policy_client = build_policy_client(endpoint_cfg, logger=logger)
-        backfill_backend = (
-            f"{cfg.policy.type}:{cfg.backfill_policy.host}:"
-            f"{cfg.backfill_policy.port}"
-        )
-    else:
-        policy_client = build_policy_client(cfg, logger=logger)
-        backfill_backend = describe_policy_backend(cfg)
-    logger.info("Processor backfill backend: %s", backfill_backend)
+
+    endpoint_cfg = SimpleNamespace(
+        policy=SimpleNamespace(
+            type=cfg.policy.type,
+            host=cfg.backfill_policy.host,
+            port=cfg.backfill_policy.port,
+        ),
+        env=SimpleNamespace(action_dim=cfg.env.action_dim),
+    )
+    
+    policy_client = build_policy_client(endpoint_cfg, logger=logger)
+    backfill_backend = (
+        f"{cfg.policy.type}:{cfg.backfill_policy.host}:"
+        f"{cfg.backfill_policy.port}"
+    )
+    logger.info("Processor dedicated backfill backend: %s", backfill_backend)
 
     assembler = BatchAwareLiberoTransitionAssembler(
         policy_client=policy_client,
@@ -596,6 +651,13 @@ def processor(
         logger=logger,
     )
     processor_server.start()
+    if cfg.processor_batching.enabled:
+        logger.info(
+            "processor microbatch enabled: max_batch_chunks=%s max_batch_obs=%s max_wait_ms=%s",
+            int(cfg.processor_batching.max_batch_chunks),
+            int(cfg.processor_batching.max_batch_obs),
+            int(cfg.processor_batching.max_wait_ms),
+        )
 
     try:
         while True:
@@ -609,42 +671,73 @@ def processor(
                     break
                 continue
 
-            chunk_seq_value = int(payload["chunk_seq"])
+            payload_batch = _collect_processor_payload_batch(
+                processor_server=processor_server,
+                first_payload=payload,
+                batching_cfg=cfg.processor_batching,
+            )
+            batch_chunk_seqs = [
+                int(current_payload["chunk_seq"]) for current_payload in payload_batch
+            ]
             should_log_timer = False
             try:
-                timer.tick("total")
-                assembled_chunk = processor_pipeline.process_payload(
-                    payload=payload,
+                batch_start_time = time.time()
+                assembled_chunks = processor_pipeline.process_payload_batch(
+                    payloads=payload_batch,
                     timer=timer,
                 )
-                with timer.context("commit_replay"):
-                    for transition in assembled_chunk.transitions:
-                        data_store.insert(transition)
-                    next_committed_env_steps = int(
-                        committed_env_steps + assembled_chunk.env_steps_delta
+                if len(assembled_chunks) != len(payload_batch):
+                    raise RuntimeError(
+                        "processor pipeline returned a mismatched batch size: "
+                        f"got {len(assembled_chunks)} expected {len(payload_batch)}"
                     )
-                    should_log_timer = processor_cadence_tracker.advance(
-                        env_steps_after_chunk=int(next_committed_env_steps),
-                        trainer_session=trainer_session,
-                        update_context_prefix="processor_commit_step",
-                        failure_message=(
-                            "processor trainer transport update failed "
-                            "repeatedly; aborting processor run"
-                        ),
+
+                for current_payload, assembled_chunk in zip(payload_batch, assembled_chunks):
+                    chunk_seq_value = int(current_payload["chunk_seq"])
+                    with timer.context("commit_replay"):
+                        for transition in assembled_chunk.transitions:
+                            data_store.insert(transition)
+                        next_committed_env_steps = int(
+                            committed_env_steps + assembled_chunk.env_steps_delta
+                        )
+                        should_log_timer = bool(
+                            should_log_timer
+                            or processor_cadence_tracker.advance(
+                                env_steps_after_chunk=int(next_committed_env_steps),
+                                trainer_session=trainer_session,
+                                update_context_prefix="processor_commit_step",
+                                failure_message=(
+                                    "processor trainer transport update failed "
+                                    "repeatedly; aborting processor run"
+                                ),
+                            )
+                        )
+                        committed_env_steps = int(next_committed_env_steps)
+                    processor_server.mark_chunk_committed(chunk_seq=int(chunk_seq_value))
+                    processor_server.flush_ready_episode_markers()
+                    _publish_flushed_episode_markers(
+                        processor_server.consume_flushed_episode_markers()
                     )
-                    committed_env_steps = int(next_committed_env_steps)
-                timer.tock("total")
-                processor_server.mark_chunk_committed(chunk_seq=int(chunk_seq_value))
-                processor_server.flush_ready_episode_markers()
-                _publish_flushed_episode_markers(
-                    processor_server.consume_flushed_episode_markers()
+
+                _record_timer_duration(
+                    timer=timer,
+                    stage_name="total",
+                    duration_s=time.time() - batch_start_time,
+                    count=len(payload_batch),
                 )
                 if should_log_timer:
                     append_jsonl(
                         processor_timer_log_path,
                         {
                             "source": "processor",
-                            "chunk_seq": int(chunk_seq_value),
+                            "chunk_seq": int(batch_chunk_seqs[-1]),
+                            "microbatch_chunk_count": int(len(payload_batch)),
+                            "microbatch_obs_count": int(
+                                sum(
+                                    _processor_backfill_obs_count(current_payload)
+                                    for current_payload in payload_batch
+                                )
+                            ),
                             "committed_env_steps": int(committed_env_steps),
                             "timer": timer.get_average_times(),
                             "transport": trainer_session.status(),
@@ -653,13 +746,16 @@ def processor(
                     )
             except Exception:
                 logger.exception(
-                    "processor failed: chunk_seq=%s episode_id=%s",
-                    int(chunk_seq_value),
-                    int(payload.get("episode_id", -1)),
+                    "processor failed: chunk_seq_range=%s..%s batch_size=%s episode_id=%s",
+                    int(batch_chunk_seqs[0]),
+                    int(batch_chunk_seqs[-1]),
+                    int(len(payload_batch)),
+                    int(payload_batch[0].get("episode_id", -1)),
                 )
                 raise
             finally:
-                processor_server.task_done()
+                for _ in payload_batch:
+                    processor_server.task_done()
     except KeyboardInterrupt:
         logger.info("processor interrupted; shutting down gracefully")
     finally:
@@ -777,6 +873,7 @@ def learner(
     wandb_cfg.update(
         {
             "project": cfg.wandb.project,
+            "entity": cfg.wandb.entity,
             "exp_descriptor": run_name,
             "tag": [run_name],
             "group": cfg.wandb.group,
