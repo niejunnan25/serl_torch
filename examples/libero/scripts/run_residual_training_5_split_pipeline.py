@@ -409,11 +409,8 @@ def actor(
                 if episode_done:
                     break
 
-            trainer_session.update(
+            trainer_session.update_until_success(
                 context="episode_end",
-                failure_message=(
-                    "trainer transport update failed repeatedly; aborting actor run"
-                ),
             )
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
@@ -476,11 +473,8 @@ def actor(
                     None if int(next_chunk_seq) <= 0 else int(next_chunk_seq - 1)
                 ),
             )
-            trainer_session.update(
+            trainer_session.update_until_success(
                 context="shutdown",
-                failure_message=(
-                    "trainer transport update failed repeatedly; aborting actor run"
-                ),
             )
         except Exception:  # noqa: BLE001
             pass

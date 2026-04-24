@@ -103,7 +103,7 @@ class ProcessorClient:
             request_type="submit-chunk",
             payload=payload,
             context=context,
-            retry_limit=int(self._submit_retry_limit),
+            retry_limit=None,
         )
 
     def finish(
@@ -176,27 +176,44 @@ class ProcessorClient:
         request_type: str,
         payload: dict[str, Any],
         context: str,
-        retry_limit: int,
+        retry_limit: int | None,
     ) -> dict[str, Any]:
+        next_log_time = 0.0
         while True:
             response = self._client.request(
                 str(request_type),
                 payload,
             )
             if response is not None:
+                if int(self._consecutive_failures) > 0:
+                    self._logger.info(
+                        "processor request recovered: type=%s context=%s "
+                        "consecutive_failures=%s processor_status=%s",
+                        str(request_type),
+                        str(context),
+                        int(self._consecutive_failures),
+                        dict(self._last_status),
+                    )
                 self._consecutive_failures = 0
                 return self._update_last_status(response)
             self._consecutive_failures += 1
-            self._logger.warning(
-                "processor request failed: type=%s context=%s consecutive_failures=%s processor_status=%s",
-                str(request_type),
-                str(context),
-                int(self._consecutive_failures),
-                dict(self._last_status),
-            )
-            if int(self._consecutive_failures) >= int(retry_limit):
+            now = time.monotonic()
+            if int(self._consecutive_failures) == 1 or now >= next_log_time:
+                self._logger.warning(
+                    "processor request waiting: type=%s context=%s "
+                    "consecutive_failures=%s processor_status=%s",
+                    str(request_type),
+                    str(context),
+                    int(self._consecutive_failures),
+                    dict(self._last_status),
+                )
+                next_log_time = now + 30.0
+            if retry_limit is not None and int(self._consecutive_failures) >= int(
+                retry_limit
+            ):
                 raise RuntimeError(
-                    f"processor request {str(request_type)!r} failed repeatedly; aborting actor run"
+                    f"processor request {str(request_type)!r} failed repeatedly; "
+                    "aborting actor run"
                 )
             time.sleep(0.1)
 

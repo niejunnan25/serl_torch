@@ -16,8 +16,10 @@ class _FakeTrainerClient:
         self.raise_status = False
         self.wait_until_committed_result = True
         self.wait_until_committed_calls = 0
+        self.update_call_count = 0
 
     def update(self) -> bool:
+        self.update_call_count += 1
         if self.update_results:
             return bool(self.update_results.pop(0))
         return True
@@ -62,6 +64,22 @@ def test_trainer_session_update_raises_after_threshold() -> None:
     assert session.update(context="step_1", max_failures=2) is False
     with pytest.raises(RuntimeError, match="trainer transport update failed repeatedly"):
         session.update(context="step_2", max_failures=2)
+
+
+def test_trainer_session_update_until_success_retries_transient_failures() -> None:
+    client = _FakeTrainerClient()
+    client.update_results = [False, False, True]
+    session = TrainerClientSession(
+        client=client,
+        logger=logging.getLogger(__name__),
+    )
+
+    assert session.update_until_success(
+        context="step_10",
+        retry_sleep_s=0.0,
+        log_every_s=0.0,
+    )
+    assert client.update_call_count == 3
 
 
 def test_trainer_session_request_optional_does_not_raise() -> None:
@@ -135,13 +153,13 @@ def test_trainer_session_flush_waits_for_commit() -> None:
         session.flush(context="shutdown", wait_until_committed=True)
 
 
-def test_trainer_session_flush_raises_when_update_did_not_succeed() -> None:
+def test_trainer_session_flush_retries_update_before_waiting_for_commit() -> None:
     client = _FakeTrainerClient()
-    client.update_results = [False]
+    client.update_results = [False, True]
     session = TrainerClientSession(
         client=client,
         logger=logging.getLogger(__name__),
     )
-    with pytest.raises(RuntimeError, match="update did not succeed during flush"):
-        session.flush(context="episode_end", wait_until_committed=True)
-    assert client.wait_until_committed_calls == 0
+    session.flush(context="episode_end", wait_until_committed=True)
+    assert client.update_call_count == 2
+    assert client.wait_until_committed_calls == 1

@@ -43,6 +43,29 @@ class _FailingTrainerSession:
         raise RuntimeError("boom")
 
 
+class _BlockingTrainerSession:
+    def __init__(self) -> None:
+        self.update_calls: list[tuple[str, str | None]] = []
+        self.update_until_success_calls: list[str] = []
+
+    def update(
+        self,
+        *,
+        context: str,
+        failure_message: str | None = None,
+    ) -> bool:
+        self.update_calls.append((str(context), failure_message))
+        raise RuntimeError("cadence should prefer update_until_success")
+
+    def update_until_success(
+        self,
+        *,
+        context: str,
+    ) -> bool:
+        self.update_until_success_calls.append(str(context))
+        return True
+
+
 def test_env_step_cadence_tracker_advances_boundaries_across_chunks() -> None:
     trainer_session = _FakeTrainerSession()
     tracker = EnvStepCadenceTracker(steps_per_update=5, log_period=4)
@@ -99,6 +122,23 @@ def test_env_step_cadence_tracker_handles_multiple_updates_in_one_chunk() -> Non
         ("processor_commit_step_6", "processor update failed"),
         ("processor_commit_step_9", "processor update failed"),
     ]
+
+
+def test_env_step_cadence_tracker_prefers_blocking_update_when_available() -> None:
+    trainer_session = _BlockingTrainerSession()
+    tracker = EnvStepCadenceTracker(steps_per_update=5, log_period=10)
+
+    assert (
+        tracker.advance(
+            env_steps_after_chunk=6,
+            trainer_session=trainer_session,
+            update_context_prefix="env_step",
+            failure_message="legacy failure message",
+        )
+        is False
+    )
+    assert trainer_session.update_until_success_calls == ["env_step_5"]
+    assert trainer_session.update_calls == []
 
 
 def test_env_step_cadence_tracker_rejects_invalid_configuration() -> None:

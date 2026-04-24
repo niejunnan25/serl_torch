@@ -132,13 +132,13 @@ def test_processor_submit_tolerates_brief_queue_backpressure() -> None:
         )
         assert first_response["accepted_chunk_seq"] == 0
 
-        first_payload = server.get_chunk(timeout_s=1.0)
-        assert first_payload == {"chunk_seq": 0, "episode_id": 1}
-
         release_done = threading.Event()
+        released_payload: list[dict[str, object]] = []
 
         def _release_queue_slot() -> None:
-            time.sleep(0.3)
+            time.sleep(0.7)
+            first_payload = server.get_chunk(timeout_s=1.0)
+            released_payload.append(dict(first_payload or {}))
             server.mark_chunk_committed(chunk_seq=0)
             server.task_done()
             release_done.set()
@@ -152,8 +152,9 @@ def test_processor_submit_tolerates_brief_queue_backpressure() -> None:
         )
         releaser.join(timeout=1.0)
         assert release_done.is_set()
+        assert released_payload == [{"chunk_seq": 0, "episode_id": 1}]
         assert second_response["accepted_chunk_seq"] == 1
-        assert second_response["deduped"] is False
+        assert second_response["deduped"] is True
 
         second_payload = server.get_chunk(timeout_s=1.0)
         assert second_payload == {"chunk_seq": 1, "episode_id": 1}
@@ -303,14 +304,17 @@ def test_processor_flush_failure_keeps_pending_episode_marker() -> None:
         {"episode_id": 3, "last_chunk_seq": 6}
     )
 
-    with pytest.raises(RuntimeError, match="flush failed once"):
-        server.flush_ready_episode_markers()
-    assert server.status_snapshot()["pending_episode_flushes"] == 1
-    assert server.consume_flushed_episode_markers() == []
+    try:
+        with pytest.raises(RuntimeError, match="flush failed once"):
+            server.flush_ready_episode_markers()
+        assert server.status_snapshot()["pending_episode_flushes"] == 1
+        assert server.consume_flushed_episode_markers() == []
 
-    server.flush_ready_episode_markers()
-    assert flush_calls == [("episode_3_end", False), ("episode_3_end", False)]
-    assert server.status_snapshot()["pending_episode_flushes"] == 0
-    assert server.consume_flushed_episode_markers() == [
-        {"episode_id": 3, "last_chunk_seq": 6}
-    ]
+        server.flush_ready_episode_markers()
+        assert flush_calls == [("episode_3_end", False), ("episode_3_end", False)]
+        assert server.status_snapshot()["pending_episode_flushes"] == 0
+        assert server.consume_flushed_episode_markers() == [
+            {"episode_id": 3, "last_chunk_seq": 6}
+        ]
+    finally:
+        server.stop()

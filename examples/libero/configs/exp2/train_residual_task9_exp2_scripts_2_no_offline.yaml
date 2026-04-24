@@ -17,7 +17,7 @@ runtime:
   trainer_transport:
     mode: sync_commit
     data_port: 50276
-    control_timeout_ms: 800
+    control_timeout_ms: 2000
     data_queue_capacity: 8
     data_socket_hwm: 8
     commit_poll_ms: 20

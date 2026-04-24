@@ -58,7 +58,7 @@ class TrainerClientSession:
         *,
         context: str,
         log_prefix: str | None = None,
-        max_failures: int = 5,
+        max_failures: int | None = 5,
         failure_message: str | None = None,
     ) -> bool:
         active_log_prefix = (
@@ -76,13 +76,64 @@ class TrainerClientSession:
             int(self._update_failures),
             self.status(),
         )
-        if int(self._update_failures) >= int(max_failures):
+        if max_failures is not None and int(self._update_failures) >= int(max_failures):
             raise RuntimeError(
                 str(failure_message)
                 if failure_message is not None
                 else f"{active_log_prefix} update failed repeatedly"
             )
         return False
+
+    def update_until_success(
+        self,
+        *,
+        context: str,
+        log_prefix: str | None = None,
+        retry_sleep_s: float = 0.5,
+        max_retry_sleep_s: float = 5.0,
+        log_every_s: float = 30.0,
+    ) -> bool:
+        active_log_prefix = (
+            self._log_prefix if log_prefix is None else str(log_prefix)
+        )
+        next_log_time = 0.0
+        sleep_s = max(0.0, float(retry_sleep_s))
+        max_sleep_s = max(0.0, float(max_retry_sleep_s))
+        log_interval_s = max(0.0, float(log_every_s))
+
+        while True:
+            ok = bool(self._client.update())
+            if ok:
+                if int(self._update_failures) > 0:
+                    self._logger.info(
+                        "%s update recovered: context=%s "
+                        "consecutive_failures=%s status=%s",
+                        active_log_prefix,
+                        str(context),
+                        int(self._update_failures),
+                        self.status(),
+                    )
+                self._update_failures = 0
+                return True
+
+            self._update_failures += 1
+            now = time.monotonic()
+            if int(self._update_failures) == 1 or now >= next_log_time:
+                self._logger.warning(
+                    "%s update waiting: context=%s consecutive_failures=%s status=%s",
+                    active_log_prefix,
+                    str(context),
+                    int(self._update_failures),
+                    self.status(),
+                )
+                next_log_time = now + log_interval_s
+
+            if sleep_s > 0.0:
+                time.sleep(sleep_s)
+                if max_sleep_s > sleep_s:
+                    sleep_s = min(max_sleep_s, max(sleep_s * 1.5, 0.001))
+            else:
+                time.sleep(0.0)
 
     def request(
         self,
@@ -140,7 +191,7 @@ class TrainerClientSession:
         context: str,
         wait_until_committed: bool,
         log_prefix: str | None = None,
-        max_update_failures: int = 5,
+        max_update_failures: int | None = None,
         update_failure_message: str | None = None,
         flush_update_failure_message: str | None = None,
         wait_timeout_message: str | None = None,
@@ -148,12 +199,18 @@ class TrainerClientSession:
         active_log_prefix = (
             self._log_prefix if log_prefix is None else str(log_prefix)
         )
-        updated = self.update(
-            context=context,
-            log_prefix=active_log_prefix,
-            max_failures=max_update_failures,
-            failure_message=update_failure_message,
-        )
+        if max_update_failures is None:
+            updated = self.update_until_success(
+                context=context,
+                log_prefix=active_log_prefix,
+            )
+        else:
+            updated = self.update(
+                context=context,
+                log_prefix=active_log_prefix,
+                max_failures=max_update_failures,
+                failure_message=update_failure_message,
+            )
         if not bool(updated):
             if bool(wait_until_committed):
                 raise RuntimeError(
@@ -171,5 +228,8 @@ class TrainerClientSession:
             raise RuntimeError(
                 str(wait_timeout_message)
                 if wait_timeout_message is not None
-                else f"{active_log_prefix} wait_until_committed timed out: context={str(context)}"
+                else (
+                    f"{active_log_prefix} wait_until_committed timed out: "
+                    f"context={str(context)}"
+                )
             )

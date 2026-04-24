@@ -229,22 +229,34 @@ def actor(
 
     def _update_trainer_transport(*, context: str) -> bool:
         nonlocal consecutive_update_failures
-        ok = bool(client.update())
-        if ok:
-            consecutive_update_failures = 0
-            return True
-        consecutive_update_failures += 1
-        logger.warning(
-            "trainer transport update failed: context=%s consecutive_failures=%s status=%s",
-            str(context),
-            int(consecutive_update_failures),
-            _transport_status(),
-        )
-        if int(consecutive_update_failures) >= 5:
-            raise RuntimeError(
-                "trainer transport update failed repeatedly; aborting actor run"
-            )
-        return False
+        next_log_time = 0.0
+        retry_sleep_s = 0.5
+        while True:
+            ok = bool(client.update())
+            if ok:
+                if int(consecutive_update_failures) > 0:
+                    logger.info(
+                        "trainer transport update recovered: context=%s "
+                        "consecutive_failures=%s status=%s",
+                        str(context),
+                        int(consecutive_update_failures),
+                        _transport_status(),
+                    )
+                consecutive_update_failures = 0
+                return True
+            consecutive_update_failures += 1
+            now = time.monotonic()
+            if int(consecutive_update_failures) == 1 or now >= next_log_time:
+                logger.warning(
+                    "trainer transport update waiting: context=%s "
+                    "consecutive_failures=%s status=%s",
+                    str(context),
+                    int(consecutive_update_failures),
+                    _transport_status(),
+                )
+                next_log_time = now + 30.0
+            time.sleep(retry_sleep_s)
+            retry_sleep_s = min(5.0, retry_sleep_s * 1.5)
 
     def _send_rollout_stats(*, payload: dict[str, Any]) -> None:
         nonlocal consecutive_stats_failures

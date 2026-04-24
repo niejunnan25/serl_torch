@@ -49,10 +49,19 @@ class EnvStepCadenceTracker:
 
         should_log_timer = False
         while int(self.next_update_step) <= int(target_env_steps):
-            trainer_session.update(
-                context=f"{str(update_context_prefix)}_{int(self.next_update_step)}",
-                failure_message=failure_message,
+            context = f"{str(update_context_prefix)}_{int(self.next_update_step)}"
+            update_until_success = getattr(
+                trainer_session,
+                "update_until_success",
+                None,
             )
+            if callable(update_until_success):
+                update_until_success(context=context)
+            else:
+                trainer_session.update(
+                    context=context,
+                    failure_message=failure_message,
+                )
             self.next_update_step += int(self.steps_per_update)
 
         while int(self.next_log_step) <= int(target_env_steps):
