@@ -8,6 +8,7 @@ from agentlace.data.data_store import QueuedDataStore
 import gym
 import numpy as np
 
+import serl_launcher.common.trainer_transport as trainer_transport_module
 from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.common.trainer_transport import build_actor_trainer_transport
 from serl_launcher.common.trainer_transport import build_learner_trainer_transport
@@ -33,6 +34,64 @@ def _transition(step: int) -> dict:
         "masks": np.float32(1.0),
         "dones": False,
     }
+
+
+def test_sync_commit_transport_treats_missing_ack_as_best_effort(monkeypatch) -> None:
+    class _MissingAckTrainerClient:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self.req_rep_client = None
+
+        def recv_network_callback(self, callback) -> None:
+            del callback
+
+        def update(self) -> bool:
+            return False
+
+        def request(self, type, payload):
+            del type, payload
+            return None
+
+        def get_server_last_update_id(self, name):
+            del name
+            return None
+
+        def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        trainer_transport_module,
+        "AgentlaceTrainerClient",
+        _MissingAckTrainerClient,
+    )
+    trainer_port = _find_free_port()
+    broadcast_port = _find_free_port()
+    data_port = _find_free_port()
+    transport_cfg = TrainerTransportConfig(
+        mode="sync_commit",
+        data_port=int(data_port),
+        control_timeout_ms=10,
+        data_queue_capacity=4,
+        data_socket_hwm=4,
+        commit_poll_ms=10,
+        wait_committed_on_episode_end=False,
+        wait_committed_on_shutdown=False,
+    )
+    actor_store = QueuedDataStore(capacity=8)
+    actor = build_actor_trainer_transport(
+        store_name="actor_env",
+        server_ip="127.0.0.1",
+        trainer_port=trainer_port,
+        broadcast_port=broadcast_port,
+        transport_cfg=transport_cfg,
+        data_store=actor_store,
+        wait_for_server=False,
+    )
+    try:
+        actor_store.insert(_transition(0))
+        assert actor.update() is True
+    finally:
+        actor.stop()
 
 
 def test_async_commit_transport_commits_without_duplicates() -> None:

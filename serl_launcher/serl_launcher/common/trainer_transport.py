@@ -435,8 +435,12 @@ class _SyncCommitActorTransport:
         timeout_ms: int,
         log_level: int,
     ) -> None:
+        self._logger = logging.getLogger(__name__)
+        self._logger.setLevel(int(log_level))
         self._store_name = str(store_name)
         self._data_store = data_store
+        self._consecutive_update_misses = 0
+        self._next_update_warning_time = 0.0
         self._client = AgentlaceTrainerClient(
             self._store_name,
             server_ip,
@@ -455,7 +459,38 @@ class _SyncCommitActorTransport:
         self._client.recv_network_callback(callback)
 
     def update(self) -> bool:
-        return bool(self._client.update())
+        ok = bool(self._client.update())
+        if ok:
+            if int(self._consecutive_update_misses) > 0:
+                self._logger.info(
+                    "sync_commit update recovered: store=%s consecutive_misses=%s",
+                    self._store_name,
+                    int(self._consecutive_update_misses),
+                )
+            self._consecutive_update_misses = 0
+            return True
+
+        self._consecutive_update_misses += 1
+        now = time.monotonic()
+        if (
+            int(self._consecutive_update_misses) == 1
+            or now >= float(self._next_update_warning_time)
+        ):
+            self._logger.warning(
+                "sync_commit update missed ack; continuing with SERL-style "
+                "best-effort semantics: store=%s consecutive_misses=%s "
+                "local_latest_data_id=%s",
+                self._store_name,
+                int(self._consecutive_update_misses),
+                int(self._data_store.latest_data_id()),
+            )
+            self._next_update_warning_time = now + 30.0
+
+        # Original SERL actors call TrainerClient.update() as a best-effort
+        # flush and do not abort when agentlace reports a transient missing ack.
+        # The next update asks the learner for its last_update_id, so any
+        # unacknowledged local range is retried instead of being dropped.
+        return True
 
     def request(self, type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         return self._client.request(type, payload)
