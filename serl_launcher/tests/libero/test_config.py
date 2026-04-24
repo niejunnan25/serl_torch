@@ -47,10 +47,13 @@ class LiberoConfigTest(unittest.TestCase):
         self.assertEqual(parsed.backfill_policy.max_pending_chunks, 2)
         self.assertEqual(parsed.backfill_policy.mode, "thread")
         self.assertIsNone(parsed.wandb.entity)
+        self.assertEqual(parsed.wandb.mode, "online")
         self.assertFalse(parsed.processor_batching.enabled)
         self.assertEqual(parsed.processor_batching.max_batch_chunks, 4)
         self.assertEqual(parsed.processor_batching.max_batch_obs, 24)
         self.assertEqual(parsed.processor_batching.max_wait_ms, 3)
+        self.assertFalse(parsed.recycle.enabled)
+        self.assertEqual(parsed.recycle.output_root, "raw_rollout_recycle")
         self.assertEqual(
             parsed.runtime.processor_transport.port,
             int(parsed.runtime.trainer_transport.data_port) + 10,
@@ -149,6 +152,22 @@ class LiberoConfigTest(unittest.TestCase):
         ):
             parse_train_cfg(cfg)
 
+    def test_parse_train_cfg_rejects_blank_recycle_output_root(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.recycle = {"enabled": True, "output_root": "   "}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "recycle.output_root must be a non-empty string",
+        ):
+            parse_train_cfg(cfg)
+
     def test_parse_train_cfg_reads_wandb_entity_from_env(self) -> None:
         cfg = OmegaConf.load(
             Path(__file__).resolve().parents[3]
@@ -177,6 +196,51 @@ class LiberoConfigTest(unittest.TestCase):
             parsed = parse_train_cfg(cfg)
 
         self.assertEqual(parsed.wandb.entity, "explicit-team")
+
+    def test_parse_train_cfg_reads_explicit_wandb_mode(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_optimized.yaml"
+        )
+        cfg.wandb.mode = "offline"
+        cfg.wandb.debug = False
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.wandb.mode, "offline")
+
+    def test_parse_train_cfg_falls_back_to_debug_for_wandb_mode(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        del cfg.wandb["mode"]
+        cfg.wandb.debug = True
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.wandb.mode, "disabled")
+
+    def test_parse_train_cfg_debug_overrides_explicit_wandb_mode(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.wandb.mode = "online"
+        cfg.wandb.debug = True
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.wandb.mode, "disabled")
 
 
 if __name__ == "__main__":

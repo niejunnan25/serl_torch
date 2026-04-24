@@ -1,50 +1,65 @@
+# @package _global_
 global_seed: 0
 libero_root: null
 libero_config_dir: null
 libero_datasets_root: null
 
 task:
-  suite_name: libero_10
-  task_id: 8
+  suite_name: libero_spatial
+  task_id: 9
 
 runtime:
   role: actor
   trainer_host: 127.0.0.1
-  trainer_port: 5688
-  broadcast_port: 5689
+  trainer_port: 50304
+  broadcast_port: 50305
   data_store_queue_size: 2000
   trainer_transport:
-    mode: sync_commit
-    data_port: 5690
-    control_timeout_ms: 800
+    mode: async_commit
+    data_port: 50306
+    control_timeout_ms: 2000
     data_queue_capacity: 8
     data_socket_hwm: 8
     commit_poll_ms: 20
     wait_committed_on_episode_end: false
     wait_committed_on_shutdown: true
 
+processor_transport:
+  host: 127.0.0.1
+  port: 50307
+  timeout_ms: 2000
+  queue_capacity: 4
+
+processor_batching:
+  enabled: true
+  max_batch_chunks: 4
+  max_batch_obs: 24
+  max_wait_ms: 3
+
 wandb:
   project: libero
-  exp_name: ${task.suite_name}_task_${task.task_id}_residual
-  group: residual
+  entity: null
+  exp_name: ${task.suite_name}_task_${task.task_id}_exp2_split_pipeline_no_offline
+  group: libero_spatial_task9_exp2
   mode: online
   debug: false
 
 policy:
   type: openpi
   host: localhost
-  port: 30001
+  port: 50301
+  id: null
 
 backfill_policy:
-  enabled: false
+  enabled: true
   host: ${policy.host}
-  port: ${policy.port}
+  port: 50302
   max_pending_chunks: 2
   mode: thread
 
 recycle:
-  enabled: false
-  output_root: raw_rollout_recycle
+  enabled: true
+  output_root: rollout
 
 env:
   action_dim: 7
@@ -55,7 +70,7 @@ env:
   seed: 7
   remote:
     host: 127.0.0.1
-    port: 30000
+    port: 50300
     timeout_sec: 180.0
 
 obs:
@@ -76,7 +91,7 @@ encoder:
   use_proprio: true
   proprio_latent_dim: 64
   resnet:
-    model_name: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings
@@ -97,14 +112,15 @@ sac:
   std_max: 5.0
   discount: 0.99
   soft_target_update_rate: 0.005
-  temperature_init: 1.0
+  temperature_init: 0.01
   backup_entropy: true
   critic_ensemble_size: 2
   critic_subsample_size: 2
-  utd_ratio: 1
+  utd_ratio: 4
   otf_num_samples: 1
   cql_n_actions: 10
   cql_temperature: 1.0
+  target_entropy: null
   optimizer:
     type: adamw
     weight_decay: 1.0e-4
@@ -119,8 +135,8 @@ replay:
 
 offline:
   enabled: false
-  prepared_path: data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
-  ratio: 0.5
+  prepared_path: null
+  ratio: 0.0
   capacity: 50000
   load_max_episodes: null
   load_max_transitions: null
@@ -131,20 +147,21 @@ offline:
     output_root: data/residual/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
-    filter_unrepresentable_steps: false
+    filter_unrepresentable_steps: true
 
 training:
   training_starts: 1000
+  random_steps: 0
   steps_per_update: 30
-  critic_actor_ratio: 4
-  max_env_steps: 300000
-  max_update_steps: 300000
+  critic_actor_ratio: 2
+  max_env_steps: 600000
+  max_update_steps: 600000
   log_period: 100
   mixed_precision:
     enabled: true
     dtype: bfloat16
   torch_compile:
-    enabled: false
+    enabled: true
     target: actor_critic
     backend: inductor
     mode: default
@@ -155,9 +172,9 @@ training:
     keep: 0
     dir: checkpoints
   async_eval:
-    enabled: false
-    every_episodes: 20
-    episodes: 10
+    enabled: true
+    every_episodes: 50
+    episodes: 50
     start_episode_idx: 0
     max_env_steps_per_episode: null
     deterministic: true
@@ -167,23 +184,21 @@ training:
     worker_log_file: async_eval_worker.log
     checkpoint:
       dir: async_eval_checkpoints
-      # Must stay 0 for now so queued eval checkpoints are never deleted before processing.
       keep: 0
     env:
-      # Async eval must use a dedicated remote env server and must not share the
-      # training actor's env.remote.host/port pair.
       backend: remote
       remote:
         host: 127.0.0.1
-        port: 30010
+        port: 50303
         timeout_sec: 180.0
 
 logging:
   summary_file: summary.json
+  episode_log_file: null
 
 launch:
-  output_root: outputs/libero
+  output_root: outputs/exp2/${task.suite_name}_task${task.task_id}/split_pipeline_no_offline
 
 hydra:
   run:
-    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${launch.output_root}/${runtime.role}/${now:%Y-%m-%d_%H-%M-%S}

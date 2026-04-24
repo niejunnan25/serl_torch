@@ -41,6 +41,7 @@ wandb:
   project: libero
   exp_name: ${task.suite_name}_task_${task.task_id}_residual_5_split_serl
   group: residual_5_split_serl
+  mode: online
   debug: false
 
 policy:
@@ -56,6 +57,10 @@ backfill_policy:
   port: 30002
   max_pending_chunks: 2
   mode: thread
+
+recycle:
+  enabled: false
+  output_root: raw_rollout_recycle
 
 env:
   action_dim: 7

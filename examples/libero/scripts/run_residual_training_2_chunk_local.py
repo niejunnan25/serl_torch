@@ -72,6 +72,7 @@ from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.env.offline_data import load_prepared_offline_replay
 from serl_torch.examples.libero.env.offline_data import resolve_and_validate_prepared_paths
+from serl_torch.examples.libero.runtime.raw_rollout_recorder import RawRolloutRecorder
 from serl_torch.examples.libero.runtime.async_eval_runtime import (
     append_async_eval_request,
 )
@@ -203,6 +204,19 @@ def actor(
         "timer_log_path": str(actor_timer_log_path),
         "episode_log_path": str(rollout_log_path),
     }
+    recycle_output_root = Path(cfg.recycle.output_root)
+    if not recycle_output_root.is_absolute():
+        recycle_output_root = (run_dir / recycle_output_root).resolve()
+    recycle_recorder: RawRolloutRecorder | None = None
+    if cfg.recycle.enabled:
+        recycle_recorder = RawRolloutRecorder(
+            output_root=recycle_output_root,
+            logger=logger,
+        )
+        logger.info(
+            "raw rollout recycle enabled: output_root=%s",
+            str(recycle_output_root),
+        )
 
     def _transport_status() -> dict[str, Any]:
         try:
@@ -279,6 +293,7 @@ def actor(
             episode_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
+            episode_chunk_seq = 0
 
             while env_steps < max_env_steps:
                 if transition_assembler.async_transition_assembly_enabled:
@@ -343,6 +358,25 @@ def actor(
                     action_chunk=action_chunk,
                     chunk_result=chunk_result,
                 )
+                if recycle_recorder is not None:
+                    try:
+                        recycle_recorder.append_chunk(
+                            payload={
+                                "episode_id": int(episode_id),
+                                "chunk_seq": int(episode_chunk_seq),
+                                "episode_step_start": int(episode_steps),
+                                "task_prompt": str(task_prompt),
+                                "chunk_result": dict(chunk_result),
+                            }
+                        )
+                    except Exception:
+                        recycle_recorder.record_append_error()
+                        logger.exception(
+                            "raw rollout recycle append failed: episode_id=%s chunk_seq=%s",
+                            int(episode_id),
+                            int(episode_chunk_seq),
+                        )
+                episode_chunk_seq += 1
                 previous_env_steps = int(env_steps)
                 with timer.context("assemble_transitions"):
                     assembled_chunks = transition_assembler.handle_chunk(
@@ -435,6 +469,19 @@ def actor(
             if wait_for_episode_commit:
                 client.wait_until_committed()
             _send_rollout_stats(payload=episode_stats)
+            if recycle_recorder is not None:
+                try:
+                    recycle_recorder.finalize_episode(
+                        marker={
+                            "episode_id": int(episode_id),
+                            "rollout_stats": dict(episode_stats),
+                        }
+                    )
+                except Exception:
+                    logger.exception(
+                        "raw rollout recycle finalize failed: episode_id=%s",
+                        int(episode_id),
+                    )
             progress_bar.set_postfix(
                 episode=int(episode_id),
                 success=int(bool(episode_success)),
@@ -463,12 +510,51 @@ def actor(
                 client.wait_until_committed()
         except Exception:  # noqa: BLE001
             pass
+        pending_recycle_episodes = 0
+        recycle_status: dict[str, Any] = {
+            "enabled": bool(cfg.recycle.enabled),
+            "output_root": str(recycle_output_root),
+            "episodes_written": 0,
+            "steps_written": 0,
+            "append_errors": 0,
+            "write_errors": 0,
+            "pending_episodes": 0,
+        }
+        if recycle_recorder is not None:
+            try:
+                pending_recycle_episodes = recycle_recorder.discard_pending()
+                recycle_status = dict(recycle_recorder.status_snapshot())
+                recycle_status["pending_episodes"] = int(pending_recycle_episodes)
+                logger.info(
+                    "raw rollout recycle summary: output_root=%s episodes_written=%s "
+                    "steps_written=%s append_errors=%s write_errors=%s pending_episodes=%s",
+                    str(recycle_status["output_root"]),
+                    int(recycle_status["episodes_written"]),
+                    int(recycle_status["steps_written"]),
+                    int(recycle_status["append_errors"]),
+                    int(recycle_status["write_errors"]),
+                    int(recycle_status["pending_episodes"]),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("raw rollout recycle cleanup failed")
+                recycle_status["write_errors"] = (
+                    int(recycle_status.get("write_errors", 0)) + 1
+                )
         summary.update(
             {
                 "env_steps": int(env_steps),
                 "episodes": int(episode_id),
                 "successes": int(success_count),
                 "transport": _transport_status(),
+                "recycle_enabled": bool(recycle_status.get("enabled", False)),
+                "recycle_output_root": recycle_status.get("output_root", None),
+                "recycle_episodes_written": int(
+                    recycle_status.get("episodes_written", 0)
+                ),
+                "recycle_steps_written": int(recycle_status.get("steps_written", 0)),
+                "recycle_append_errors": int(recycle_status.get("append_errors", 0)),
+                "recycle_write_errors": int(recycle_status.get("write_errors", 0)),
+                "recycle": recycle_status,
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
@@ -559,6 +645,7 @@ def learner(
             "exp_descriptor": run_name,
             "tag": [run_name],
             "group": cfg.wandb.group,
+            "mode": cfg.wandb.mode,
         }
     )
     wandb_variant = cfg_to_log_payload(cfg)
@@ -568,7 +655,7 @@ def learner(
         wandb_config=wandb_cfg,
         variant=wandb_variant,
         wandb_output_dir=str(wandb_dir),
-        debug=cfg.wandb.debug,
+        mode=cfg.wandb.mode,
     )
     configure_rollout_wandb_metrics(wandb_logger=wandb_logger)
     configure_eval_wandb_metrics(wandb_logger=wandb_logger)

@@ -1,4 +1,5 @@
 import datetime
+import logging
 import tempfile
 from copy import copy
 from socket import gethostname
@@ -6,6 +7,14 @@ from socket import gethostname
 import absl.flags as flags
 import ml_collections
 import wandb
+
+try:
+    import swanlab
+except ModuleNotFoundError:  # pragma: no cover - depends on local extras
+    swanlab = None
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _recursive_flatten_dict(d: dict):
@@ -21,6 +30,23 @@ def _recursive_flatten_dict(d: dict):
     return keys, values
 
 
+def _resolve_sync_modes(mode: str, *, use_swanlab: bool) -> tuple[str | None, str]:
+    resolved_mode = str(mode).lower()
+    if resolved_mode == "online":
+        return ("cloud", "offline") if use_swanlab else (None, "online")
+    if resolved_mode == "offline":
+        return ("local", "offline") if use_swanlab else (None, "offline")
+    if resolved_mode == "disabled":
+        return (None, "disabled")
+    if resolved_mode == "shared":
+        return ("cloud", "offline") if use_swanlab else (None, "online")
+    if resolved_mode == "cloud":
+        return ("cloud", "offline") if use_swanlab else (None, "online")
+    if resolved_mode == "local":
+        return ("local", "offline") if use_swanlab else (None, "offline")
+    raise ValueError(f"Unsupported W&B mode: {resolved_mode!r}")
+
+
 class WandBLogger(object):
     @staticmethod
     def get_default_config():
@@ -33,6 +59,7 @@ class WandBLogger(object):
         # provided)
         config.unique_identifier = ""
         config.group = None
+        config.mode = None
         return config
 
     def __init__(
@@ -40,6 +67,7 @@ class WandBLogger(object):
         wandb_config,
         variant,
         wandb_output_dir=None,
+        mode=None,
         debug=False,
     ):
         self.config = wandb_config
@@ -62,21 +90,45 @@ class WandBLogger(object):
         if "hostname" not in self._variant:
             self._variant["hostname"] = gethostname()
 
-        if debug:
-            mode = "disabled"
-        else:
-            mode = "online"
+        resolved_mode = mode
+        if resolved_mode is None:
+            resolved_mode = getattr(self.config, "mode", None)
+        if resolved_mode in (None, "", "none"):
+            resolved_mode = "disabled" if debug else "online"
+        elif debug:
+            resolved_mode = "disabled"
+
+        use_swanlab = swanlab is not None
+        swanlab_mode, wandb_mode = _resolve_sync_modes(
+            str(resolved_mode).lower(),
+            use_swanlab=use_swanlab,
+        )
+        if swanlab_mode is not None:
+            sync_kwargs = {
+                "mode": swanlab_mode,
+                "wandb_run": False,
+                "logdir": wandb_output_dir,
+            }
+            if self.config.entity not in (None, ""):
+                sync_kwargs["workspace"] = self.config.entity
+            swanlab.sync_wandb(**sync_kwargs)
+        elif str(resolved_mode).lower() != "disabled" and not use_swanlab:
+            LOGGER.warning(
+                "swanlab is not installed; falling back to native wandb mode=%s",
+                str(resolved_mode).lower(),
+            )
 
         self.run = wandb.init(
             config=self._variant,
             project=self.config.project,
             entity=self.config.entity,
+            name=self.config.exp_descriptor,
             group=self.config.group,
-            tags=self.config.tag,
+            tags=getattr(self.config, "tag", None),
             dir=wandb_output_dir,
             id=self.config.experiment_id,
             save_code=True,
-            mode=mode,
+            mode=wandb_mode,
         )
 
         if flags.FLAGS.is_parsed():

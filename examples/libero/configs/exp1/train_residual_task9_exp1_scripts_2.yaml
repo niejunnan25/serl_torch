@@ -1,21 +1,22 @@
+# @package _global_
 global_seed: 0
 libero_root: null
 libero_config_dir: null
 libero_datasets_root: null
 
 task:
-  suite_name: libero_10
-  task_id: 8
+  suite_name: libero_spatial
+  task_id: 9
 
 runtime:
   role: actor
   trainer_host: 127.0.0.1
-  trainer_port: 5688
-  broadcast_port: 5689
+  trainer_port: 50044
+  broadcast_port: 50045
   data_store_queue_size: 2000
   trainer_transport:
     mode: sync_commit
-    data_port: 5690
+    data_port: 50046
     control_timeout_ms: 800
     data_queue_capacity: 8
     data_socket_hwm: 8
@@ -25,26 +26,26 @@ runtime:
 
 wandb:
   project: libero
-  exp_name: ${task.suite_name}_task_${task.task_id}_residual
-  group: residual
-  mode: online
+  exp_name: ${task.suite_name}_task_${task.task_id}_exp1_chunk_local
+  group: libero_spatial_task9_exp1
+  mode: offline
   debug: false
 
 policy:
   type: openpi
   host: localhost
-  port: 30001
+  port: 50041
 
 backfill_policy:
   enabled: false
   host: ${policy.host}
-  port: ${policy.port}
+  port: 50042
   max_pending_chunks: 2
   mode: thread
 
 recycle:
-  enabled: false
-  output_root: raw_rollout_recycle
+  enabled: true
+  output_root: rollout
 
 env:
   action_dim: 7
@@ -55,7 +56,7 @@ env:
   seed: 7
   remote:
     host: 127.0.0.1
-    port: 30000
+    port: 50040
     timeout_sec: 180.0
 
 obs:
@@ -76,7 +77,7 @@ encoder:
   use_proprio: true
   proprio_latent_dim: 64
   resnet:
-    model_name: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings
@@ -97,11 +98,11 @@ sac:
   std_max: 5.0
   discount: 0.99
   soft_target_update_rate: 0.005
-  temperature_init: 1.0
+  temperature_init: 0.01
   backup_entropy: true
   critic_ensemble_size: 2
   critic_subsample_size: 2
-  utd_ratio: 1
+  utd_ratio: 4
   otf_num_samples: 1
   cql_n_actions: 10
   cql_temperature: 1.0
@@ -118,8 +119,8 @@ replay:
   batch_size: 128
 
 offline:
-  enabled: false
-  prepared_path: data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
+  enabled: true
+  prepared_path: /vla/users/niejunnan/codebase/serl_torch/examples/libero/data/residual/offline_data/libero_spatial_task_9/openpi_chunk5_alpha0p1
   ratio: 0.5
   capacity: 50000
   load_max_episodes: null
@@ -131,20 +132,20 @@ offline:
     output_root: data/residual/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
-    filter_unrepresentable_steps: false
+    filter_unrepresentable_steps: true
 
 training:
   training_starts: 1000
   steps_per_update: 30
-  critic_actor_ratio: 4
-  max_env_steps: 300000
-  max_update_steps: 300000
+  critic_actor_ratio: 2
+  max_env_steps: 600000
+  max_update_steps: 600000
   log_period: 100
   mixed_precision:
     enabled: true
     dtype: bfloat16
   torch_compile:
-    enabled: false
+    enabled: true
     target: actor_critic
     backend: inductor
     mode: default
@@ -155,9 +156,9 @@ training:
     keep: 0
     dir: checkpoints
   async_eval:
-    enabled: false
-    every_episodes: 20
-    episodes: 10
+    enabled: true
+    every_episodes: 50
+    episodes: 50
     start_episode_idx: 0
     max_env_steps_per_episode: null
     deterministic: true
@@ -167,23 +168,20 @@ training:
     worker_log_file: async_eval_worker.log
     checkpoint:
       dir: async_eval_checkpoints
-      # Must stay 0 for now so queued eval checkpoints are never deleted before processing.
       keep: 0
     env:
-      # Async eval must use a dedicated remote env server and must not share the
-      # training actor's env.remote.host/port pair.
       backend: remote
       remote:
         host: 127.0.0.1
-        port: 30010
+        port: 50043
         timeout_sec: 180.0
 
 logging:
   summary_file: summary.json
 
 launch:
-  output_root: outputs/libero
+  output_root: outputs/exp1/${task.suite_name}_task${task.task_id}/chunk_local
 
 hydra:
   run:
-    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${launch.output_root}/${runtime.role}/${now:%Y-%m-%d_%H-%M-%S}

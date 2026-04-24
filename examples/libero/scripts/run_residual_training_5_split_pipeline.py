@@ -79,7 +79,9 @@ from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.env.offline_data import load_prepared_offline_replay
-from serl_torch.examples.libero.env.offline_data import resolve_and_validate_prepared_paths
+from serl_torch.examples.libero.env.offline_data import (
+    resolve_and_validate_prepared_paths,
+)
 from serl_torch.examples.libero.runtime.async_eval_runtime import (
     append_async_eval_request,
 )
@@ -106,6 +108,7 @@ from serl_torch.examples.libero.runtime.processor_dispatch import (
 from serl_torch.examples.libero.runtime.processor_pipeline import (
     RolloutProcessorPipeline,
 )
+from serl_torch.examples.libero.runtime.raw_rollout_recorder import RawRolloutRecorder
 from serl_torch.examples.libero.runtime.transition_assembly import (
     BatchAwareLiberoTransitionAssembler,
 )
@@ -114,6 +117,8 @@ from serl_torch.examples.libero.runtime.processor_protocol import (
 )
 
 TRAINER_REQUEST_TYPES = ("send-stats", "actor-progress")
+RECYCLE_RETRY_INITIAL_DELAY_S = 1.0
+RECYCLE_RETRY_MAX_DELAY_S = 30.0
 
 
 def _record_timer_duration(
@@ -367,9 +372,7 @@ def actor(
                 progress_bar.update(int(executed_steps))
                 episode_steps += int(executed_steps)
                 episode_return += float(chunk_summary.reward_sum)
-                episode_success = bool(
-                    episode_success or chunk_summary.episode_success
-                )
+                episode_success = bool(episode_success or chunk_summary.episode_success)
                 latest_env_info = dict(chunk_summary.chunk_info)
                 current_obs = dict(chunk_summary.final_obs)
                 episode_done = bool(
@@ -430,9 +433,7 @@ def actor(
                     episode_return=float(episode_return),
                     init_episode_idx=int(init_episode_idx),
                     success=bool(episode_success),
-                    cumulative_success_rate=float(
-                        success_count / max(1, episode_id)
-                    ),
+                    cumulative_success_rate=float(success_count / max(1, episode_id)),
                     recent_success_rate_20=float(recent_success_rate_20),
                 ),
                 env_info=latest_env_info,
@@ -544,11 +545,10 @@ def processor(
         ),
         env=SimpleNamespace(action_dim=cfg.env.action_dim),
     )
-    
+
     policy_client = build_policy_client(endpoint_cfg, logger=logger)
     backfill_backend = (
-        f"{cfg.policy.type}:{cfg.backfill_policy.host}:"
-        f"{cfg.backfill_policy.port}"
+        f"{cfg.policy.type}:{cfg.backfill_policy.host}:" f"{cfg.backfill_policy.port}"
     )
     logger.info("Processor dedicated backfill backend: %s", backfill_backend)
 
@@ -559,6 +559,20 @@ def processor(
         residual_alpha=cfg.residual.alpha,
     )
     processor_pipeline = RolloutProcessorPipeline.for_libero(assembler=assembler)
+    recycle_output_root = Path(cfg.recycle.output_root)
+    if not recycle_output_root.is_absolute():
+        recycle_output_root = (run_dir / recycle_output_root).resolve()
+    recycle_recorder: RawRolloutRecorder | None = None
+    if cfg.recycle.enabled:
+        recycle_recorder = RawRolloutRecorder(
+            output_root=recycle_output_root,
+            logger=logger,
+        )
+        logger.info(
+            "raw rollout recycle enabled: output_root=%s",
+            str(recycle_output_root),
+        )
+    recycle_retry_markers: deque[dict[str, Any]] = deque()
 
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
     client = TrainerClient(
@@ -613,6 +627,46 @@ def processor(
                     raise_on_exhaustion=False,
                 )
 
+    def _drain_flushed_episode_markers() -> None:
+        processor_server.flush_ready_episode_markers()
+        flushed_markers = processor_server.consume_flushed_episode_markers()
+        if recycle_recorder is not None:
+            ready_retry_markers: list[dict[str, Any]] = []
+            deferred_retry_markers: deque[dict[str, Any]] = deque()
+            now = time.monotonic()
+            while recycle_retry_markers:
+                retry_marker = recycle_retry_markers.popleft()
+                retry_after_s = float(retry_marker.get("_recycle_retry_after_s", 0.0))
+                if retry_after_s <= now:
+                    ready_retry_markers.append(retry_marker)
+                else:
+                    deferred_retry_markers.append(retry_marker)
+            recycle_retry_markers.extend(deferred_retry_markers)
+            markers_to_finalize = [*ready_retry_markers, *flushed_markers]
+            for marker in markers_to_finalize:
+                try:
+                    recycle_recorder.finalize_episode(marker=marker)
+                except Exception:
+                    retry_attempt = int(marker.get("_recycle_retry_attempt", 0)) + 1
+                    retry_delay_s = min(
+                        float(RECYCLE_RETRY_MAX_DELAY_S),
+                        float(RECYCLE_RETRY_INITIAL_DELAY_S)
+                        * (2.0 ** float(max(0, retry_attempt - 1))),
+                    )
+                    retry_marker = dict(marker)
+                    retry_marker["_recycle_retry_attempt"] = int(retry_attempt)
+                    retry_marker["_recycle_retry_after_s"] = time.monotonic() + float(
+                        retry_delay_s
+                    )
+                    recycle_retry_markers.append(retry_marker)
+                    logger.exception(
+                        "raw rollout recycle finalize failed: episode_id=%s retry_attempt=%s retry_in_s=%.1f",
+                        int(marker.get("episode_id", -1)),
+                        int(retry_attempt),
+                        float(retry_delay_s),
+                    )
+        _publish_flushed_episode_markers(flushed_markers)
+
     committed_env_steps = 0
     processor_timer_log_path = run_dir / "processor_timers.jsonl"
     timer = Timer()
@@ -630,6 +684,12 @@ def processor(
         "processed_chunk_seq": -1,
         "committed_env_steps": 0,
         "timer_log_path": str(processor_timer_log_path),
+        "recycle_enabled": bool(cfg.recycle.enabled),
+        "recycle_output_root": str(recycle_output_root),
+        "recycle_episodes_written": 0,
+        "recycle_steps_written": 0,
+        "recycle_append_errors": 0,
+        "recycle_write_errors": 0,
     }
 
     processor_server = ProcessorServer(
@@ -663,10 +723,7 @@ def processor(
         while True:
             payload = processor_server.get_chunk(timeout_s=0.1)
             if payload is None:
-                processor_server.flush_ready_episode_markers()
-                _publish_flushed_episode_markers(
-                    processor_server.consume_flushed_episode_markers()
-                )
+                _drain_flushed_episode_markers()
                 if processor_server.should_stop():
                     break
                 continue
@@ -692,7 +749,9 @@ def processor(
                         f"got {len(assembled_chunks)} expected {len(payload_batch)}"
                     )
 
-                for current_payload, assembled_chunk in zip(payload_batch, assembled_chunks):
+                for current_payload, assembled_chunk in zip(
+                    payload_batch, assembled_chunks
+                ):
                     chunk_seq_value = int(current_payload["chunk_seq"])
                     with timer.context("commit_replay"):
                         for transition in assembled_chunk.transitions:
@@ -713,11 +772,20 @@ def processor(
                             )
                         )
                         committed_env_steps = int(next_committed_env_steps)
-                    processor_server.mark_chunk_committed(chunk_seq=int(chunk_seq_value))
-                    processor_server.flush_ready_episode_markers()
-                    _publish_flushed_episode_markers(
-                        processor_server.consume_flushed_episode_markers()
+                    if recycle_recorder is not None:
+                        try:
+                            recycle_recorder.append_chunk(payload=current_payload)
+                        except Exception:
+                            recycle_recorder.record_append_error()
+                            logger.exception(
+                                "raw rollout recycle append failed: chunk_seq=%s episode_id=%s",
+                                int(chunk_seq_value),
+                                int(current_payload.get("episode_id", -1)),
+                            )
+                    processor_server.mark_chunk_committed(
+                        chunk_seq=int(chunk_seq_value)
                     )
+                    _drain_flushed_episode_markers()
 
                 _record_timer_duration(
                     timer=timer,
@@ -742,6 +810,11 @@ def processor(
                             "timer": timer.get_average_times(),
                             "transport": trainer_session.status(),
                             "processor": processor_server.status_snapshot(),
+                            "recycle": (
+                                None
+                                if recycle_recorder is None
+                                else recycle_recorder.status_snapshot()
+                            ),
                         },
                     )
             except Exception:
@@ -764,9 +837,7 @@ def processor(
         except Exception:  # noqa: BLE001
             pass
         try:
-            _publish_flushed_episode_markers(
-                processor_server.consume_flushed_episode_markers()
-            )
+            _drain_flushed_episode_markers()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -780,6 +851,42 @@ def processor(
             )
         except Exception:  # noqa: BLE001
             pass
+        pending_recycle_episodes = 0
+        recycle_status: dict[str, Any] = {
+            "enabled": bool(cfg.recycle.enabled),
+            "output_root": str(recycle_output_root),
+            "episodes_written": 0,
+            "steps_written": 0,
+            "append_errors": 0,
+            "write_errors": 0,
+            "pending_episodes": 0,
+            "pending_finalize_markers": int(len(recycle_retry_markers)),
+        }
+        if recycle_recorder is not None:
+            try:
+                pending_recycle_episodes = recycle_recorder.discard_pending()
+                recycle_status = dict(recycle_recorder.status_snapshot())
+                recycle_status["pending_episodes"] = int(pending_recycle_episodes)
+                recycle_status["pending_finalize_markers"] = int(
+                    len(recycle_retry_markers)
+                )
+                logger.info(
+                    "raw rollout recycle summary: output_root=%s episodes_written=%s "
+                    "steps_written=%s append_errors=%s write_errors=%s "
+                    "pending_episodes=%s pending_finalize_markers=%s",
+                    str(recycle_status["output_root"]),
+                    int(recycle_status["episodes_written"]),
+                    int(recycle_status["steps_written"]),
+                    int(recycle_status["append_errors"]),
+                    int(recycle_status["write_errors"]),
+                    int(recycle_status["pending_episodes"]),
+                    int(recycle_status["pending_finalize_markers"]),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("raw rollout recycle cleanup failed")
+                recycle_status["write_errors"] = (
+                    int(recycle_status.get("write_errors", 0)) + 1
+                )
         summary.update(
             {
                 "accepted_chunk_seq": int(
@@ -791,6 +898,15 @@ def processor(
                 "committed_env_steps": int(committed_env_steps),
                 "transport": trainer_session.status(),
                 "processor": processor_server.status_snapshot(),
+                "recycle_enabled": bool(recycle_status.get("enabled", False)),
+                "recycle_output_root": recycle_status.get("output_root", None),
+                "recycle_episodes_written": int(
+                    recycle_status.get("episodes_written", 0)
+                ),
+                "recycle_steps_written": int(recycle_status.get("steps_written", 0)),
+                "recycle_append_errors": int(recycle_status.get("append_errors", 0)),
+                "recycle_write_errors": int(recycle_status.get("write_errors", 0)),
+                "recycle": recycle_status,
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
@@ -877,6 +993,7 @@ def learner(
             "exp_descriptor": run_name,
             "tag": [run_name],
             "group": cfg.wandb.group,
+            "mode": cfg.wandb.mode,
         }
     )
     wandb_variant = cfg_to_log_payload(cfg)
@@ -886,7 +1003,7 @@ def learner(
         wandb_config=wandb_cfg,
         variant=wandb_variant,
         wandb_output_dir=str(wandb_dir),
-        debug=cfg.wandb.debug,
+        mode=cfg.wandb.mode,
     )
     configure_rollout_wandb_metrics(wandb_logger=wandb_logger)
     configure_eval_wandb_metrics(wandb_logger=wandb_logger)
@@ -938,7 +1055,9 @@ def learner(
         accepted = int(transport_status.get("accepted_update_id", -1))
         committed = int(transport_status.get("committed_update_id", -1))
         target_last_online_id = max(0, int(target_env_steps) - 1)
-        if accepted < int(target_last_online_id) or committed < int(target_last_online_id):
+        if accepted < int(target_last_online_id) or committed < int(
+            target_last_online_id
+        ):
             return False
         if accepted >= 0 and committed >= 0 and accepted > committed:
             return False
@@ -1272,8 +1391,12 @@ def learner(
     try:
         while update_steps < max_update_steps:
             _maybe_queue_async_eval()
-            online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
-            if _should_stop_after_actor_done(online_update_steps=int(online_update_steps)):
+            online_update_steps = max(
+                0, int(update_steps - offline_pretrain_steps_done)
+            )
+            if _should_stop_after_actor_done(
+                online_update_steps=int(online_update_steps)
+            ):
                 logger.info(
                     "stopping learner after actor env limit: update_steps=%s env_steps=%s replay_size=%s transport=%s",
                     int(update_steps),
@@ -1312,7 +1435,9 @@ def learner(
                 update_metrics = to_jsonable(update_info)
                 now = time.time()
                 elapsed_sec = max(now - last_log_time, 1e-6)
-                updates_since_last_log = max(1, int(update_steps - last_log_update_steps))
+                updates_since_last_log = max(
+                    1, int(update_steps - last_log_update_steps)
+                )
                 updates_per_sec = float(updates_since_last_log) / float(elapsed_sec)
                 last_log_time = now
                 last_log_update_steps = int(update_steps)
@@ -1339,9 +1464,9 @@ def learner(
                         int(batch_mix["online_batch_size"])
                         + int(batch_mix["offline_batch_size"]),
                     )
-                    offline_ratio_actual = float(batch_mix["offline_batch_size"]) / float(
-                        offline_total
-                    )
+                    offline_ratio_actual = float(
+                        batch_mix["offline_batch_size"]
+                    ) / float(offline_total)
                     offline_suffix = (
                         " "
                         f"offline_replay={int(len(offline_replay_buffer))} "

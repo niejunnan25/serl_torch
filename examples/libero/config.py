@@ -50,6 +50,7 @@ class WandbConfig:
     entity: str | None
     exp_name: str
     group: str | None
+    mode: str
     debug: bool
 
 
@@ -198,6 +199,12 @@ class ProcessorBatchingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RecycleConfig:
+    enabled: bool
+    output_root: str
+
+
+@dataclass(frozen=True, slots=True)
 class MixedPrecisionConfig:
     enabled: bool
     dtype: str
@@ -298,6 +305,7 @@ class LiberoTrainConfig:
     policy: PolicyConfig
     backfill_policy: BackfillPolicyConfig
     processor_batching: ProcessorBatchingConfig
+    recycle: RecycleConfig
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
@@ -355,13 +363,9 @@ def _required_str(value: Any, field_name: str) -> str:
 
 def _required_mapping(value: Any, field_name: str) -> DictConfig | dict[str, Any]:
     if value is None:
-        raise ValueError(
-            f"{field_name} must be declared explicitly in the train yaml"
-        )
+        raise ValueError(f"{field_name} must be declared explicitly in the train yaml")
     if not isinstance(value, (DictConfig, dict)):
-        raise ValueError(
-            f"{field_name} must be a mapping, got {type(value).__name__}"
-        )
+        raise ValueError(f"{field_name} must be a mapping, got {type(value).__name__}")
     return value
 
 
@@ -371,9 +375,7 @@ def _required_mapping_key(
     field_name: str,
 ) -> Any:
     if key not in mapping:
-        raise ValueError(
-            f"{field_name} must be declared explicitly in the train yaml"
-        )
+        raise ValueError(f"{field_name} must be declared explicitly in the train yaml")
     return mapping[key]
 
 
@@ -637,6 +639,18 @@ def _parse_processor_transport_cfg(
 def _parse_wandb_cfg(cfg: DictConfig, *, task: TaskConfig) -> WandbConfig:
     wandb_cfg = cfg.get("wandb", {})
     default_exp_name = f"{task.suite_name}_task_{task.task_id}_residual"
+    debug = bool(wandb_cfg.get("debug", False))
+    mode_value = wandb_cfg.get("mode", None)
+    if mode_value is None:
+        resolved_mode = "online"
+    else:
+        resolved_mode = _parse_choice(
+            mode_value,
+            "wandb.mode",
+            allowed=("online", "offline", "disabled"),
+        )
+    if debug:
+        resolved_mode = "disabled"
     return WandbConfig(
         project=_required_str(wandb_cfg.get("project", "libero"), "wandb.project"),
         entity=_optional_str(wandb_cfg.get("entity", os.environ.get("WANDB_ENTITY"))),
@@ -645,7 +659,8 @@ def _parse_wandb_cfg(cfg: DictConfig, *, task: TaskConfig) -> WandbConfig:
             "wandb.exp_name",
         ),
         group=_optional_str(wandb_cfg.get("group", None)),
-        debug=bool(wandb_cfg.get("debug", False)),
+        mode=str(resolved_mode),
+        debug=debug,
     )
 
 
@@ -750,6 +765,19 @@ def _parse_processor_batching_cfg(
         max_wait_ms=_nonnegative_int(
             batching_cfg.get("max_wait_ms", 3),
             "processor_batching.max_wait_ms",
+        ),
+    )
+
+
+def _parse_recycle_cfg(
+    cfg: DictConfig,
+) -> RecycleConfig:
+    recycle_cfg = cfg.get("recycle", {})
+    return RecycleConfig(
+        enabled=bool(recycle_cfg.get("enabled", False)),
+        output_root=_required_str(
+            recycle_cfg.get("output_root", "raw_rollout_recycle"),
+            "recycle.output_root",
         ),
     )
 
@@ -1020,8 +1048,7 @@ def _parse_prepared_path(values: Any) -> str | None:
     if isinstance(values, str):
         return _optional_str(values)
     resolved_values = [
-        _required_str(value, "offline.prepared_path")
-        for value in values
+        _required_str(value, "offline.prepared_path") for value in values
     ]
     if not resolved_values:
         return None
@@ -1051,9 +1078,7 @@ def _parse_offline_prepare_cfg(cfg: DictConfig) -> OfflinePrepareConfig:
             prepare_cfg.get("expert_reference_scale", 1.0),
             "offline.prepare.expert_reference_scale",
         ),
-        clip_residual_to_unit=bool(
-            prepare_cfg.get("clip_residual_to_unit", True)
-        ),
+        clip_residual_to_unit=bool(prepare_cfg.get("clip_residual_to_unit", True)),
         filter_unrepresentable_steps=bool(
             prepare_cfg.get("filter_unrepresentable_steps", False)
         ),
@@ -1201,21 +1226,21 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
                 backend="remote",
                 remote=RemoteEnvConfig(
                     host=_str_or_default(
-                        async_eval_cfg.get("env", {}).get("remote", {}).get(
-                            "host", "127.0.0.1"
-                        ),
+                        async_eval_cfg.get("env", {})
+                        .get("remote", {})
+                        .get("host", "127.0.0.1"),
                         "127.0.0.1",
                     ),
                     port=_int_or_default(
-                        async_eval_cfg.get("env", {}).get("remote", {}).get(
-                            "port", 30010
-                        ),
+                        async_eval_cfg.get("env", {})
+                        .get("remote", {})
+                        .get("port", 30010),
                         30010,
                     ),
                     timeout_sec=_float_or_default(
-                        async_eval_cfg.get("env", {}).get("remote", {}).get(
-                            "timeout_sec", 180.0
-                        ),
+                        async_eval_cfg.get("env", {})
+                        .get("remote", {})
+                        .get("timeout_sec", 180.0),
                         180.0,
                     ),
                 ),
@@ -1407,6 +1432,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         policy=policy,
         backfill_policy=_parse_backfill_policy_cfg(cfg),
         processor_batching=_parse_processor_batching_cfg(cfg),
+        recycle=_parse_recycle_cfg(cfg),
         env=env,
         obs=obs,
         residual=residual,
@@ -1539,6 +1565,7 @@ __all__ = [
     "PolicyBackend",
     "PolicyConfig",
     "ProcessorBatchingConfig",
+    "RecycleConfig",
     "RemoteEnvConfig",
     "ReplayConfig",
     "ResidualConfig",

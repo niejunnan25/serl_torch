@@ -1128,6 +1128,7 @@ def learner(
             "exp_descriptor": run_name,
             "tag": [run_name],
             "group": cfg.wandb.group,
+            "mode": cfg.wandb.mode,
         }
     )
     wandb_variant = cfg_to_log_payload(cfg)
@@ -1137,7 +1138,7 @@ def learner(
         wandb_config=wandb_cfg,
         variant=wandb_variant,
         wandb_output_dir=str(wandb_dir),
-        debug=cfg.wandb.debug,
+        mode=cfg.wandb.mode,
     )
     configure_rollout_wandb_metrics(wandb_logger=wandb_logger)
     configure_eval_wandb_metrics(wandb_logger=wandb_logger)

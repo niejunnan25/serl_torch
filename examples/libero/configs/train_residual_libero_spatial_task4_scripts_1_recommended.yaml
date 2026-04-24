@@ -25,8 +25,8 @@ runtime:
 
 wandb:
   project: libero
-  exp_name: ${task.suite_name}_task_${task.task_id}_exp1_chunk_local
-  group: libero_spatial_task4_exp1
+  exp_name: ${task.suite_name}_task_${task.task_id}_residual
+  group: residual
   debug: false
 
 policy:
@@ -113,7 +113,7 @@ replay:
   batch_size: 128
 
 offline:
-  enabled: true
+  enabled: false
   prepared_path: data/residual/offline_data/libero_spatial_task_4/openpi_chunk5_alpha0p1
   ratio: 0.5
   capacity: 50000
@@ -126,7 +126,7 @@ offline:
     output_root: data/residual/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
-    filter_unrepresentable_steps: true
+    filter_unrepresentable_steps: false
 
 training:
   training_starts: 1000
@@ -139,7 +139,7 @@ training:
     enabled: true
     dtype: bfloat16
   torch_compile:
-    enabled: true
+    enabled: false
     target: actor_critic
     backend: inductor
     mode: default
@@ -151,7 +151,7 @@ training:
     dir: checkpoints
   async_eval:
     enabled: true
-    every_episodes: 50
+    every_episodes: 20
     episodes: 50
     start_episode_idx: 0
     max_env_steps_per_episode: null
@@ -174,8 +174,8 @@ logging:
   summary_file: summary.json
 
 launch:
-  output_root: outputs/exp1/${task.suite_name}_task${task.task_id}/chunk_local
+  output_root: outputs/libero
 
 hydra:
   run:
-    dir: ${launch.output_root}/${runtime.role}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}

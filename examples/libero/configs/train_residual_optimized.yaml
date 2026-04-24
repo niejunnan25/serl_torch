@@ -27,6 +27,7 @@ wandb:
   project: libero
   exp_name: ${task.suite_name}_task_${task.task_id}_residual_optimized
   group: residual_optimized
+  mode: online
   debug: false
 
 policy:

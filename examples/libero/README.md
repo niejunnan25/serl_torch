@@ -780,53 +780,63 @@ python examples/libero/scripts/run_residual_training_1_baseline.py \
 
 最常用的训练入口命令如下。
 
-task4 `chunk_local`：
+这里 `scripts_2` / `scripts_5` 的数字，直接对应 [scripts/](scripts/) 目录里的训练脚本序号：
+
+- `scripts_2` 对应 `run_residual_training_2_chunk_local.py`
+- `scripts_5` 对应 `run_residual_training_5_split_pipeline.py`
+
+另外，`exp1` 里的 `scripts_2 / scripts_5` 配置现在默认都已经开启原始 rollout 数据回收，也就是：
+
+- `recycle.enabled=true`
+- `recycle.output_root=rollout`
+
+task4 `scripts_2`：
 
 ```bash
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 cd /vla/users/niejunnan/codebase/serl_torch
 python examples/libero/scripts/run_residual_training_2_chunk_local.py \
-  --config-name exp1/train_residual_task4_exp1_chunk_local \
+  --config-name exp1/train_residual_task4_exp1_scripts_2 \
   runtime.role=learner \
   libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
 
-task4 `split_pipeline`：
+task4 `scripts_5`：
 
 ```bash
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 cd /vla/users/niejunnan/codebase/serl_torch
 python examples/libero/scripts/run_residual_training_5_split_pipeline.py \
-  --config-name exp1/train_residual_task4_exp1_split_pipeline \
+  --config-name exp1/train_residual_task4_exp1_scripts_5 \
   runtime.role=learner \
   libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
 
-task9 `chunk_local`：
+task9 `scripts_2`：
 
 ```bash
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 cd /vla/users/niejunnan/codebase/serl_torch
 python examples/libero/scripts/run_residual_training_2_chunk_local.py \
-  --config-name exp1/train_residual_task9_exp1_chunk_local \
+  --config-name exp1/train_residual_task9_exp1_scripts_2 \
   runtime.role=learner \
   libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
 
-task9 `split_pipeline`：
+task9 `scripts_5`：
 
 ```bash
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 cd /vla/users/niejunnan/codebase/serl_torch
 python examples/libero/scripts/run_residual_training_5_split_pipeline.py \
-  --config-name exp1/train_residual_task9_exp1_split_pipeline \
+  --config-name exp1/train_residual_task9_exp1_scripts_5 \
   runtime.role=learner \
   libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets
