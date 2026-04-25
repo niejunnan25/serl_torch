@@ -43,6 +43,7 @@ class TrainerClientSession:
         self._status_fallback = status_fallback
         self._log_prefix = str(log_prefix)
         self._update_failures = 0
+        self._best_effort_update_failures = 0
         self._request_failures: dict[str, int] = defaultdict(int)
 
     def status(self) -> dict[str, Any]:
@@ -82,6 +83,47 @@ class TrainerClientSession:
                 if failure_message is not None
                 else f"{active_log_prefix} update failed repeatedly"
             )
+        return False
+
+    def update_best_effort(
+        self,
+        *,
+        context: str,
+        log_prefix: str | None = None,
+        failure_message: str | None = None,
+    ) -> bool:
+        del failure_message
+        active_log_prefix = (
+            self._log_prefix if log_prefix is None else str(log_prefix)
+        )
+        # Match the original SERL actor loop: TrainerClient.update() is a
+        # datastore flush hint, not a liveness check.  When the learner misses
+        # the ack window, local queued data remains available while it stays
+        # inside the queue capacity, and the next update retries from the
+        # learner's last accepted/committed id.
+        ok = bool(self._client.update())
+        if ok:
+            if int(self._best_effort_update_failures) > 0:
+                self._logger.info(
+                    "%s best-effort update recovered: context=%s "
+                    "consecutive_failures=%s status=%s",
+                    active_log_prefix,
+                    str(context),
+                    int(self._best_effort_update_failures),
+                    self.status(),
+                )
+            self._best_effort_update_failures = 0
+            return True
+
+        self._best_effort_update_failures += 1
+        self._logger.warning(
+            "%s best-effort update missed ack: context=%s "
+            "consecutive_failures=%s status=%s",
+            active_log_prefix,
+            str(context),
+            int(self._best_effort_update_failures),
+            self.status(),
+        )
         return False
 
     def update_until_success(
@@ -199,6 +241,13 @@ class TrainerClientSession:
         active_log_prefix = (
             self._log_prefix if log_prefix is None else str(log_prefix)
         )
+        if not bool(wait_until_committed) and max_update_failures is None:
+            self.update_best_effort(
+                context=context,
+                log_prefix=active_log_prefix,
+                failure_message=update_failure_message,
+            )
+            return
         if max_update_failures is None:
             updated = self.update_until_success(
                 context=context,

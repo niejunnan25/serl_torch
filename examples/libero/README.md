@@ -325,7 +325,8 @@ canonical 训练配置是：
 cd /home/hello/codebase/serl_torch
 bash examples/libero/tools/serve_env.sh \
   --host 127.0.0.1 \
-  --port 30000
+  --port 30000 \
+  --gpu-id 6
 ```
 
 `tools/serve_env.sh` 会：
@@ -334,21 +335,24 @@ bash examples/libero/tools/serve_env.sh \
 - 尝试初始化 conda
 - 优先使用你显式指定的 Python / env
 - 默认尝试激活 `/vla/users/niejunnan/envs/libero`
+- 如果传了 `--gpu-id N`，启动前设置 `CUDA_VISIBLE_DEVICES=N` 和 `MUJOCO_EGL_DEVICE_ID=N`
 - 最终执行 LIBERO env server 入口
+
+LIBERO 的 offscreen renderer 走 MuJoCo / robosuite EGL。不要只给 actor 或 policy server 设置 GPU；remote env server 是独立进程，必须在 env server 进程里也指定 GPU。否则 EGL 默认会落到 0 号卡。
 
 如果你更偏好手动激活 conda 环境并直接用 Python 启动，更推荐从 repo root 运行：
 
 ```bash
 conda activate libero
 cd /path/to/serl_torch
-python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30000
+python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30000 --gpu-id 6
 ```
 
 这样只依赖 repo root，不需要再 `cd examples/libero`。如果你不想依赖当前工作目录，也可以直接运行脚本绝对路径：
 
 ```bash
 conda activate libero
-python /path/to/serl_torch/examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30000
+python /path/to/serl_torch/examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30000 --gpu-id 6
 ```
 
 常见可覆盖环境变量：
@@ -356,17 +360,18 @@ python /path/to/serl_torch/examples/libero/scripts/serve_env.py --host 127.0.0.1
 - `LIBERO_CONDA_ENV`
 - `LIBERO_CONDA_PREFIX`
 - `LIBERO_PYTHON_BIN`
+- `LIBERO_ENV_GPU_ID`
 
 例如：
 
 ```bash
-LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30000
+LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30000 --gpu-id 6
 ```
 
 如果你启用 async eval，还需要单独起一个 eval env server，例如：
 
 ```bash
-LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30010
+LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30010 --gpu-id 6
 ```
 
 这个端口必须和 `training.async_eval.env.remote.port` 对齐，并且不能和训练 actor 的 `env.remote.port` 相同。
@@ -691,7 +696,7 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_b
 - `policy`: `127.0.0.1:30101`
 - `eval env`: `127.0.0.1:30110`
 - `learner`: `GPU 5`
-- `actor + policy`: `GPU 6`
+- `actor + policy + env render`: `GPU 6`
 
 1. `pi0_10000` policy server
 
@@ -715,7 +720,7 @@ uv run scripts/serve_policy.py \
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate /vla/users/niejunnan/envs/libero
 cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30100
+python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30100 --gpu-id 6
 ```
 
 3. eval env server
@@ -724,7 +729,7 @@ python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30100
 source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate /vla/users/niejunnan/envs/libero
 cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30110
+python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30110 --gpu-id 6
 ```
 
 4. learner

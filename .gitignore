@@ -196,6 +196,11 @@ examples/libero/training_logs/
 test/results/**
 examples/libero/.local/
 .libero/
+
+# Local auth/session files
+auth.json
+*@outlook.json
+
 .codex
 .codex/
 

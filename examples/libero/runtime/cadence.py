@@ -50,13 +50,19 @@ class EnvStepCadenceTracker:
         should_log_timer = False
         while int(self.next_update_step) <= int(target_env_steps):
             context = f"{str(update_context_prefix)}_{int(self.next_update_step)}"
-            update_until_success = getattr(
+            update_best_effort = getattr(
                 trainer_session,
-                "update_until_success",
+                "update_best_effort",
                 None,
             )
-            if callable(update_until_success):
-                update_until_success(context=context)
+            if callable(update_best_effort):
+                # SERL treats cadence updates as best-effort replay flushes.
+                # A missed ack should be retried on the next cadence, rather
+                # than stopping rollout/processor progress.
+                update_best_effort(
+                    context=context,
+                    failure_message=failure_message,
+                )
             else:
                 trainer_session.update(
                     context=context,

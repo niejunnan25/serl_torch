@@ -62,7 +62,7 @@ def launch_async_eval_worker_process(
 
 
 def check_async_eval_worker(async_eval: AsyncEvalRuntime, *, logger: logging.Logger) -> None:
-    """Warn once if the async-eval worker exits before training is done."""
+    """Fail the caller if the async-eval worker exits before training is done."""
 
     if (not async_eval.enabled) or async_eval.worker_proc is None:
         return
@@ -72,11 +72,12 @@ def check_async_eval_worker(async_eval: AsyncEvalRuntime, *, logger: logging.Log
     if return_code is None:
         return
     async_eval.worker_dead_reported = True
-    logger.warning(
-        "Async eval worker exited early with returncode=%s; see %s",
-        return_code,
-        async_eval.worker_log_path,
+    message = (
+        "Async eval worker exited early with returncode="
+        f"{return_code}; see {async_eval.worker_log_path}"
     )
+    logger.error(message)
+    raise RuntimeError(message)
 
 
 def wait_for_async_eval_worker(

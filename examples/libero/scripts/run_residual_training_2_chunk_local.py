@@ -936,9 +936,11 @@ def learner(
                 int(update_steps) < int(max_update_steps)
                 and int(offline_pretrain_steps_done) < int(cfg.offline.pretrain_steps)
             ):
+                check_async_eval_worker(async_eval, logger=logger)
                 last_pretrain_info, _ = _run_training_update(offline_ratio=1.0)
                 update_steps += 1
                 offline_pretrain_steps_done += 1
+                check_async_eval_worker(async_eval, logger=logger)
                 pretrain_bar.update(1)
         finally:
             pretrain_bar.close()
@@ -974,6 +976,7 @@ def learner(
         warmup_replay_size = min(int(len(replay_buffer)), int(training_starts))
         try:
             while len(replay_buffer) < training_starts:
+                check_async_eval_worker(async_eval, logger=logger)
                 current_replay_size = min(int(len(replay_buffer)), int(training_starts))
                 if current_replay_size > warmup_replay_size:
                     warmup_bar.update(current_replay_size - warmup_replay_size)
@@ -1009,6 +1012,7 @@ def learner(
     interrupted = False
     try:
         while update_steps < max_update_steps:
+            check_async_eval_worker(async_eval, logger=logger)
             _maybe_queue_async_eval()
             online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
             if _should_stop_after_actor_done(online_update_steps=int(online_update_steps)):
@@ -1028,6 +1032,7 @@ def learner(
                 offline_ratio=float(cfg.offline.ratio),
             )
             update_steps += 1
+            check_async_eval_worker(async_eval, logger=logger)
             _maybe_queue_async_eval()
 
             if update_steps % steps_per_update == 0:

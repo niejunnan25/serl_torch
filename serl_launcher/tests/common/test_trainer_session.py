@@ -66,6 +66,33 @@ def test_trainer_session_update_raises_after_threshold() -> None:
         session.update(context="step_2", max_failures=2)
 
 
+def test_trainer_session_update_best_effort_does_not_raise() -> None:
+    client = _FakeTrainerClient()
+    client.update_results = [False, False]
+    session = TrainerClientSession(
+        client=client,
+        logger=logging.getLogger(__name__),
+    )
+
+    assert session.update_best_effort(context="step_1") is False
+    assert session.update_best_effort(context="step_2") is False
+    assert client.update_call_count == 2
+
+
+def test_trainer_session_update_best_effort_does_not_poison_strict_update() -> None:
+    client = _FakeTrainerClient()
+    client.update_results = [False, False, False, False, False, False]
+    session = TrainerClientSession(
+        client=client,
+        logger=logging.getLogger(__name__),
+    )
+
+    for idx in range(5):
+        assert session.update_best_effort(context=f"best_effort_{idx}") is False
+    assert session.update(context="strict_1", max_failures=2) is False
+    assert client.update_call_count == 6
+
+
 def test_trainer_session_update_until_success_retries_transient_failures() -> None:
     client = _FakeTrainerClient()
     client.update_results = [False, False, True]
@@ -163,3 +190,16 @@ def test_trainer_session_flush_retries_update_before_waiting_for_commit() -> Non
     session.flush(context="episode_end", wait_until_committed=True)
     assert client.update_call_count == 2
     assert client.wait_until_committed_calls == 1
+
+
+def test_trainer_session_flush_is_best_effort_when_not_waiting_for_commit() -> None:
+    client = _FakeTrainerClient()
+    client.update_results = [False, True]
+    session = TrainerClientSession(
+        client=client,
+        logger=logging.getLogger(__name__),
+    )
+
+    session.flush(context="episode_end", wait_until_committed=False)
+    assert client.update_call_count == 1
+    assert client.wait_until_committed_calls == 0

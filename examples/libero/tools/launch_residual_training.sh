@@ -17,6 +17,8 @@ OUTPUT_ROOT=""
 SERL_CONDA_ENV="${SERL_CONDA_ENV:-$DEFAULT_SERL_CONDA_ENV}"
 LEARNER_GPU=""
 ACTOR_GPU=""
+ENV_GPU=""
+EVAL_ENV_GPU=""
 POLICY_GPU=""
 BACKFILL_GPU=""
 WITH_EVAL_ENV="auto"
@@ -34,7 +36,11 @@ CONDA_SH="$DEFAULT_CONDA_SH"
 declare -a EXTRA_HYDRA_ARGS=()
 declare -a STARTED_PROCESS_NAMES=()
 declare -A STARTED_PROCESS_PIDS=()
+declare -A COMPLETED_PROCESS_STATUSES=()
 CLEANUP_IN_PROGRESS=0
+TRAINING_DRAINING=0
+LEARNER_INTERRUPT_SENT=0
+PROCESS_EXIT_STATUS=0
 
 usage() {
     cat <<'EOF'
@@ -43,7 +49,8 @@ Usage:
     --script-id {1|2|3|4|5} \
     [--config-name NAME | --config-file /abs/path/to/config.yaml] \
     [--output-root DIR] \
-    [--learner-gpu N] [--actor-gpu N] [--policy-gpu N] [--backfill-gpu N] \
+    [--learner-gpu N] [--actor-gpu N] [--env-gpu N] [--eval-env-gpu N] \
+    [--policy-gpu N] [--backfill-gpu N] \
     [--with-eval-env | --without-eval-env] \
     [--libero-root DIR] [--libero-datasets-root DIR] \
     [--policy-config NAME] [--policy-dir DIR] [--openpi-root DIR] \
@@ -58,7 +65,9 @@ Examples:
     --script-id 5 \
     --config-file /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/train_residual_libero_spatial_task4_scripts_5_recommended.yaml \
     --learner-gpu 5 \
+    --env-gpu 6 \
     --policy-gpu 6 \
+    --eval-env-gpu 7 \
     --backfill-gpu 7 \
     --with-eval-env \
     -- \
@@ -108,6 +117,21 @@ pid_is_running() {
     kill -0 "$pid" >/dev/null 2>&1
 }
 
+process_group_has_members() {
+    local pgid="$1"
+    [[ -n "$pgid" ]] || return 1
+    if command -v pgrep >/dev/null 2>&1; then
+        pgrep -g "$pgid" >/dev/null 2>&1
+        return $?
+    fi
+    ps -eo pgid= 2>/dev/null | awk -v pgid="$pgid" '$1 == pgid { found = 1; exit } END { exit !found }'
+}
+
+managed_process_alive() {
+    local pid="$1"
+    pid_is_running "$pid" || process_group_has_members "$pid"
+}
+
 remove_pid_file() {
     local name="$1"
     if [[ -n "${LAUNCHER_DIR:-}" ]]; then
@@ -115,10 +139,69 @@ remove_pid_file() {
     fi
 }
 
+process_completed() {
+    local name="$1"
+    [[ -n "${COMPLETED_PROCESS_STATUSES[$name]+set}" ]]
+}
+
+process_completed_successfully() {
+    local name="$1"
+    process_completed "$name" && [[ "${COMPLETED_PROCESS_STATUSES[$name]}" == "0" ]]
+}
+
+record_process_exit() {
+    local name="$1"
+    local pid="$2"
+    PROCESS_EXIT_STATUS=0
+    if [[ -n "$pid" ]] && wait "$pid" >/dev/null 2>&1; then
+        PROCESS_EXIT_STATUS=0
+    else
+        PROCESS_EXIT_STATUS=$?
+    fi
+    COMPLETED_PROCESS_STATUSES["$name"]="$PROCESS_EXIT_STATUS"
+    remove_pid_file "$name"
+    log_note "$name exited with status=$PROCESS_EXIT_STATUS"
+}
+
 signal_managed_process() {
     local pid="$1"
     local signal="$2"
-    kill -s "$signal" -- "-$pid" >/dev/null 2>&1 || kill -s "$signal" "$pid" >/dev/null 2>&1 || true
+    [[ -n "$pid" ]] || return 0
+    if kill -s "$signal" -- "-$pid" >/dev/null 2>&1; then
+        return 0
+    fi
+    if pid_is_running "$pid"; then
+        kill -s "$signal" "$pid" >/dev/null 2>&1 || true
+    fi
+}
+
+maybe_interrupt_learner_for_final_drain() {
+    local learner_pid=""
+    (( TRAINING_DRAINING )) || return 0
+    (( LEARNER_INTERRUPT_SENT )) && return 0
+    process_completed "learner" && return 0
+    if (( START_PROCESSOR )) && ! process_completed "processor"; then
+        return 0
+    fi
+    learner_pid="${STARTED_PROCESS_PIDS[learner]:-}"
+    if pid_is_running "$learner_pid"; then
+        log_note "actor finished and processor drained; sending SIGINT to learner for final eval/summary drain"
+        # Signal only the learner process so its async eval worker can keep draining
+        # and be joined from the learner's graceful shutdown path.
+        kill -s INT "$learner_pid" >/dev/null 2>&1 || true
+        LEARNER_INTERRUPT_SENT=1
+    fi
+}
+
+training_roles_drained() {
+    local processor_done=0
+    process_completed_successfully "learner" || return 1
+    if (( START_PROCESSOR )); then
+        process_completed_successfully "processor" && processor_done=1
+    else
+        processor_done=1
+    fi
+    (( processor_done ))
 }
 
 cleanup_started_processes() {
@@ -143,8 +226,8 @@ cleanup_started_processes() {
     for ((idx=${#STARTED_PROCESS_NAMES[@]} - 1; idx >= 0; idx--)); do
         name="${STARTED_PROCESS_NAMES[$idx]}"
         pid="${STARTED_PROCESS_PIDS[$name]:-}"
-        if pid_is_running "$pid"; then
-            log_note "sending SIGTERM to $name pid=$pid"
+        if managed_process_alive "$pid"; then
+            log_note "sending SIGTERM to $name process group pgid=$pid"
             signal_managed_process "$pid" TERM
         fi
     done
@@ -154,7 +237,7 @@ cleanup_started_processes() {
         still_running=0
         for name in "${STARTED_PROCESS_NAMES[@]}"; do
             pid="${STARTED_PROCESS_PIDS[$name]:-}"
-            if pid_is_running "$pid"; then
+            if managed_process_alive "$pid"; then
                 still_running=1
                 break
             fi
@@ -166,11 +249,13 @@ cleanup_started_processes() {
     for ((idx=${#STARTED_PROCESS_NAMES[@]} - 1; idx >= 0; idx--)); do
         name="${STARTED_PROCESS_NAMES[$idx]}"
         pid="${STARTED_PROCESS_PIDS[$name]:-}"
-        if pid_is_running "$pid"; then
-            log_note "sending SIGKILL to $name pid=$pid"
+        if managed_process_alive "$pid"; then
+            log_note "sending SIGKILL to $name process group pgid=$pid"
             signal_managed_process "$pid" KILL
         fi
-        wait "$pid" >/dev/null 2>&1 || true
+        if [[ -n "$pid" ]]; then
+            wait "$pid" >/dev/null 2>&1 || true
+        fi
         remove_pid_file "$name"
     done
 }
@@ -346,6 +431,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --actor-gpu)
             ACTOR_GPU="$2"
+            shift 2
+            ;;
+        --env-gpu)
+            ENV_GPU="$2"
+            shift 2
+            ;;
+        --eval-env-gpu)
+            EVAL_ENV_GPU="$2"
             shift 2
             ;;
         --policy-gpu)
@@ -598,6 +691,15 @@ fi
 if (( START_EVAL_ENV )) && [[ "$CFG_ASYNC_EVAL_ENV_BACKEND" == "remote" ]]; then
     is_local_host "$CFG_ASYNC_EVAL_HOST" || die "eval env host must be local for launcher-managed eval env server; got $CFG_ASYNC_EVAL_HOST"
 fi
+if [[ -n "$ENV_GPU" && ! "$ENV_GPU" =~ ^[0-9]+$ ]]; then
+    die "--env-gpu must be a single non-negative integer, got $ENV_GPU"
+fi
+if [[ -n "$EVAL_ENV_GPU" && ! "$EVAL_ENV_GPU" =~ ^[0-9]+$ ]]; then
+    die "--eval-env-gpu must be a single non-negative integer, got $EVAL_ENV_GPU"
+fi
+if [[ -z "$EVAL_ENV_GPU" ]]; then
+    EVAL_ENV_GPU="$ENV_GPU"
+fi
 is_local_host "$CFG_POLICY_HOST" || die "policy host must be local for launcher-managed policy server; got $CFG_POLICY_HOST"
 if (( START_BACKFILL_POLICY )); then
     is_local_host "$CFG_BACKFILL_HOST" || die "backfill host must be local for launcher-managed backfill server; got $CFG_BACKFILL_HOST"
@@ -622,6 +724,8 @@ serl_conda_env=$SERL_CONDA_ENV
 policy_type=$CFG_POLICY_TYPE
 policy_host=$CFG_POLICY_HOST
 policy_port=$CFG_POLICY_PORT
+train_env_gpu=$ENV_GPU
+eval_env_gpu=$EVAL_ENV_GPU
 backfill_enabled=$CFG_BACKFILL_ENABLED
 backfill_host=$CFG_BACKFILL_HOST
 backfill_port=$CFG_BACKFILL_PORT
@@ -684,12 +788,19 @@ log_note "training script : $TRAINING_SCRIPT"
 
 if [[ "$CFG_ENV_BACKEND" == "remote" ]]; then
     assert_port_unused "$CFG_ENV_HOST" "$CFG_ENV_PORT" "train env"
+    declare -a TRAIN_ENV_CMD
+    TRAIN_ENV_CMD=(
+        bash "$LIBERO_DIR/tools/serve_env.sh"
+        --host "$CFG_ENV_HOST"
+        --port "$CFG_ENV_PORT"
+    )
+    if [[ -n "$ENV_GPU" ]]; then
+        TRAIN_ENV_CMD+=(--gpu-id "$ENV_GPU")
+    fi
     start_logged_process \
         "train_env" \
         "$SERVICES_DIR/train_env.log" \
-        bash "$LIBERO_DIR/tools/serve_env.sh" \
-        --host "$CFG_ENV_HOST" \
-        --port "$CFG_ENV_PORT"
+        "${TRAIN_ENV_CMD[@]}"
     wait_for_port "$CFG_ENV_HOST" "$CFG_ENV_PORT" "train env" "$WAIT_TIMEOUT_SEC"
 fi
 
@@ -698,12 +809,19 @@ if (( START_EVAL_ENV )) && [[ "$CFG_ASYNC_EVAL_ENV_BACKEND" == "remote" ]]; then
         die "eval env port must differ from train env port"
     fi
     assert_port_unused "$CFG_ASYNC_EVAL_HOST" "$CFG_ASYNC_EVAL_PORT" "eval env"
+    declare -a EVAL_ENV_CMD
+    EVAL_ENV_CMD=(
+        bash "$LIBERO_DIR/tools/serve_env.sh"
+        --host "$CFG_ASYNC_EVAL_HOST"
+        --port "$CFG_ASYNC_EVAL_PORT"
+    )
+    if [[ -n "$EVAL_ENV_GPU" ]]; then
+        EVAL_ENV_CMD+=(--gpu-id "$EVAL_ENV_GPU")
+    fi
     start_logged_process \
         "eval_env" \
         "$SERVICES_DIR/eval_env.log" \
-        bash "$LIBERO_DIR/tools/serve_env.sh" \
-        --host "$CFG_ASYNC_EVAL_HOST" \
-        --port "$CFG_ASYNC_EVAL_PORT"
+        "${EVAL_ENV_CMD[@]}"
     wait_for_port "$CFG_ASYNC_EVAL_HOST" "$CFG_ASYNC_EVAL_PORT" "eval env" "$WAIT_TIMEOUT_SEC"
 fi
 
@@ -811,11 +929,51 @@ log_note "launcher mode   : attached (press Ctrl+C to stop all managed processes
 
 while true; do
     for name in "${STARTED_PROCESS_NAMES[@]}"; do
-        pid="${STARTED_PROCESS_PIDS[$name]}"
+        process_completed "$name" && continue
+        pid="${STARTED_PROCESS_PIDS[$name]:-}"
         if ! pid_is_running "$pid"; then
-            wait "$pid" >/dev/null 2>&1 || true
-            die "$name exited; launcher is shutting down the remaining managed processes"
+            record_process_exit "$name" "$pid"
+            if (( TRAINING_DRAINING )); then
+                case "$name" in
+                    learner|processor)
+                        if (( PROCESS_EXIT_STATUS != 0 )); then
+                            die "$name exited with status=$PROCESS_EXIT_STATUS during final drain; launcher is shutting down the remaining managed processes"
+                        fi
+                        ;;
+                    *)
+                        die "$name exited with status=$PROCESS_EXIT_STATUS during final drain; launcher is shutting down the remaining managed processes"
+                        ;;
+                esac
+            else
+                case "$name" in
+                    actor)
+                        if (( PROCESS_EXIT_STATUS == 0 )); then
+                            TRAINING_DRAINING=1
+                            log_note "actor exited cleanly; waiting for processor drain, then learner final eval/summary"
+                        else
+                            die "actor exited with status=$PROCESS_EXIT_STATUS; launcher is shutting down the remaining managed processes"
+                        fi
+                        ;;
+                    processor)
+                        if (( PROCESS_EXIT_STATUS == 0 )); then
+                            log_note "processor exited cleanly; waiting for actor completion before learner final drain"
+                        else
+                            die "processor exited with status=$PROCESS_EXIT_STATUS; launcher is shutting down the remaining managed processes"
+                        fi
+                        ;;
+                    *)
+                        die "$name exited with status=$PROCESS_EXIT_STATUS; launcher is shutting down the remaining managed processes"
+                        ;;
+                esac
+            fi
         fi
     done
+    maybe_interrupt_learner_for_final_drain
+    if (( TRAINING_DRAINING )) && training_roles_drained; then
+        log_note "learner and processor completed final drain; shutting down remaining services"
+        cleanup_started_processes "training complete" 30
+        trap - EXIT
+        exit 0
+    fi
     sleep 2
 done

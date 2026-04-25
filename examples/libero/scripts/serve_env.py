@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -113,16 +114,34 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=30000)
+    parser.add_argument(
+        "--gpu-id",
+        type=int,
+        default=None,
+        help="GPU id for MuJoCo / robosuite EGL offscreen rendering.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s"
     )
+    if args.gpu_id is not None:
+        if args.gpu_id < 0:
+            parser.error("--gpu-id must be a non-negative integer")
+        gpu_id = str(args.gpu_id)
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
+        os.environ["MUJOCO_EGL_DEVICE_ID"] = gpu_id
 
     # Keep request handling single-threaded to avoid MuJoCo / OpenGL context issues.
     # The trainer is expected to reuse one persistent connection to reduce per-step RPC churn.
     server = HTTPServer((args.host, args.port), Handler)
-    LOGGER.info("LIBERO env server started at http://%s:%s", args.host, args.port)
+    LOGGER.info(
+        "LIBERO env server started at http://%s:%s CUDA_VISIBLE_DEVICES=%s MUJOCO_EGL_DEVICE_ID=%s",
+        args.host,
+        args.port,
+        os.environ.get("CUDA_VISIBLE_DEVICES"),
+        os.environ.get("MUJOCO_EGL_DEVICE_ID"),
+    )
     try:
         server.serve_forever()
     finally:

@@ -43,10 +43,10 @@ class _FailingTrainerSession:
         raise RuntimeError("boom")
 
 
-class _BlockingTrainerSession:
+class _BestEffortTrainerSession:
     def __init__(self) -> None:
         self.update_calls: list[tuple[str, str | None]] = []
-        self.update_until_success_calls: list[str] = []
+        self.update_best_effort_calls: list[tuple[str, str | None]] = []
 
     def update(
         self,
@@ -55,14 +55,15 @@ class _BlockingTrainerSession:
         failure_message: str | None = None,
     ) -> bool:
         self.update_calls.append((str(context), failure_message))
-        raise RuntimeError("cadence should prefer update_until_success")
+        raise RuntimeError("cadence should prefer update_best_effort")
 
-    def update_until_success(
+    def update_best_effort(
         self,
         *,
         context: str,
+        failure_message: str | None = None,
     ) -> bool:
-        self.update_until_success_calls.append(str(context))
+        self.update_best_effort_calls.append((str(context), failure_message))
         return True
 
 
@@ -124,8 +125,8 @@ def test_env_step_cadence_tracker_handles_multiple_updates_in_one_chunk() -> Non
     ]
 
 
-def test_env_step_cadence_tracker_prefers_blocking_update_when_available() -> None:
-    trainer_session = _BlockingTrainerSession()
+def test_env_step_cadence_tracker_prefers_best_effort_update_when_available() -> None:
+    trainer_session = _BestEffortTrainerSession()
     tracker = EnvStepCadenceTracker(steps_per_update=5, log_period=10)
 
     assert (
@@ -137,7 +138,9 @@ def test_env_step_cadence_tracker_prefers_blocking_update_when_available() -> No
         )
         is False
     )
-    assert trainer_session.update_until_success_calls == ["env_step_5"]
+    assert trainer_session.update_best_effort_calls == [
+        ("env_step_5", "legacy failure message")
+    ]
     assert trainer_session.update_calls == []
 
 
