@@ -82,6 +82,8 @@ from serl_torch.examples.agibot_real.transition_assembly import RawChunkRecord
 from serl_torch.examples.agibot_real.transition_assembly import (
     count_executed_steps_from_infos,
 )
+from serl_torch.examples.agibot_real.video_recorder import AsyncImageVideoRecorder
+from serl_torch.examples.agibot_real.video_recorder import AsyncVideoRecorderConfig
 
 
 def actor(
@@ -93,6 +95,26 @@ def actor(
     env = create_env(cfg, logger)
     base_policy = build_agibot_base_policy(cfg, logger=logger)
     logger.info("Chunk policy backend: %s", base_policy.describe())
+    video_recorder: AsyncImageVideoRecorder | None = None
+    if bool(cfg.video.enabled):
+        video_recorder = AsyncImageVideoRecorder(
+            config=AsyncVideoRecorderConfig(
+                camera_key=str(cfg.video.camera_key),
+                fps=float(cfg.video.fps),
+                output_dir=run_dir / str(cfg.video.output_dir),
+                max_pending_frames=int(cfg.video.max_pending_frames),
+                drop_frames_when_busy=bool(cfg.video.drop_frames_when_busy),
+            ),
+            logger=logger,
+        )
+        logger.info(
+            "Rollout video recording enabled: camera_key=%s fps=%.3f output_dir=%s max_pending_frames=%s drop_frames_when_busy=%s",
+            str(cfg.video.camera_key),
+            float(cfg.video.fps),
+            run_dir / str(cfg.video.output_dir),
+            int(cfg.video.max_pending_frames),
+            bool(cfg.video.drop_frames_when_busy),
+        )
 
     image_keys = cfg.obs.image_keys
     action_dim = cfg.env.action_dim
@@ -298,6 +320,9 @@ def actor(
                     obs = dict(env.reset())
                 task_prompt = str(env.task_description)
             current_task_prompt = str(task_prompt)
+            if video_recorder is not None:
+                video_recorder.start_episode(int(episode_id))
+                video_recorder.add_obs_frame(obs)
 
             pending_last_transition = None
             episode_return = 0.0
@@ -337,6 +362,10 @@ def actor(
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
+                if video_recorder is not None:
+                    for post_step_obs in chunk_result.get("observations", ()):
+                        if isinstance(post_step_obs, dict):
+                            video_recorder.add_obs_frame(post_step_obs)
 
                 chunk_infos = [dict(v) for v in chunk_result["infos"]]
                 executed_steps = count_executed_steps_from_infos(chunk_infos)
@@ -521,6 +550,12 @@ def actor(
                 float(episode_return),
                 int(env_steps),
             )
+            if video_recorder is not None:
+                video_recorder.end_episode(
+                    episode_id=int(episode_id),
+                    success=bool(episode_success),
+                    episode_steps=int(episode_steps),
+                )
 
     finally:
         if current_task_prompt is not None:
@@ -567,6 +602,11 @@ def actor(
             pass
         try:
             transition_assembler.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if video_recorder is not None:
+                video_recorder.close()
         except Exception:  # noqa: BLE001
             pass
         try:

@@ -262,6 +262,16 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class VideoConfig:
+    enabled: bool
+    camera_key: str
+    fps: float
+    output_dir: str
+    max_pending_frames: int
+    drop_frames_when_busy: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AgiBotTrainConfig:
     global_seed: int
     task: TaskConfig
@@ -281,6 +291,7 @@ class AgiBotTrainConfig:
     offline: OfflineConfig
     training: TrainingConfig
     logging: LoggingConfig
+    video: VideoConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +310,7 @@ class AgiBotEvalConfig:
     training: EvalTrainingConfig
     logging: LoggingConfig
     eval: EvalConfig
+    video: VideoConfig
 
 
 AgiBotRunConfig = AgiBotTrainConfig | AgiBotEvalConfig
@@ -1201,6 +1213,27 @@ def _parse_logging_cfg(
     )
 
 
+def _parse_video_cfg(cfg: DictConfig, *, default_fps: float) -> VideoConfig:
+    video_cfg = cfg.get("video", {})
+    return VideoConfig(
+        enabled=bool(video_cfg.get("enabled", False)),
+        camera_key=_required_str(
+            video_cfg.get("camera_key", "image/head"),
+            "video.camera_key",
+        ),
+        fps=_positive_float(video_cfg.get("fps", default_fps), "video.fps"),
+        output_dir=_required_str(
+            video_cfg.get("output_dir", "videos"),
+            "video.output_dir",
+        ),
+        max_pending_frames=_positive_int(
+            video_cfg.get("max_pending_frames", 64),
+            "video.max_pending_frames",
+        ),
+        drop_frames_when_busy=bool(video_cfg.get("drop_frames_when_busy", True)),
+    )
+
+
 def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
@@ -1237,6 +1270,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         offline=_parse_offline_cfg(cfg),
         training=_parse_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
+        video=_parse_video_cfg(cfg, default_fps=task.hz),
     )
 
 
@@ -1269,6 +1303,7 @@ def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
         training=_parse_eval_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
         eval=_parse_eval_cfg_block(cfg),
+        video=_parse_video_cfg(cfg, default_fps=task.hz),
     )
 
 

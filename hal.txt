@@ -1,0 +1,9273 @@
+2026-04-17 07:18:25,771 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.249483642578125
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 4000.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776410305
+    nanosec: 684947130
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:18:25,821 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.249483642578125
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 4000.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776410305
+    nanosec: 734995893
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:18:25,871 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.249483642578125
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 4000.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776410305
+    nanosec: 785117674
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:18:25,925 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.249483642578125
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 4000.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776410305
+    nanosec: 835276094
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:18:25,971 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410305
+    nanosec: 885409299
+  }
+}
+
+2026-04-17 07:18:26,022 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410305
+    nanosec: 935510314
+  }
+}
+
+2026-04-17 07:18:26,074 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410305
+    nanosec: 987615514
+  }
+}
+
+2026-04-17 07:18:26,124 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 37740879
+  }
+}
+
+2026-04-17 07:18:26,175 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 87852134
+  }
+}
+
+2026-04-17 07:18:26,225 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 137956381
+  }
+}
+
+2026-04-17 07:18:26,274 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 188096145
+  }
+}
+
+2026-04-17 07:18:26,326 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 238203559
+  }
+}
+
+2026-04-17 07:18:26,374 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 288312382
+  }
+}
+
+2026-04-17 07:18:26,427 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 338420148
+  }
+}
+
+2026-04-17 07:18:26,474 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 388548490
+  }
+}
+
+2026-04-17 07:18:26,526 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 438661920
+  }
+}
+
+2026-04-17 07:18:26,576 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 488788149
+  }
+}
+
+2026-04-17 07:18:26,627 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 538888940
+  }
+}
+
+2026-04-17 07:18:26,676 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 589009922
+  }
+}
+
+2026-04-17 07:18:26,734 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 639135287
+  }
+}
+
+2026-04-17 07:18:26,781 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 689251693
+  }
+}
+
+2026-04-17 07:18:26,826 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 739387042
+  }
+}
+
+2026-04-17 07:18:26,875 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 789488121
+  }
+}
+
+2026-04-17 07:18:26,925 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 839600495
+  }
+}
+
+2026-04-17 07:18:26,979 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 889725604
+  }
+}
+
+2026-04-17 07:18:27,028 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 939829787
+  }
+}
+
+2026-04-17 07:18:27,081 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410306
+    nanosec: 990319032
+  }
+}
+
+2026-04-17 07:18:27,128 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 40426862
+  }
+}
+
+2026-04-17 07:18:27,176 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 90568706
+  }
+}
+
+2026-04-17 07:18:27,231 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 140675993
+  }
+}
+
+2026-04-17 07:18:27,276 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 190797934
+  }
+}
+
+2026-04-17 07:18:27,329 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 240898597
+  }
+}
+
+2026-04-17 07:18:27,377 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 291026970
+  }
+}
+
+2026-04-17 07:18:27,428 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 341141488
+  }
+}
+
+2026-04-17 07:18:27,478 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 391314402
+  }
+}
+
+2026-04-17 07:18:27,529 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 441424024
+  }
+}
+
+2026-04-17 07:18:27,578 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 491578955
+  }
+}
+
+2026-04-17 07:18:27,633 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 541694785
+  }
+}
+
+2026-04-17 07:18:27,679 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 591781049
+  }
+}
+
+2026-04-17 07:18:27,732 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 641919853
+  }
+}
+
+2026-04-17 07:18:27,779 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 692026756
+  }
+}
+
+2026-04-17 07:18:27,828 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 742140346
+  }
+}
+
+2026-04-17 07:18:27,878 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 792274286
+  }
+}
+
+2026-04-17 07:18:27,931 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 842402659
+  }
+}
+
+2026-04-17 07:18:27,979 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 892523545
+  }
+}
+
+2026-04-17 07:18:28,029 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 942624464
+  }
+}
+
+2026-04-17 07:18:28,081 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410307
+    nanosec: 995140324
+  }
+}
+
+2026-04-17 07:18:28,131 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 45245307
+  }
+}
+
+2026-04-17 07:18:28,181 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 95401614
+  }
+}
+
+2026-04-17 07:18:28,231 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 145495365
+  }
+}
+
+2026-04-17 07:18:28,281 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 195622202
+  }
+}
+
+2026-04-17 07:18:28,332 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 245732272
+  }
+}
+
+2026-04-17 07:18:28,419 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 295865636
+  }
+}
+
+2026-04-17 07:18:28,431 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 345970683
+  }
+}
+
+2026-04-17 07:18:28,482 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 396115023
+  }
+}
+
+2026-04-17 07:18:28,532 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 446239076
+  }
+}
+
+2026-04-17 07:18:28,582 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 496382551
+  }
+}
+
+2026-04-17 07:18:28,632 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 546491950
+  }
+}
+
+2026-04-17 07:18:28,682 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 596617539
+  }
+}
+
+2026-04-17 07:18:28,732 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 646734072
+  }
+}
+
+2026-04-17 07:18:28,783 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 696848462
+  }
+}
+
+2026-04-17 07:18:28,832 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 746958468
+  }
+}
+
+2026-04-17 07:18:28,883 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 797096728
+  }
+}
+
+2026-04-17 07:18:28,933 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 847198767
+  }
+}
+
+2026-04-17 07:18:28,983 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 897329220
+  }
+}
+
+2026-04-17 07:18:29,032 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 947457752
+  }
+}
+
+2026-04-17 07:18:29,085 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410308
+    nanosec: 999286619
+  }
+}
+
+2026-04-17 07:18:29,136 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 49385330
+  }
+}
+
+2026-04-17 07:18:29,185 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 99546788
+  }
+}
+
+2026-04-17 07:18:29,235 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 149624252
+  }
+}
+
+2026-04-17 07:18:29,286 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 199752529
+  }
+}
+
+2026-04-17 07:18:29,336 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 249859591
+  }
+}
+
+2026-04-17 07:18:29,386 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 299989820
+  }
+}
+
+2026-04-17 07:18:29,436 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 350114385
+  }
+}
+
+2026-04-17 07:18:29,486 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 400243813
+  }
+}
+
+2026-04-17 07:18:29,535 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 450360443
+  }
+}
+
+2026-04-17 07:18:29,585 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 500504430
+  }
+}
+
+2026-04-17 07:18:29,636 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 550585062
+  }
+}
+
+2026-04-17 07:18:29,686 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 600727002
+  }
+}
+
+2026-04-17 07:18:29,736 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 650844143
+  }
+}
+
+2026-04-17 07:18:29,787 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 700968068
+  }
+}
+
+2026-04-17 07:18:29,838 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 751094201
+  }
+}
+
+2026-04-17 07:18:29,887 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 801219982
+  }
+}
+
+2026-04-17 07:18:29,938 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 851324420
+  }
+}
+
+2026-04-17 07:18:29,989 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 901454777
+  }
+}
+
+2026-04-17 07:18:30,039 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410309
+    nanosec: 951582862
+  }
+}
+
+2026-04-17 07:18:30,096 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 7837542
+  }
+}
+
+2026-04-17 07:18:30,143 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 57936413
+  }
+}
+
+2026-04-17 07:18:30,196 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 108070929
+  }
+}
+
+2026-04-17 07:18:30,244 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 158202949
+  }
+}
+
+2026-04-17 07:18:30,296 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 208313339
+  }
+}
+
+2026-04-17 07:18:30,344 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 258419441
+  }
+}
+
+2026-04-17 07:18:30,394 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 308541670
+  }
+}
+
+2026-04-17 07:18:30,444 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 358650300
+  }
+}
+
+2026-04-17 07:18:30,494 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 408757426
+  }
+}
+
+2026-04-17 07:18:30,544 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 458874663
+  }
+}
+
+2026-04-17 07:18:30,595 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 508994460
+  }
+}
+
+2026-04-17 07:18:30,645 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 559107634
+  }
+}
+
+2026-04-17 07:18:30,698 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 609229959
+  }
+}
+
+2026-04-17 07:18:30,745 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 659350108
+  }
+}
+
+2026-04-17 07:18:30,795 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 709444083
+  }
+}
+
+2026-04-17 07:18:30,846 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 759586182
+  }
+}
+
+2026-04-17 07:18:30,896 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 809675806
+  }
+}
+
+2026-04-17 07:18:30,946 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 859818609
+  }
+}
+
+2026-04-17 07:18:30,996 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 909904297
+  }
+}
+
+2026-04-17 07:18:31,046 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410310
+    nanosec: 960020766
+  }
+}
+
+2026-04-17 07:18:31,098 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 12332544
+  }
+}
+
+2026-04-17 07:18:31,149 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 62466260
+  }
+}
+
+2026-04-17 07:18:31,198 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 112570570
+  }
+}
+
+2026-04-17 07:18:31,249 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 162692702
+  }
+}
+
+2026-04-17 07:18:31,298 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 212794325
+  }
+}
+
+2026-04-17 07:18:31,348 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 262935912
+  }
+}
+
+2026-04-17 07:18:31,399 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 313041694
+  }
+}
+
+2026-04-17 07:18:31,448 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 363150292
+  }
+}
+
+2026-04-17 07:18:31,501 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 413257066
+  }
+}
+
+2026-04-17 07:18:31,549 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 463375231
+  }
+}
+
+2026-04-17 07:18:31,599 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 513476885
+  }
+}
+
+2026-04-17 07:18:31,650 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 563577323
+  }
+}
+
+2026-04-17 07:18:31,699 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 613678465
+  }
+}
+
+2026-04-17 07:18:31,749 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 663779608
+  }
+}
+
+2026-04-17 07:18:31,799 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 713910380
+  }
+}
+
+2026-04-17 07:18:31,850 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 764034144
+  }
+}
+
+2026-04-17 07:18:31,902 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 814140982
+  }
+}
+
+2026-04-17 07:18:31,949 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 864264555
+  }
+}
+
+2026-04-17 07:18:32,000 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 914377696
+  }
+}
+
+2026-04-17 07:18:32,049 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410311
+    nanosec: 964490422
+  }
+}
+
+2026-04-17 07:18:32,125 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 16152579
+  }
+}
+
+2026-04-17 07:18:32,153 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 66277784
+  }
+}
+
+2026-04-17 07:18:32,202 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 116413195
+  }
+}
+
+2026-04-17 07:18:32,254 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 166540864
+  }
+}
+
+2026-04-17 07:18:32,302 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 216649141
+  }
+}
+
+2026-04-17 07:18:32,353 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 266768554
+  }
+}
+
+2026-04-17 07:18:32,402 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 316873600
+  }
+}
+
+2026-04-17 07:18:32,453 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 366998772
+  }
+}
+
+2026-04-17 07:18:32,503 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 417115433
+  }
+}
+
+2026-04-17 07:18:32,554 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 467233950
+  }
+}
+
+2026-04-17 07:18:32,603 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 517347507
+  }
+}
+
+2026-04-17 07:18:32,653 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 567496102
+  }
+}
+
+2026-04-17 07:18:32,703 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 617591901
+  }
+}
+
+2026-04-17 07:18:32,753 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 667704914
+  }
+}
+
+2026-04-17 07:18:32,803 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 717839718
+  }
+}
+
+2026-04-17 07:18:32,853 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 767955515
+  }
+}
+
+2026-04-17 07:18:32,903 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 818075920
+  }
+}
+
+2026-04-17 07:18:32,953 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 868199140
+  }
+}
+
+2026-04-17 07:18:33,003 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 918311290
+  }
+}
+
+2026-04-17 07:18:33,056 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410312
+    nanosec: 968420079
+  }
+}
+
+2026-04-17 07:18:33,109 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 24026867
+  }
+}
+
+2026-04-17 07:18:33,160 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 74129289
+  }
+}
+
+2026-04-17 07:18:33,209 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 124250685
+  }
+}
+
+2026-04-17 07:18:33,260 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 174390833
+  }
+}
+
+2026-04-17 07:18:33,310 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 224482503
+  }
+}
+
+2026-04-17 07:18:33,359 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 274592029
+  }
+}
+
+2026-04-17 07:18:33,409 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 324713521
+  }
+}
+
+2026-04-17 07:18:33,464 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 374817575
+  }
+}
+
+2026-04-17 07:18:33,510 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 424949243
+  }
+}
+
+2026-04-17 07:18:33,561 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 475068431
+  }
+}
+
+2026-04-17 07:18:33,610 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 525202083
+  }
+}
+
+2026-04-17 07:18:33,662 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 575312728
+  }
+}
+
+2026-04-17 07:18:33,711 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 625436205
+  }
+}
+
+2026-04-17 07:18:33,763 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 675569121
+  }
+}
+
+2026-04-17 07:18:33,812 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 725670839
+  }
+}
+
+2026-04-17 07:18:33,861 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 775787339
+  }
+}
+
+2026-04-17 07:18:33,912 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 825920447
+  }
+}
+
+2026-04-17 07:18:33,963 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 876026037
+  }
+}
+
+2026-04-17 07:18:34,012 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 926133162
+  }
+}
+
+2026-04-17 07:18:34,061 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410313
+    nanosec: 976267134
+  }
+}
+
+2026-04-17 07:18:34,118 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 31944669
+  }
+}
+
+2026-04-17 07:18:34,168 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 82057074
+  }
+}
+
+2026-04-17 07:18:34,218 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 132195269
+  }
+}
+
+2026-04-17 07:18:34,267 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 182303611
+  }
+}
+
+2026-04-17 07:18:34,317 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 232427247
+  }
+}
+
+2026-04-17 07:18:34,367 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 282534340
+  }
+}
+
+2026-04-17 07:18:34,418 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 332666520
+  }
+}
+
+2026-04-17 07:18:34,468 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 382759502
+  }
+}
+
+2026-04-17 07:18:34,519 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 432911265
+  }
+}
+
+2026-04-17 07:18:34,568 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 483016566
+  }
+}
+
+2026-04-17 07:18:34,619 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 533144682
+  }
+}
+
+2026-04-17 07:18:34,668 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 583239392
+  }
+}
+
+2026-04-17 07:18:34,719 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 633350133
+  }
+}
+
+2026-04-17 07:18:34,770 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 683481513
+  }
+}
+
+2026-04-17 07:18:34,818 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 733575455
+  }
+}
+
+2026-04-17 07:18:34,870 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 783673205
+  }
+}
+
+2026-04-17 07:18:34,920 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 833812873
+  }
+}
+
+2026-04-17 07:18:34,971 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 883915358
+  }
+}
+
+2026-04-17 07:18:35,021 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 934005589
+  }
+}
+
+2026-04-17 07:18:35,069 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410314
+    nanosec: 984121738
+  }
+}
+
+2026-04-17 07:18:35,122 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 36499846
+  }
+}
+
+2026-04-17 07:18:35,171 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 86600092
+  }
+}
+
+2026-04-17 07:18:35,222 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 136727088
+  }
+}
+
+2026-04-17 07:18:35,273 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 186828549
+  }
+}
+
+2026-04-17 07:18:35,322 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 236968216
+  }
+}
+
+2026-04-17 07:18:35,373 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 287079469
+  }
+}
+
+2026-04-17 07:18:35,432 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 337191234
+  }
+}
+
+2026-04-17 07:18:35,474 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 387303703
+  }
+}
+
+2026-04-17 07:18:35,523 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 437420428
+  }
+}
+
+2026-04-17 07:18:35,574 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 487526017
+  }
+}
+
+2026-04-17 07:18:35,623 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 537642006
+  }
+}
+
+2026-04-17 07:18:35,673 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 587767626
+  }
+}
+
+2026-04-17 07:18:35,723 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 637924763
+  }
+}
+
+2026-04-17 07:18:35,773 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 687995283
+  }
+}
+
+2026-04-17 07:18:35,823 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 738107688
+  }
+}
+
+2026-04-17 07:18:35,873 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 788226716
+  }
+}
+
+2026-04-17 07:18:35,923 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 838339185
+  }
+}
+
+2026-04-17 07:18:35,973 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 888493347
+  }
+}
+
+2026-04-17 07:18:36,024 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 938610808
+  }
+}
+
+2026-04-17 07:18:36,074 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410315
+    nanosec: 988735436
+  }
+}
+
+2026-04-17 07:18:36,132 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 44235766
+  }
+}
+
+2026-04-17 07:18:36,179 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 94356778
+  }
+}
+
+2026-04-17 07:18:36,232 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 144435457
+  }
+}
+
+2026-04-17 07:18:36,280 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 194546358
+  }
+}
+
+2026-04-17 07:18:36,330 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 244650572
+  }
+}
+
+2026-04-17 07:18:36,380 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 294777919
+  }
+}
+
+2026-04-17 07:18:36,430 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 344864470
+  }
+}
+
+2026-04-17 07:18:36,482 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 394984618
+  }
+}
+
+2026-04-17 07:18:36,531 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 445110142
+  }
+}
+
+2026-04-17 07:18:36,581 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 495239761
+  }
+}
+
+2026-04-17 07:18:36,630 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 545353862
+  }
+}
+
+2026-04-17 07:18:36,681 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 595492025
+  }
+}
+
+2026-04-17 07:18:36,731 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 645585999
+  }
+}
+
+2026-04-17 07:18:36,783 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 695697860
+  }
+}
+
+2026-04-17 07:18:36,833 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 745816376
+  }
+}
+
+2026-04-17 07:18:36,882 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 795941036
+  }
+}
+
+2026-04-17 07:18:36,934 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 846061440
+  }
+}
+
+2026-04-17 07:18:36,981 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 896187220
+  }
+}
+
+2026-04-17 07:18:37,037 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 946308200
+  }
+}
+
+2026-04-17 07:18:37,082 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410316
+    nanosec: 996433692
+  }
+}
+
+2026-04-17 07:18:37,138 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410317
+    nanosec: 51521634
+  }
+}
+
+2026-04-17 07:18:37,188 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410317
+    nanosec: 101628183
+  }
+}
+
+2026-04-17 07:18:37,240 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410317
+    nanosec: 151726892
+  }
+}
+
+2026-04-17 07:18:37,288 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776410317
+    nanosec: 201860063
+  }
+}
+
+2026-04-17 07:36:17,738 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.2494518280029297
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 23936.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776411377
+    nanosec: 789876309
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:36:17,789 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.2494518280029297
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 23936.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776411377
+    nanosec: 839944268
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:36:17,839 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.2494518280029297
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 23936.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776411377
+    nanosec: 890055456
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:36:17,889 - WARNING - Waist has less than 2 motors, motor_states {
+  position: 0.2494518280029297
+  effort: 0.0
+  err_code: 12832
+  voltage: 0.0
+  enable: false
+  status: 49704
+  current: 0.0
+  velocity: 23936.0
+  id: 0
+}
+header {
+  stamp {
+    sec: 1776411377
+    nanosec: 940204656
+  }
+}
+name: "joint_lift_body"
+
+2026-04-17 07:36:17,939 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411377
+    nanosec: 990322051
+  }
+}
+
+2026-04-17 07:36:18,002 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 45994967
+  }
+}
+
+2026-04-17 07:36:18,044 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 96114713
+  }
+}
+
+2026-04-17 07:36:18,101 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 146233210
+  }
+}
+
+2026-04-17 07:36:18,145 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 196344957
+  }
+}
+
+2026-04-17 07:36:18,196 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 246448288
+  }
+}
+
+2026-04-17 07:36:18,245 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 296548099
+  }
+}
+
+2026-04-17 07:36:18,295 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 346662213
+  }
+}
+
+2026-04-17 07:36:18,344 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 396800549
+  }
+}
+
+2026-04-17 07:36:18,396 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 446923687
+  }
+}
+
+2026-04-17 07:36:18,445 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 497024330
+  }
+}
+
+2026-04-17 07:36:18,496 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 547127501
+  }
+}
+
+2026-04-17 07:36:18,546 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 597242575
+  }
+}
+
+2026-04-17 07:36:18,597 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 647362449
+  }
+}
+
+2026-04-17 07:36:18,646 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 697499409
+  }
+}
+
+2026-04-17 07:36:18,696 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 747594005
+  }
+}
+
+2026-04-17 07:36:18,747 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 797712119
+  }
+}
+
+2026-04-17 07:36:18,798 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 847833784
+  }
+}
+
+2026-04-17 07:36:18,846 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 897946522
+  }
+}
+
+2026-04-17 07:36:18,897 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 948075643
+  }
+}
+
+2026-04-17 07:36:18,947 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411378
+    nanosec: 998192701
+  }
+}
+
+2026-04-17 07:36:19,004 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 54001144
+  }
+}
+
+2026-04-17 07:36:19,053 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 104121608
+  }
+}
+
+2026-04-17 07:36:19,105 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 154231577
+  }
+}
+
+2026-04-17 07:36:19,153 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 204369448
+  }
+}
+
+2026-04-17 07:36:19,203 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 254475770
+  }
+}
+
+2026-04-17 07:36:19,253 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 304615880
+  }
+}
+
+2026-04-17 07:36:19,305 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 354706523
+  }
+}
+
+2026-04-17 07:36:19,353 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 404848969
+  }
+}
+
+2026-04-17 07:36:19,405 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 454994967
+  }
+}
+
+2026-04-17 07:36:19,454 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 505086250
+  }
+}
+
+2026-04-17 07:36:19,503 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 555197403
+  }
+}
+
+2026-04-17 07:36:19,554 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 605312395
+  }
+}
+
+2026-04-17 07:36:19,604 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 655404542
+  }
+}
+
+2026-04-17 07:36:19,654 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 705516463
+  }
+}
+
+2026-04-17 07:36:19,704 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 755631744
+  }
+}
+
+2026-04-17 07:36:19,756 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 805766223
+  }
+}
+
+2026-04-17 07:36:19,806 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 855872832
+  }
+}
+
+2026-04-17 07:36:19,855 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 905977425
+  }
+}
+
+2026-04-17 07:36:19,905 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411379
+    nanosec: 956085091
+  }
+}
+
+2026-04-17 07:36:19,954 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 6209267
+  }
+}
+
+2026-04-17 07:36:20,008 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 60690637
+  }
+}
+
+2026-04-17 07:36:20,060 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 110807755
+  }
+}
+
+2026-04-17 07:36:20,109 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 160915787
+  }
+}
+
+2026-04-17 07:36:20,160 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 211057352
+  }
+}
+
+2026-04-17 07:36:20,210 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 261132682
+  }
+}
+
+2026-04-17 07:36:20,260 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 311262280
+  }
+}
+
+2026-04-17 07:36:20,310 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 361366728
+  }
+}
+
+2026-04-17 07:36:20,360 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 411503046
+  }
+}
+
+2026-04-17 07:36:20,410 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 461606630
+  }
+}
+
+2026-04-17 07:36:20,460 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 511727460
+  }
+}
+
+2026-04-17 07:36:20,510 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 561847235
+  }
+}
+
+2026-04-17 07:36:20,561 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 611960450
+  }
+}
+
+2026-04-17 07:36:20,610 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 662080161
+  }
+}
+
+2026-04-17 07:36:20,661 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 712198816
+  }
+}
+
+2026-04-17 07:36:20,711 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 762307200
+  }
+}
+
+2026-04-17 07:36:20,762 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 812431294
+  }
+}
+
+2026-04-17 07:36:20,811 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 862556508
+  }
+}
+
+2026-04-17 07:36:20,861 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 912681499
+  }
+}
+
+2026-04-17 07:36:20,911 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411380
+    nanosec: 962807449
+  }
+}
+
+2026-04-17 07:36:20,962 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 12933273
+  }
+}
+
+2026-04-17 07:36:21,013 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 63789994
+  }
+}
+
+2026-04-17 07:36:21,063 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 113892088
+  }
+}
+
+2026-04-17 07:36:21,113 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 164003846
+  }
+}
+
+2026-04-17 07:36:21,164 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 214132114
+  }
+}
+
+2026-04-17 07:36:21,231 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 264248128
+  }
+}
+
+2026-04-17 07:36:21,265 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 314386411
+  }
+}
+
+2026-04-17 07:36:21,313 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 364487418
+  }
+}
+
+2026-04-17 07:36:21,365 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 414591112
+  }
+}
+
+2026-04-17 07:36:21,413 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 464721557
+  }
+}
+
+2026-04-17 07:36:21,466 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 514838946
+  }
+}
+
+2026-04-17 07:36:21,514 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 564956783
+  }
+}
+
+2026-04-17 07:36:21,565 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 615094427
+  }
+}
+
+2026-04-17 07:36:21,614 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 665196361
+  }
+}
+
+2026-04-17 07:36:21,664 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 715294712
+  }
+}
+
+2026-04-17 07:36:21,714 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 765426404
+  }
+}
+
+2026-04-17 07:36:21,764 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 815518356
+  }
+}
+
+2026-04-17 07:36:21,814 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 865633633
+  }
+}
+
+2026-04-17 07:36:21,865 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 915735120
+  }
+}
+
+2026-04-17 07:36:21,914 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411381
+    nanosec: 965858428
+  }
+}
+
+2026-04-17 07:36:21,967 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 16032296
+  }
+}
+
+2026-04-17 07:36:22,023 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 73951626
+  }
+}
+
+2026-04-17 07:36:22,074 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 124042760
+  }
+}
+
+2026-04-17 07:36:22,122 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 174180641
+  }
+}
+
+2026-04-17 07:36:22,174 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 224273919
+  }
+}
+
+2026-04-17 07:36:22,223 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 274419640
+  }
+}
+
+2026-04-17 07:36:22,273 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 324537556
+  }
+}
+
+2026-04-17 07:36:22,323 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 374654703
+  }
+}
+
+2026-04-17 07:36:22,373 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 424737965
+  }
+}
+
+2026-04-17 07:36:22,424 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 474884935
+  }
+}
+
+2026-04-17 07:36:22,474 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 524989635
+  }
+}
+
+2026-04-17 07:36:22,524 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 575110878
+  }
+}
+
+2026-04-17 07:36:22,574 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 625224698
+  }
+}
+
+2026-04-17 07:36:22,623 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 675351893
+  }
+}
+
+2026-04-17 07:36:22,674 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 725447410
+  }
+}
+
+2026-04-17 07:36:22,724 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 775566477
+  }
+}
+
+2026-04-17 07:36:22,774 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 825668810
+  }
+}
+
+2026-04-17 07:36:22,824 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 875818979
+  }
+}
+
+2026-04-17 07:36:22,877 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 925908193
+  }
+}
+
+2026-04-17 07:36:22,926 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411382
+    nanosec: 976018589
+  }
+}
+
+2026-04-17 07:36:22,975 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 26150365
+  }
+}
+
+2026-04-17 07:36:23,029 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 80777914
+  }
+}
+
+2026-04-17 07:36:23,080 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 130885188
+  }
+}
+
+2026-04-17 07:36:23,130 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 180985743
+  }
+}
+
+2026-04-17 07:36:23,180 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 231128727
+  }
+}
+
+2026-04-17 07:36:23,230 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 281200996
+  }
+}
+
+2026-04-17 07:36:23,280 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 331308302
+  }
+}
+
+2026-04-17 07:36:23,330 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 381441847
+  }
+}
+
+2026-04-17 07:36:23,381 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 431575359
+  }
+}
+
+2026-04-17 07:36:23,430 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 481680074
+  }
+}
+
+2026-04-17 07:36:23,480 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 531797236
+  }
+}
+
+2026-04-17 07:36:23,531 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 581906206
+  }
+}
+
+2026-04-17 07:36:23,580 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 632016936
+  }
+}
+
+2026-04-17 07:36:23,631 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 682129650
+  }
+}
+
+2026-04-17 07:36:23,681 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 732247068
+  }
+}
+
+2026-04-17 07:36:23,731 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 782374085
+  }
+}
+
+2026-04-17 07:36:23,782 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 832490958
+  }
+}
+
+2026-04-17 07:36:23,832 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 882611864
+  }
+}
+
+2026-04-17 07:36:23,881 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 932730817
+  }
+}
+
+2026-04-17 07:36:23,932 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411383
+    nanosec: 982849259
+  }
+}
+
+2026-04-17 07:36:23,983 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 32983770
+  }
+}
+
+2026-04-17 07:36:24,037 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 88016902
+  }
+}
+
+2026-04-17 07:36:24,087 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 138157820
+  }
+}
+
+2026-04-17 07:36:24,139 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 188297169
+  }
+}
+
+2026-04-17 07:36:24,187 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 238449734
+  }
+}
+
+2026-04-17 07:36:24,239 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 288548735
+  }
+}
+
+2026-04-17 07:36:24,287 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 338661080
+  }
+}
+
+2026-04-17 07:36:24,337 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 388794926
+  }
+}
+
+2026-04-17 07:36:24,388 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 438934436
+  }
+}
+
+2026-04-17 07:36:24,439 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 489031741
+  }
+}
+
+2026-04-17 07:36:24,488 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 539183474
+  }
+}
+
+2026-04-17 07:36:24,538 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 589290155
+  }
+}
+
+2026-04-17 07:36:24,588 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 639428865
+  }
+}
+
+2026-04-17 07:36:24,638 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 689516699
+  }
+}
+
+2026-04-17 07:36:24,688 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 739654257
+  }
+}
+
+2026-04-17 07:36:24,739 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 789754506
+  }
+}
+
+2026-04-17 07:36:24,788 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 839897631
+  }
+}
+
+2026-04-17 07:36:24,839 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 890006904
+  }
+}
+
+2026-04-17 07:36:24,888 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 940153805
+  }
+}
+
+2026-04-17 07:36:24,938 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411384
+    nanosec: 990240871
+  }
+}
+
+2026-04-17 07:36:24,989 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 40381094
+  }
+}
+
+2026-04-17 07:36:25,046 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 97586706
+  }
+}
+
+2026-04-17 07:36:25,097 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 147706968
+  }
+}
+
+2026-04-17 07:36:25,145 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 197827997
+  }
+}
+
+2026-04-17 07:36:25,198 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 247953986
+  }
+}
+
+2026-04-17 07:36:25,246 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 298078311
+  }
+}
+
+2026-04-17 07:36:25,297 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 348196524
+  }
+}
+
+2026-04-17 07:36:25,348 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 398320338
+  }
+}
+
+2026-04-17 07:36:25,399 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 448436919
+  }
+}
+
+2026-04-17 07:36:25,447 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 498564572
+  }
+}
+
+2026-04-17 07:36:25,500 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 548702336
+  }
+}
+
+2026-04-17 07:36:25,548 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 598804711
+  }
+}
+
+2026-04-17 07:36:25,598 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 648927212
+  }
+}
+
+2026-04-17 07:36:25,649 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 699085390
+  }
+}
+
+2026-04-17 07:36:25,697 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 749191061
+  }
+}
+
+2026-04-17 07:36:25,748 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 799314202
+  }
+}
+
+2026-04-17 07:36:25,802 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 849423552
+  }
+}
+
+2026-04-17 07:36:25,848 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 899542022
+  }
+}
+
+2026-04-17 07:36:25,899 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 949646636
+  }
+}
+
+2026-04-17 07:36:25,948 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411385
+    nanosec: 999774289
+  }
+}
+
+2026-04-17 07:36:26,002 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 49881571
+  }
+}
+
+2026-04-17 07:36:26,054 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 104857490
+  }
+}
+
+2026-04-17 07:36:26,104 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 154985060
+  }
+}
+
+2026-04-17 07:36:26,154 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 205086105
+  }
+}
+
+2026-04-17 07:36:26,204 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 255183662
+  }
+}
+
+2026-04-17 07:36:26,255 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 305311777
+  }
+}
+
+2026-04-17 07:36:26,304 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 355415189
+  }
+}
+
+2026-04-17 07:36:26,354 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 405525513
+  }
+}
+
+2026-04-17 07:36:26,404 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 455610687
+  }
+}
+
+2026-04-17 07:36:26,455 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 505733778
+  }
+}
+
+2026-04-17 07:36:26,507 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 555847366
+  }
+}
+
+2026-04-17 07:36:26,554 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 605968185
+  }
+}
+
+2026-04-17 07:36:26,606 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 656076045
+  }
+}
+
+2026-04-17 07:36:26,654 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 706206079
+  }
+}
+
+2026-04-17 07:36:26,706 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 756316179
+  }
+}
+
+2026-04-17 07:36:26,754 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 806426983
+  }
+}
+
+2026-04-17 07:36:26,805 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 856540283
+  }
+}
+
+2026-04-17 07:36:26,855 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 906666926
+  }
+}
+
+2026-04-17 07:36:26,910 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411386
+    nanosec: 956770914
+  }
+}
+
+2026-04-17 07:36:26,956 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 6907956
+  }
+}
+
+2026-04-17 07:36:27,005 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 57005911
+  }
+}
+
+2026-04-17 07:36:27,061 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 112903754
+  }
+}
+
+2026-04-17 07:36:27,111 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 163033963
+  }
+}
+
+2026-04-17 07:36:27,162 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 213149548
+  }
+}
+
+2026-04-17 07:36:27,211 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 263255374
+  }
+}
+
+2026-04-17 07:36:27,264 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 313411276
+  }
+}
+
+2026-04-17 07:36:27,313 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 363500303
+  }
+}
+
+2026-04-17 07:36:27,364 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 413636079
+  }
+}
+
+2026-04-17 07:36:27,412 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 463747504
+  }
+}
+
+2026-04-17 07:36:27,465 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 513872081
+  }
+}
+
+2026-04-17 07:36:27,513 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 563973747
+  }
+}
+
+2026-04-17 07:36:27,562 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 614121362
+  }
+}
+
+2026-04-17 07:36:27,612 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 664244307
+  }
+}
+
+2026-04-17 07:36:27,664 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 714336118
+  }
+}
+
+2026-04-17 07:36:27,713 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 764442904
+  }
+}
+
+2026-04-17 07:36:27,763 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 814571160
+  }
+}
+
+2026-04-17 07:36:27,813 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 864664827
+  }
+}
+
+2026-04-17 07:36:27,863 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 914794363
+  }
+}
+
+2026-04-17 07:36:27,913 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411387
+    nanosec: 964906589
+  }
+}
+
+2026-04-17 07:36:27,963 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 15040063
+  }
+}
+
+2026-04-17 07:36:28,014 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 65111793
+  }
+}
+
+2026-04-17 07:36:28,069 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 120538265
+  }
+}
+
+2026-04-17 07:36:28,119 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 170663272
+  }
+}
+
+2026-04-17 07:36:28,172 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 220781014
+  }
+}
+
+2026-04-17 07:36:28,219 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 270943681
+  }
+}
+
+2026-04-17 07:36:28,270 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 321019443
+  }
+}
+
+2026-04-17 07:36:28,320 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 371151713
+  }
+}
+
+2026-04-17 07:36:28,370 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 421235058
+  }
+}
+
+2026-04-17 07:36:28,419 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 471385214
+  }
+}
+
+2026-04-17 07:36:28,471 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 521481167
+  }
+}
+
+2026-04-17 07:36:28,519 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 571614108
+  }
+}
+
+2026-04-17 07:36:28,570 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 621715788
+  }
+}
+
+2026-04-17 07:36:28,620 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 671840410
+  }
+}
+
+2026-04-17 07:36:28,672 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 721949226
+  }
+}
+
+2026-04-17 07:36:28,720 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 772061113
+  }
+}
+
+2026-04-17 07:36:28,770 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 822184519
+  }
+}
+
+2026-04-17 07:36:28,822 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 872313653
+  }
+}
+
+2026-04-17 07:36:28,870 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 922404197
+  }
+}
+
+2026-04-17 07:36:28,920 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411388
+    nanosec: 972527380
+  }
+}
+
+2026-04-17 07:36:28,972 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 22662118
+  }
+}
+
+2026-04-17 07:36:29,021 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 72774243
+  }
+}
+
+2026-04-17 07:36:29,077 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 127964525
+  }
+}
+
+2026-04-17 07:36:29,126 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 178072938
+  }
+}
+
+2026-04-17 07:36:29,176 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 228187238
+  }
+}
+
+2026-04-17 07:36:29,227 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 278304803
+  }
+}
+
+2026-04-17 07:36:29,277 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 328409664
+  }
+}
+
+2026-04-17 07:36:29,327 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 378546426
+  }
+}
+
+2026-04-17 07:36:29,376 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 428663351
+  }
+}
+
+2026-04-17 07:36:29,428 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 478777363
+  }
+}
+
+2026-04-17 07:36:29,477 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 528918061
+  }
+}
+
+2026-04-17 07:36:29,527 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 579061351
+  }
+}
+
+2026-04-17 07:36:29,578 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 629166245
+  }
+}
+
+2026-04-17 07:36:29,628 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 679293664
+  }
+}
+
+2026-04-17 07:36:29,677 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 729409148
+  }
+}
+
+2026-04-17 07:36:29,728 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 779535896
+  }
+}
+
+2026-04-17 07:36:29,778 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 829654580
+  }
+}
+
+2026-04-17 07:36:29,827 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 879761233
+  }
+}
+
+2026-04-17 07:36:29,878 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 929883789
+  }
+}
+
+2026-04-17 07:36:29,931 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411389
+    nanosec: 979999561
+  }
+}
+
+2026-04-17 07:36:29,978 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 30137291
+  }
+}
+
+2026-04-17 07:36:30,029 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 80242133
+  }
+}
+
+2026-04-17 07:36:30,085 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 135481834
+  }
+}
+
+2026-04-17 07:36:30,145 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 185569846
+  }
+}
+
+2026-04-17 07:36:30,184 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 235692927
+  }
+}
+
+2026-04-17 07:36:30,234 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 285806569
+  }
+}
+
+2026-04-17 07:36:30,284 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 335941809
+  }
+}
+
+2026-04-17 07:36:30,333 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 386035741
+  }
+}
+
+2026-04-17 07:36:30,384 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 436176068
+  }
+}
+
+2026-04-17 07:36:30,434 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 486275439
+  }
+}
+
+2026-04-17 07:36:30,484 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 536392665
+  }
+}
+
+2026-04-17 07:36:30,535 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 586513730
+  }
+}
+
+2026-04-17 07:36:30,585 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 636631340
+  }
+}
+
+2026-04-17 07:36:30,636 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 686747061
+  }
+}
+
+2026-04-17 07:36:30,685 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 736880478
+  }
+}
+
+2026-04-17 07:36:30,735 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 787002375
+  }
+}
+
+2026-04-17 07:36:30,785 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 837121360
+  }
+}
+
+2026-04-17 07:36:30,836 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 887238202
+  }
+}
+
+2026-04-17 07:36:30,886 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 937367907
+  }
+}
+
+2026-04-17 07:36:30,936 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411390
+    nanosec: 987493579
+  }
+}
+
+2026-04-17 07:36:30,986 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 37614558
+  }
+}
+
+2026-04-17 07:36:31,036 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 87745780
+  }
+}
+
+2026-04-17 07:36:31,092 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 142774728
+  }
+}
+
+2026-04-17 07:36:31,141 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 192887583
+  }
+}
+
+2026-04-17 07:36:31,193 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 243053522
+  }
+}
+
+2026-04-17 07:36:31,241 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 293127468
+  }
+}
+
+2026-04-17 07:36:31,294 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 343281664
+  }
+}
+
+2026-04-17 07:36:31,342 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 393387672
+  }
+}
+
+2026-04-17 07:36:31,391 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 443514510
+  }
+}
+
+2026-04-17 07:36:31,441 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 493637572
+  }
+}
+
+2026-04-17 07:36:31,492 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 543763611
+  }
+}
+
+2026-04-17 07:36:31,542 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 593863763
+  }
+}
+
+2026-04-17 07:36:31,592 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 644008455
+  }
+}
+
+2026-04-17 07:36:31,642 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 694125630
+  }
+}
+
+2026-04-17 07:36:31,692 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 744256564
+  }
+}
+
+2026-04-17 07:36:31,742 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 794376683
+  }
+}
+
+2026-04-17 07:36:31,794 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 844495553
+  }
+}
+
+2026-04-17 07:36:31,857 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 894605497
+  }
+}
+
+2026-04-17 07:36:31,892 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 944756173
+  }
+}
+
+2026-04-17 07:36:31,945 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411391
+    nanosec: 994858501
+  }
+}
+
+2026-04-17 07:36:31,993 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 44986630
+  }
+}
+
+2026-04-17 07:36:32,045 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 95095499
+  }
+}
+
+2026-04-17 07:36:32,097 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 149966490
+  }
+}
+
+2026-04-17 07:36:32,148 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 200089085
+  }
+}
+
+2026-04-17 07:36:32,199 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 250206305
+  }
+}
+
+2026-04-17 07:36:32,248 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 300316390
+  }
+}
+
+2026-04-17 07:36:32,298 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 350432778
+  }
+}
+
+2026-04-17 07:36:32,349 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 400546254
+  }
+}
+
+2026-04-17 07:36:32,398 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 450675089
+  }
+}
+
+2026-04-17 07:36:32,449 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 500782646
+  }
+}
+
+2026-04-17 07:36:32,502 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 550919385
+  }
+}
+
+2026-04-17 07:36:32,549 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 601007263
+  }
+}
+
+2026-04-17 07:36:32,599 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 651130146
+  }
+}
+
+2026-04-17 07:36:32,649 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 701228712
+  }
+}
+
+2026-04-17 07:36:32,700 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 751358187
+  }
+}
+
+2026-04-17 07:36:32,749 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 801477615
+  }
+}
+
+2026-04-17 07:36:32,799 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 851584052
+  }
+}
+
+2026-04-17 07:36:32,850 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 901698648
+  }
+}
+
+2026-04-17 07:36:32,901 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411392
+    nanosec: 951805917
+  }
+}
+
+2026-04-17 07:36:32,949 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 1921953
+  }
+}
+
+2026-04-17 07:36:33,001 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 52042449
+  }
+}
+
+2026-04-17 07:36:33,050 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 102166466
+  }
+}
+
+2026-04-17 07:36:33,105 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 157707819
+  }
+}
+
+2026-04-17 07:36:33,156 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 207834971
+  }
+}
+
+2026-04-17 07:36:33,206 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 257940301
+  }
+}
+
+2026-04-17 07:36:33,258 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 308097307
+  }
+}
+
+2026-04-17 07:36:33,308 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 358198637
+  }
+}
+
+2026-04-17 07:36:33,358 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 408340733
+  }
+}
+
+2026-04-17 07:36:33,407 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 458452174
+  }
+}
+
+2026-04-17 07:36:33,457 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 508598461
+  }
+}
+
+2026-04-17 07:36:33,507 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 558708015
+  }
+}
+
+2026-04-17 07:36:33,556 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 608845950
+  }
+}
+
+2026-04-17 07:36:33,608 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 658975086
+  }
+}
+
+2026-04-17 07:36:33,657 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 709094879
+  }
+}
+
+2026-04-17 07:36:33,707 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 759183666
+  }
+}
+
+2026-04-17 07:36:33,757 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 809328481
+  }
+}
+
+2026-04-17 07:36:33,806 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 859431284
+  }
+}
+
+2026-04-17 07:36:33,858 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 909570211
+  }
+}
+
+2026-04-17 07:36:33,908 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411393
+    nanosec: 959678197
+  }
+}
+
+2026-04-17 07:36:33,957 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 9804583
+  }
+}
+
+2026-04-17 07:36:34,008 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 59906534
+  }
+}
+
+2026-04-17 07:36:34,060 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 110038755
+  }
+}
+
+2026-04-17 07:36:34,117 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 169449037
+  }
+}
+
+2026-04-17 07:36:34,167 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 219550028
+  }
+}
+
+2026-04-17 07:36:34,217 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 269681065
+  }
+}
+
+2026-04-17 07:36:34,268 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 319803655
+  }
+}
+
+2026-04-17 07:36:34,317 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 369935684
+  }
+}
+
+2026-04-17 07:36:34,368 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 420027844
+  }
+}
+
+2026-04-17 07:36:34,418 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 470179103
+  }
+}
+
+2026-04-17 07:36:34,468 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 520277055
+  }
+}
+
+2026-04-17 07:36:34,519 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 570419387
+  }
+}
+
+2026-04-17 07:36:34,568 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 620526937
+  }
+}
+
+2026-04-17 07:36:34,618 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 670658454
+  }
+}
+
+2026-04-17 07:36:34,669 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 720762389
+  }
+}
+
+2026-04-17 07:36:34,718 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 770910129
+  }
+}
+
+2026-04-17 07:36:34,770 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 821014672
+  }
+}
+
+2026-04-17 07:36:34,820 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 871140781
+  }
+}
+
+2026-04-17 07:36:35,146 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 921243821
+  }
+}
+
+2026-04-17 07:36:35,146 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411394
+    nanosec: 971356651
+  }
+}
+
+2026-04-17 07:36:35,146 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 21476750
+  }
+}
+
+2026-04-17 07:36:35,146 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 71607511
+  }
+}
+
+2026-04-17 07:36:35,146 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 121715555
+  }
+}
+
+2026-04-17 07:36:35,146 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 178157763
+  }
+}
+
+2026-04-17 07:36:35,176 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 228261167
+  }
+}
+
+2026-04-17 07:36:35,226 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 278409047
+  }
+}
+
+2026-04-17 07:36:35,276 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 328520675
+  }
+}
+
+2026-04-17 07:36:35,327 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 378649261
+  }
+}
+
+2026-04-17 07:36:35,379 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 428771735
+  }
+}
+
+2026-04-17 07:36:35,430 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 478914432
+  }
+}
+
+2026-04-17 07:36:35,476 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 529017388
+  }
+}
+
+2026-04-17 07:36:35,527 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 579146966
+  }
+}
+
+2026-04-17 07:36:35,577 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 629245154
+  }
+}
+
+2026-04-17 07:36:35,627 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 679373036
+  }
+}
+
+2026-04-17 07:36:35,678 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 729509014
+  }
+}
+
+2026-04-17 07:36:35,728 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 779629953
+  }
+}
+
+2026-04-17 07:36:35,777 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 829730509
+  }
+}
+
+2026-04-17 07:36:35,827 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 879852855
+  }
+}
+
+2026-04-17 07:36:35,877 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 929970338
+  }
+}
+
+2026-04-17 07:36:35,929 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411395
+    nanosec: 980105004
+  }
+}
+
+2026-04-17 07:36:35,977 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 30216894
+  }
+}
+
+2026-04-17 07:36:36,029 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 80340821
+  }
+}
+
+2026-04-17 07:36:36,078 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 130449261
+  }
+}
+
+2026-04-17 07:36:36,135 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 186406369
+  }
+}
+
+2026-04-17 07:36:36,186 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 236521881
+  }
+}
+
+2026-04-17 07:36:36,235 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 286630417
+  }
+}
+
+2026-04-17 07:36:36,285 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 336743817
+  }
+}
+
+2026-04-17 07:36:36,334 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 386849154
+  }
+}
+
+2026-04-17 07:36:36,385 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 436969529
+  }
+}
+
+2026-04-17 07:36:36,437 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 487098544
+  }
+}
+
+2026-04-17 07:36:36,486 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 537204872
+  }
+}
+
+2026-04-17 07:36:36,535 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 587324960
+  }
+}
+
+2026-04-17 07:36:36,585 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 637442680
+  }
+}
+
+2026-04-17 07:36:36,637 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 687561647
+  }
+}
+
+2026-04-17 07:36:36,685 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 737705829
+  }
+}
+
+2026-04-17 07:36:36,736 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 787825180
+  }
+}
+
+2026-04-17 07:36:36,785 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 837950291
+  }
+}
+
+2026-04-17 07:36:36,835 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 888065227
+  }
+}
+
+2026-04-17 07:36:36,886 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 938179011
+  }
+}
+
+2026-04-17 07:36:36,935 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411396
+    nanosec: 988298746
+  }
+}
+
+2026-04-17 07:36:36,997 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 38432602
+  }
+}
+
+2026-04-17 07:36:37,036 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 88541119
+  }
+}
+
+2026-04-17 07:36:37,086 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 138673570
+  }
+}
+
+2026-04-17 07:36:37,169 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 218473684
+  }
+}
+
+2026-04-17 07:36:37,216 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 268596088
+  }
+}
+
+2026-04-17 07:36:37,268 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 318711324
+  }
+}
+
+2026-04-17 07:36:37,316 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 368827553
+  }
+}
+
+2026-04-17 07:36:37,368 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 418958404
+  }
+}
+
+2026-04-17 07:36:37,417 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 469068617
+  }
+}
+
+2026-04-17 07:36:37,467 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 519194124
+  }
+}
+
+2026-04-17 07:36:37,518 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 569304689
+  }
+}
+
+2026-04-17 07:36:37,568 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 619414486
+  }
+}
+
+2026-04-17 07:36:37,617 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 669539194
+  }
+}
+
+2026-04-17 07:36:37,668 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 719647999
+  }
+}
+
+2026-04-17 07:36:37,717 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 769779938
+  }
+}
+
+2026-04-17 07:36:37,766 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 819873864
+  }
+}
+
+2026-04-17 07:36:37,818 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 870007659
+  }
+}
+
+2026-04-17 07:36:37,868 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 920111473
+  }
+}
+
+2026-04-17 07:36:37,918 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411397
+    nanosec: 970260435
+  }
+}
+
+2026-04-17 07:36:37,967 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 20350205
+  }
+}
+
+2026-04-17 07:36:38,018 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 70467758
+  }
+}
+
+2026-04-17 07:36:38,068 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 120573280
+  }
+}
+
+2026-04-17 07:36:38,118 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 170706704
+  }
+}
+
+2026-04-17 07:36:38,175 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 226242464
+  }
+}
+
+2026-04-17 07:36:38,225 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 276349362
+  }
+}
+
+2026-04-17 07:36:38,274 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 326469762
+  }
+}
+
+2026-04-17 07:36:38,325 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 376589587
+  }
+}
+
+2026-04-17 07:36:38,375 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 426688485
+  }
+}
+
+2026-04-17 07:36:38,425 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 476796823
+  }
+}
+
+2026-04-17 07:36:38,475 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 526948741
+  }
+}
+
+2026-04-17 07:36:38,525 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 577043768
+  }
+}
+
+2026-04-17 07:36:38,574 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 627166984
+  }
+}
+
+2026-04-17 07:36:38,625 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 677285753
+  }
+}
+
+2026-04-17 07:36:38,675 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 727411913
+  }
+}
+
+2026-04-17 07:36:38,725 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 777553240
+  }
+}
+
+2026-04-17 07:36:38,775 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 827662122
+  }
+}
+
+2026-04-17 07:36:38,825 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 877805433
+  }
+}
+
+2026-04-17 07:36:38,877 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 927909099
+  }
+}
+
+2026-04-17 07:36:38,926 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411398
+    nanosec: 978059513
+  }
+}
+
+2026-04-17 07:36:38,976 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 28161969
+  }
+}
+
+2026-04-17 07:36:39,026 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 78281038
+  }
+}
+
+2026-04-17 07:36:39,077 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 128388493
+  }
+}
+
+2026-04-17 07:36:39,127 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 178535304
+  }
+}
+
+2026-04-17 07:36:39,183 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 234255223
+  }
+}
+
+2026-04-17 07:36:39,235 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 284378996
+  }
+}
+
+2026-04-17 07:36:39,282 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 334490962
+  }
+}
+
+2026-04-17 07:36:39,333 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 384606736
+  }
+}
+
+2026-04-17 07:36:39,383 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 434735372
+  }
+}
+
+2026-04-17 07:36:39,433 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 484849450
+  }
+}
+
+2026-04-17 07:36:39,483 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 534989285
+  }
+}
+
+2026-04-17 07:36:39,534 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 585093924
+  }
+}
+
+2026-04-17 07:36:39,583 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 635200866
+  }
+}
+
+2026-04-17 07:36:39,634 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 685334046
+  }
+}
+
+2026-04-17 07:36:39,684 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 735434525
+  }
+}
+
+2026-04-17 07:36:39,735 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 785542651
+  }
+}
+
+2026-04-17 07:36:39,784 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 835651673
+  }
+}
+
+2026-04-17 07:36:39,835 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 885774358
+  }
+}
+
+2026-04-17 07:36:39,883 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 935883476
+  }
+}
+
+2026-04-17 07:36:39,937 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411399
+    nanosec: 986003825
+  }
+}
+
+2026-04-17 07:36:39,984 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 36117847
+  }
+}
+
+2026-04-17 07:36:40,033 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 86236096
+  }
+}
+
+2026-04-17 07:36:40,085 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 136348650
+  }
+}
+
+2026-04-17 07:36:40,133 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 186469044
+  }
+}
+
+2026-04-17 07:36:40,191 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 242696459
+  }
+}
+
+2026-04-17 07:36:40,240 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 292803893
+  }
+}
+
+2026-04-17 07:36:40,290 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 342982970
+  }
+}
+
+2026-04-17 07:36:40,341 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 393066278
+  }
+}
+
+2026-04-17 07:36:40,391 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 443228461
+  }
+}
+
+2026-04-17 07:36:40,441 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 493329688
+  }
+}
+
+2026-04-17 07:36:40,491 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 543460416
+  }
+}
+
+2026-04-17 07:36:40,541 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 593558508
+  }
+}
+
+2026-04-17 07:36:40,591 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 643721330
+  }
+}
+
+2026-04-17 07:36:40,643 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 693823965
+  }
+}
+
+2026-04-17 07:36:40,693 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 743979300
+  }
+}
+
+2026-04-17 07:36:40,740 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 794061456
+  }
+}
+
+2026-04-17 07:36:40,792 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 844212823
+  }
+}
+
+2026-04-17 07:36:40,842 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 894317794
+  }
+}
+
+2026-04-17 07:36:40,892 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 944445899
+  }
+}
+
+2026-04-17 07:36:40,944 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411400
+    nanosec: 994548022
+  }
+}
+
+2026-04-17 07:36:40,992 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 44674377
+  }
+}
+
+2026-04-17 07:36:41,043 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 94780000
+  }
+}
+
+2026-04-17 07:36:41,093 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 144926452
+  }
+}
+
+2026-04-17 07:36:41,143 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 195060808
+  }
+}
+
+2026-04-17 07:36:41,200 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 250121446
+  }
+}
+
+2026-04-17 07:36:41,247 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 300245659
+  }
+}
+
+2026-04-17 07:36:41,298 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 350357682
+  }
+}
+
+2026-04-17 07:36:41,348 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 400467304
+  }
+}
+
+2026-04-17 07:36:41,398 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 450575583
+  }
+}
+
+2026-04-17 07:36:41,449 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 500690549
+  }
+}
+
+2026-04-17 07:36:41,498 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 550818826
+  }
+}
+
+2026-04-17 07:36:41,549 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 600930625
+  }
+}
+
+2026-04-17 07:36:41,599 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 651081556
+  }
+}
+
+2026-04-17 07:36:41,648 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 701160077
+  }
+}
+
+2026-04-17 07:36:41,701 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 751269060
+  }
+}
+
+2026-04-17 07:36:41,749 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 801392441
+  }
+}
+
+2026-04-17 07:36:41,800 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 851505072
+  }
+}
+
+2026-04-17 07:36:41,849 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 901615142
+  }
+}
+
+2026-04-17 07:36:41,899 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411401
+    nanosec: 951710782
+  }
+}
+
+2026-04-17 07:36:41,950 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 1838675
+  }
+}
+
+2026-04-17 07:36:41,999 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 51958773
+  }
+}
+
+2026-04-17 07:36:42,049 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 102075383
+  }
+}
+
+2026-04-17 07:36:42,101 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 152187610
+  }
+}
+
+2026-04-17 07:36:42,150 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 202313275
+  }
+}
+
+2026-04-17 07:36:42,201 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 253340568
+  }
+}
+
+2026-04-17 07:36:42,252 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 303473177
+  }
+}
+
+2026-04-17 07:36:42,301 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 353585212
+  }
+}
+
+2026-04-17 07:36:42,352 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 403720029
+  }
+}
+
+2026-04-17 07:36:42,401 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 453843518
+  }
+}
+
+2026-04-17 07:36:42,451 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 503978943
+  }
+}
+
+2026-04-17 07:36:42,502 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 554107712
+  }
+}
+
+2026-04-17 07:36:42,552 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 604233346
+  }
+}
+
+2026-04-17 07:36:42,601 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 654333765
+  }
+}
+
+2026-04-17 07:36:42,652 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 704459079
+  }
+}
+
+2026-04-17 07:36:42,705 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 754574953
+  }
+}
+
+2026-04-17 07:36:42,752 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 804700299
+  }
+}
+
+2026-04-17 07:36:42,803 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 854814829
+  }
+}
+
+2026-04-17 07:36:42,853 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 904945007
+  }
+}
+
+2026-04-17 07:36:42,903 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411402
+    nanosec: 955049586
+  }
+}
+
+2026-04-17 07:36:42,953 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 5177076
+  }
+}
+
+2026-04-17 07:36:43,004 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 55273731
+  }
+}
+
+2026-04-17 07:36:43,053 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 105385970
+  }
+}
+
+2026-04-17 07:36:43,104 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 155489089
+  }
+}
+
+2026-04-17 07:36:43,155 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 205616783
+  }
+}
+
+2026-04-17 07:36:43,212 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 261840911
+  }
+}
+
+2026-04-17 07:36:43,260 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 311968764
+  }
+}
+
+2026-04-17 07:36:43,309 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 362066732
+  }
+}
+
+2026-04-17 07:36:43,360 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 412206201
+  }
+}
+
+2026-04-17 07:36:43,409 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 462297321
+  }
+}
+
+2026-04-17 07:36:43,460 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 512423927
+  }
+}
+
+2026-04-17 07:36:43,511 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 562536805
+  }
+}
+
+2026-04-17 07:36:43,560 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 612661875
+  }
+}
+
+2026-04-17 07:36:43,610 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 662790016
+  }
+}
+
+2026-04-17 07:36:43,659 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 712937196
+  }
+}
+
+2026-04-17 07:36:43,711 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 763094519
+  }
+}
+
+2026-04-17 07:36:43,760 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 813183848
+  }
+}
+
+2026-04-17 07:36:43,811 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 863290167
+  }
+}
+
+2026-04-17 07:36:43,862 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 913441315
+  }
+}
+
+2026-04-17 07:36:43,910 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411403
+    nanosec: 963515124
+  }
+}
+
+2026-04-17 07:36:43,962 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 13649444
+  }
+}
+
+2026-04-17 07:36:44,011 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 63783165
+  }
+}
+
+2026-04-17 07:36:44,061 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 113913430
+  }
+}
+
+2026-04-17 07:36:44,111 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 164031248
+  }
+}
+
+2026-04-17 07:36:44,162 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 214162697
+  }
+}
+
+2026-04-17 07:36:44,217 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 269438398
+  }
+}
+
+2026-04-17 07:36:44,267 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 319553945
+  }
+}
+
+2026-04-17 07:36:44,317 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 369648501
+  }
+}
+
+2026-04-17 07:36:44,367 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 419775438
+  }
+}
+
+2026-04-17 07:36:44,417 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 469899368
+  }
+}
+
+2026-04-17 07:36:44,469 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 520021314
+  }
+}
+
+2026-04-17 07:36:44,518 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 570123485
+  }
+}
+
+2026-04-17 07:36:44,569 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 620240152
+  }
+}
+
+2026-04-17 07:36:44,618 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 670365649
+  }
+}
+
+2026-04-17 07:36:44,669 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 720493195
+  }
+}
+
+2026-04-17 07:36:44,717 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 770595334
+  }
+}
+
+2026-04-17 07:36:44,768 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 820721536
+  }
+}
+
+2026-04-17 07:36:44,819 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 870856185
+  }
+}
+
+2026-04-17 07:36:44,867 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 920971923
+  }
+}
+
+2026-04-17 07:36:44,918 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411404
+    nanosec: 971116651
+  }
+}
+
+2026-04-17 07:36:44,967 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 21208972
+  }
+}
+
+2026-04-17 07:36:45,018 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 71323282
+  }
+}
+
+2026-04-17 07:36:45,068 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 121417690
+  }
+}
+
+2026-04-17 07:36:45,120 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 171561726
+  }
+}
+
+2026-04-17 07:36:45,170 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 221654246
+  }
+}
+
+2026-04-17 07:36:45,226 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 278546959
+  }
+}
+
+2026-04-17 07:36:45,276 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 328645334
+  }
+}
+
+2026-04-17 07:36:45,326 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 378807033
+  }
+}
+
+2026-04-17 07:36:45,376 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 428921119
+  }
+}
+
+2026-04-17 07:36:45,425 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 479072771
+  }
+}
+
+2026-04-17 07:36:45,477 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 529169931
+  }
+}
+
+2026-04-17 07:36:45,528 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 579296272
+  }
+}
+
+2026-04-17 07:36:45,577 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 629401815
+  }
+}
+
+2026-04-17 07:36:45,629 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 679534076
+  }
+}
+
+2026-04-17 07:36:45,677 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 729647907
+  }
+}
+
+2026-04-17 07:36:45,727 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 779770600
+  }
+}
+
+2026-04-17 07:36:45,777 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 829879887
+  }
+}
+
+2026-04-17 07:36:45,827 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 880005717
+  }
+}
+
+2026-04-17 07:36:45,877 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 930120091
+  }
+}
+
+2026-04-17 07:36:45,928 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411405
+    nanosec: 980247488
+  }
+}
+
+2026-04-17 07:36:45,977 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 30356846
+  }
+}
+
+2026-04-17 07:36:46,027 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 80490142
+  }
+}
+
+2026-04-17 07:36:46,078 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 130594065
+  }
+}
+
+2026-04-17 07:36:46,129 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 180724162
+  }
+}
+
+2026-04-17 07:36:46,179 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 230836149
+  }
+}
+
+2026-04-17 07:36:46,234 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 286697784
+  }
+}
+
+2026-04-17 07:36:46,284 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 336798475
+  }
+}
+
+2026-04-17 07:36:46,334 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 386939387
+  }
+}
+
+2026-04-17 07:36:46,384 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 437027919
+  }
+}
+
+2026-04-17 07:36:46,435 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 487145281
+  }
+}
+
+2026-04-17 07:36:46,485 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 537279762
+  }
+}
+
+2026-04-17 07:36:46,535 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 587393796
+  }
+}
+
+2026-04-17 07:36:46,585 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 637526485
+  }
+}
+
+2026-04-17 07:36:46,635 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 687644711
+  }
+}
+
+2026-04-17 07:36:46,685 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 737789911
+  }
+}
+
+2026-04-17 07:36:46,735 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 787886858
+  }
+}
+
+2026-04-17 07:36:46,785 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 838031290
+  }
+}
+
+2026-04-17 07:36:46,837 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 888156843
+  }
+}
+
+2026-04-17 07:36:46,886 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 938279133
+  }
+}
+
+2026-04-17 07:36:46,937 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411406
+    nanosec: 988412110
+  }
+}
+
+2026-04-17 07:36:46,985 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 38521929
+  }
+}
+
+2026-04-17 07:36:47,036 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 88640198
+  }
+}
+
+2026-04-17 07:36:47,087 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 138811168
+  }
+}
+
+2026-04-17 07:36:47,137 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 188915774
+  }
+}
+
+2026-04-17 07:36:47,187 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 239044155
+  }
+}
+
+2026-04-17 07:36:47,242 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 294054763
+  }
+}
+
+2026-04-17 07:36:47,292 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 344187400
+  }
+}
+
+2026-04-17 07:36:47,341 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 394288967
+  }
+}
+
+2026-04-17 07:36:47,392 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 444419075
+  }
+}
+
+2026-04-17 07:36:47,442 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 494526754
+  }
+}
+
+2026-04-17 07:36:47,492 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 544659102
+  }
+}
+
+2026-04-17 07:36:47,542 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 594775996
+  }
+}
+
+2026-04-17 07:36:47,592 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 644896057
+  }
+}
+
+2026-04-17 07:36:47,642 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 695044757
+  }
+}
+
+2026-04-17 07:36:47,692 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 745126165
+  }
+}
+
+2026-04-17 07:36:47,742 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 795236051
+  }
+}
+
+2026-04-17 07:36:47,793 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 845340242
+  }
+}
+
+2026-04-17 07:36:47,842 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 895462799
+  }
+}
+
+2026-04-17 07:36:47,893 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 945585420
+  }
+}
+
+2026-04-17 07:36:47,942 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411407
+    nanosec: 995694923
+  }
+}
+
+2026-04-17 07:36:47,992 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 45820530
+  }
+}
+
+2026-04-17 07:36:48,043 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 95943098
+  }
+}
+
+2026-04-17 07:36:48,095 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 146065059
+  }
+}
+
+2026-04-17 07:36:48,144 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 196149871
+  }
+}
+
+2026-04-17 07:36:48,194 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 246273720
+  }
+}
+
+2026-04-17 07:36:48,248 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 302044284
+  }
+}
+
+2026-04-17 07:36:48,299 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 352158725
+  }
+}
+
+2026-04-17 07:36:48,349 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 402253936
+  }
+}
+
+2026-04-17 07:36:48,398 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 452383609
+  }
+}
+
+2026-04-17 07:36:48,449 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 502515745
+  }
+}
+
+2026-04-17 07:36:48,499 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 552641481
+  }
+}
+
+2026-04-17 07:36:48,550 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 602755795
+  }
+}
+
+2026-04-17 07:36:48,599 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 652890299
+  }
+}
+
+2026-04-17 07:36:48,650 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 703020835
+  }
+}
+
+2026-04-17 07:36:48,701 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 753140876
+  }
+}
+
+2026-04-17 07:36:48,750 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 803255382
+  }
+}
+
+2026-04-17 07:36:48,800 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 853387550
+  }
+}
+
+2026-04-17 07:36:48,851 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 903498920
+  }
+}
+
+2026-04-17 07:36:48,901 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411408
+    nanosec: 953625200
+  }
+}
+
+2026-04-17 07:36:48,951 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 3753017
+  }
+}
+
+2026-04-17 07:36:49,000 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 53866830
+  }
+}
+
+2026-04-17 07:36:49,051 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 104007745
+  }
+}
+
+2026-04-17 07:36:49,101 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 154110871
+  }
+}
+
+2026-04-17 07:36:49,151 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 204219020
+  }
+}
+
+2026-04-17 07:36:49,202 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 254347008
+  }
+}
+
+2026-04-17 07:36:49,256 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 309059872
+  }
+}
+
+2026-04-17 07:36:49,305 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 359172789
+  }
+}
+
+2026-04-17 07:36:49,356 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 409315400
+  }
+}
+
+2026-04-17 07:36:49,406 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 459422877
+  }
+}
+
+2026-04-17 07:36:49,456 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 509572528
+  }
+}
+
+2026-04-17 07:36:49,506 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 559673862
+  }
+}
+
+2026-04-17 07:36:49,556 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 609810841
+  }
+}
+
+2026-04-17 07:36:49,606 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 659905616
+  }
+}
+
+2026-04-17 07:36:49,656 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 710035171
+  }
+}
+
+2026-04-17 07:36:49,707 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 760133146
+  }
+}
+
+2026-04-17 07:36:49,757 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 810294603
+  }
+}
+
+2026-04-17 07:36:49,807 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 860388290
+  }
+}
+
+2026-04-17 07:36:49,859 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 910524533
+  }
+}
+
+2026-04-17 07:36:49,907 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411409
+    nanosec: 960638794
+  }
+}
+
+2026-04-17 07:36:49,957 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 10761120
+  }
+}
+
+2026-04-17 07:36:50,010 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 60879489
+  }
+}
+
+2026-04-17 07:36:50,059 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 111011392
+  }
+}
+
+2026-04-17 07:36:50,108 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 161108098
+  }
+}
+
+2026-04-17 07:36:50,159 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 211247328
+  }
+}
+
+2026-04-17 07:36:50,208 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 261351361
+  }
+}
+
+2026-04-17 07:36:50,264 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 316277149
+  }
+}
+
+2026-04-17 07:36:50,314 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 366383870
+  }
+}
+
+2026-04-17 07:36:50,366 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 416507550
+  }
+}
+
+2026-04-17 07:36:50,414 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 466606368
+  }
+}
+
+2026-04-17 07:36:50,465 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 516730016
+  }
+}
+
+2026-04-17 07:36:50,513 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 566841632
+  }
+}
+
+2026-04-17 07:36:50,567 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 616981119
+  }
+}
+
+2026-04-17 07:36:50,615 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 667074049
+  }
+}
+
+2026-04-17 07:36:50,665 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 717208800
+  }
+}
+
+2026-04-17 07:36:50,715 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 767315681
+  }
+}
+
+2026-04-17 07:36:50,766 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 817454240
+  }
+}
+
+2026-04-17 07:36:50,815 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 867552993
+  }
+}
+
+2026-04-17 07:36:50,866 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 917683360
+  }
+}
+
+2026-04-17 07:36:50,915 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411410
+    nanosec: 967803169
+  }
+}
+
+2026-04-17 07:36:50,967 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 17927876
+  }
+}
+
+2026-04-17 07:36:51,015 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 68044463
+  }
+}
+
+2026-04-17 07:36:51,066 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 118178842
+  }
+}
+
+2026-04-17 07:36:51,115 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 168304965
+  }
+}
+
+2026-04-17 07:36:51,166 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 218446030
+  }
+}
+
+2026-04-17 07:36:51,217 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 268568762
+  }
+}
+
+2026-04-17 07:36:51,271 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 323195704
+  }
+}
+
+2026-04-17 07:36:51,322 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 373345473
+  }
+}
+
+2026-04-17 07:36:51,371 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 423446926
+  }
+}
+
+2026-04-17 07:36:51,422 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 473572665
+  }
+}
+
+2026-04-17 07:36:51,473 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 523662471
+  }
+}
+
+2026-04-17 07:36:51,521 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 573789010
+  }
+}
+
+2026-04-17 07:36:51,570 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 623895614
+  }
+}
+
+2026-04-17 07:36:51,620 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 674024201
+  }
+}
+
+2026-04-17 07:36:51,671 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 724132245
+  }
+}
+
+2026-04-17 07:36:51,722 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 774277215
+  }
+}
+
+2026-04-17 07:36:51,772 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 824369996
+  }
+}
+
+2026-04-17 07:36:51,821 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 874491543
+  }
+}
+
+2026-04-17 07:36:51,873 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 924601603
+  }
+}
+
+2026-04-17 07:36:51,922 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411411
+    nanosec: 974730254
+  }
+}
+
+2026-04-17 07:36:51,972 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 24837599
+  }
+}
+
+2026-04-17 07:36:52,022 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 74980660
+  }
+}
+
+2026-04-17 07:36:52,072 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 125053614
+  }
+}
+
+2026-04-17 07:36:52,123 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 175185412
+  }
+}
+
+2026-04-17 07:36:52,173 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 225280189
+  }
+}
+
+2026-04-17 07:36:52,224 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 275422226
+  }
+}
+
+2026-04-17 07:36:52,278 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 331145036
+  }
+}
+
+2026-04-17 07:36:52,328 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 381272738
+  }
+}
+
+2026-04-17 07:36:52,378 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 431382233
+  }
+}
+
+2026-04-17 07:36:52,429 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 481505424
+  }
+}
+
+2026-04-17 07:36:52,478 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 531599656
+  }
+}
+
+2026-04-17 07:36:52,528 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 581732894
+  }
+}
+
+2026-04-17 07:36:52,579 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 631843573
+  }
+}
+
+2026-04-17 07:36:52,629 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 681978603
+  }
+}
+
+2026-04-17 07:36:52,679 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 732128831
+  }
+}
+
+2026-04-17 07:36:52,731 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 782276308
+  }
+}
+
+2026-04-17 07:36:52,780 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 832422729
+  }
+}
+
+2026-04-17 07:36:52,831 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 882564798
+  }
+}
+
+2026-04-17 07:36:52,880 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 932711378
+  }
+}
+
+2026-04-17 07:36:52,933 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411412
+    nanosec: 982909699
+  }
+}
+
+2026-04-17 07:36:52,980 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 33015170
+  }
+}
+
+2026-04-17 07:36:53,030 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 83170721
+  }
+}
+
+2026-04-17 07:36:53,081 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 133353694
+  }
+}
+
+2026-04-17 07:36:53,133 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 183461953
+  }
+}
+
+2026-04-17 07:36:53,181 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 233600481
+  }
+}
+
+2026-04-17 07:36:53,231 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 283761280
+  }
+}
+
+2026-04-17 07:36:53,286 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 339506981
+  }
+}
+
+2026-04-17 07:36:53,337 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 389632262
+  }
+}
+
+2026-04-17 07:36:53,387 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 439752744
+  }
+}
+
+2026-04-17 07:36:53,437 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 489846764
+  }
+}
+
+2026-04-17 07:36:53,487 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 539961358
+  }
+}
+
+2026-04-17 07:36:53,537 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 590072145
+  }
+}
+
+2026-04-17 07:36:53,588 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 640199314
+  }
+}
+
+2026-04-17 07:36:53,637 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 690302037
+  }
+}
+
+2026-04-17 07:36:53,688 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 740433430
+  }
+}
+
+2026-04-17 07:36:53,737 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 790531833
+  }
+}
+
+2026-04-17 07:36:53,788 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 840659899
+  }
+}
+
+2026-04-17 07:36:53,838 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 890752734
+  }
+}
+
+2026-04-17 07:36:53,888 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 940889087
+  }
+}
+
+2026-04-17 07:36:53,938 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411413
+    nanosec: 991026496
+  }
+}
+
+2026-04-17 07:36:53,988 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 41127179
+  }
+}
+
+2026-04-17 07:36:54,039 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 91229082
+  }
+}
+
+2026-04-17 07:36:54,088 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 141355750
+  }
+}
+
+2026-04-17 07:36:54,139 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 191444501
+  }
+}
+
+2026-04-17 07:36:54,189 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 241576737
+  }
+}
+
+2026-04-17 07:36:54,239 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 291683055
+  }
+}
+
+2026-04-17 07:36:54,293 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 346780912
+  }
+}
+
+2026-04-17 07:36:54,344 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 396894013
+  }
+}
+
+2026-04-17 07:36:54,394 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 447043272
+  }
+}
+
+2026-04-17 07:36:54,444 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 497121368
+  }
+}
+
+2026-04-17 07:36:54,495 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 547236005
+  }
+}
+
+2026-04-17 07:36:54,545 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 597350834
+  }
+}
+
+2026-04-17 07:36:54,595 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 647488478
+  }
+}
+
+2026-04-17 07:36:54,646 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 697589324
+  }
+}
+
+2026-04-17 07:36:54,696 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 747714137
+  }
+}
+
+2026-04-17 07:36:54,745 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 797846437
+  }
+}
+
+2026-04-17 07:36:54,796 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 847987856
+  }
+}
+
+2026-04-17 07:36:54,846 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 898098590
+  }
+}
+
+2026-04-17 07:36:54,897 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 948227690
+  }
+}
+
+2026-04-17 07:36:54,947 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411414
+    nanosec: 998328792
+  }
+}
+
+2026-04-17 07:36:54,996 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 48471278
+  }
+}
+
+2026-04-17 07:36:55,046 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 98568807
+  }
+}
+
+2026-04-17 07:36:55,098 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 148706110
+  }
+}
+
+2026-04-17 07:36:55,146 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 198812599
+  }
+}
+
+2026-04-17 07:36:55,199 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 248967436
+  }
+}
+
+2026-04-17 07:36:55,246 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 299103299
+  }
+}
+
+2026-04-17 07:36:55,301 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 353860584
+  }
+}
+
+2026-04-17 07:36:55,352 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 403986560
+  }
+}
+
+2026-04-17 07:36:55,401 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 454099800
+  }
+}
+
+2026-04-17 07:36:55,452 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 504220432
+  }
+}
+
+2026-04-17 07:36:55,502 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 554327401
+  }
+}
+
+2026-04-17 07:36:55,552 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 604445345
+  }
+}
+
+2026-04-17 07:36:55,602 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 654555290
+  }
+}
+
+2026-04-17 07:36:55,651 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 704687537
+  }
+}
+
+2026-04-17 07:36:55,702 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 754792106
+  }
+}
+
+2026-04-17 07:36:55,753 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 804935296
+  }
+}
+
+2026-04-17 07:36:55,803 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 855057304
+  }
+}
+
+2026-04-17 07:36:55,853 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 905174032
+  }
+}
+
+2026-04-17 07:36:55,903 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411415
+    nanosec: 955280809
+  }
+}
+
+2026-04-17 07:36:55,953 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 5410464
+  }
+}
+
+2026-04-17 07:36:56,004 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 55523684
+  }
+}
+
+2026-04-17 07:36:56,054 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 105651846
+  }
+}
+
+2026-04-17 07:36:56,104 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 155755754
+  }
+}
+
+2026-04-17 07:36:56,154 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 205878380
+  }
+}
+
+2026-04-17 07:36:56,204 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 255994928
+  }
+}
+
+2026-04-17 07:36:56,253 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 306121330
+  }
+}
+
+2026-04-17 07:36:56,311 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 363336529
+  }
+}
+
+2026-04-17 07:36:56,361 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 413487985
+  }
+}
+
+2026-04-17 07:36:56,411 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 463593013
+  }
+}
+
+2026-04-17 07:36:56,464 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 513726263
+  }
+}
+
+2026-04-17 07:36:56,512 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 563837722
+  }
+}
+
+2026-04-17 07:36:56,563 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 613987483
+  }
+}
+
+2026-04-17 07:36:56,612 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 664108062
+  }
+}
+
+2026-04-17 07:36:56,663 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 714240160
+  }
+}
+
+2026-04-17 07:36:56,712 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 764347107
+  }
+}
+
+2026-04-17 07:36:56,763 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 814475238
+  }
+}
+
+2026-04-17 07:36:56,812 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 864578826
+  }
+}
+
+2026-04-17 07:36:56,865 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 914710124
+  }
+}
+
+2026-04-17 07:36:56,913 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411416
+    nanosec: 964821743
+  }
+}
+
+2026-04-17 07:36:56,962 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 14993937
+  }
+}
+
+2026-04-17 07:36:57,013 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 65059682
+  }
+}
+
+2026-04-17 07:36:57,063 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 115194671
+  }
+}
+
+2026-04-17 07:36:57,113 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 165293534
+  }
+}
+
+2026-04-17 07:36:57,165 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 215430314
+  }
+}
+
+2026-04-17 07:36:57,213 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 265525242
+  }
+}
+
+2026-04-17 07:36:57,263 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 315649063
+  }
+}
+
+2026-04-17 07:36:57,321 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 373041478
+  }
+}
+
+2026-04-17 07:36:57,371 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 423155540
+  }
+}
+
+2026-04-17 07:36:57,421 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 473290272
+  }
+}
+
+2026-04-17 07:36:57,471 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 523394255
+  }
+}
+
+2026-04-17 07:36:57,521 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 573531739
+  }
+}
+
+2026-04-17 07:36:57,571 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 623625387
+  }
+}
+
+2026-04-17 07:36:57,621 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 673775158
+  }
+}
+
+2026-04-17 07:36:57,671 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 723874022
+  }
+}
+
+2026-04-17 07:36:57,722 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 774011218
+  }
+}
+
+2026-04-17 07:36:57,774 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 824106849
+  }
+}
+
+2026-04-17 07:36:57,821 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 874237710
+  }
+}
+
+2026-04-17 07:36:57,871 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 924326718
+  }
+}
+
+2026-04-17 07:36:57,923 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411417
+    nanosec: 974468010
+  }
+}
+
+2026-04-17 07:36:57,972 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 24578845
+  }
+}
+
+2026-04-17 07:36:58,023 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 74712245
+  }
+}
+
+2026-04-17 07:36:58,072 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 124806607
+  }
+}
+
+2026-04-17 07:36:58,123 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 174963748
+  }
+}
+
+2026-04-17 07:36:58,172 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 225050111
+  }
+}
+
+2026-04-17 07:36:58,223 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 275183831
+  }
+}
+
+2026-04-17 07:36:58,273 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 325286896
+  }
+}
+
+2026-04-17 07:36:58,324 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 375680309
+  }
+}
+
+2026-04-17 07:36:58,374 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 425773071
+  }
+}
+
+2026-04-17 07:36:58,424 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 475905511
+  }
+}
+
+2026-04-17 07:36:58,473 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 526009120
+  }
+}
+
+2026-04-17 07:36:58,524 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 576127545
+  }
+}
+
+2026-04-17 07:36:58,573 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 626242929
+  }
+}
+
+2026-04-17 07:36:58,624 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 676364138
+  }
+}
+
+2026-04-17 07:36:58,674 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 726456196
+  }
+}
+
+2026-04-17 07:36:58,725 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 776585948
+  }
+}
+
+2026-04-17 07:36:58,775 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 826693397
+  }
+}
+
+2026-04-17 07:36:58,826 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 876826893
+  }
+}
+
+2026-04-17 07:36:58,875 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 926967939
+  }
+}
+
+2026-04-17 07:36:58,925 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411418
+    nanosec: 977053758
+  }
+}
+
+2026-04-17 07:36:58,974 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 27150269
+  }
+}
+
+2026-04-17 07:36:59,028 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 77275776
+  }
+}
+
+2026-04-17 07:36:59,075 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 127378052
+  }
+}
+
+2026-04-17 07:36:59,125 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 177512518
+  }
+}
+
+2026-04-17 07:36:59,176 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 227609707
+  }
+}
+
+2026-04-17 07:36:59,226 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 277743853
+  }
+}
+
+2026-04-17 07:36:59,275 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 327857137
+  }
+}
+
+2026-04-17 07:36:59,327 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 378971468
+  }
+}
+
+2026-04-17 07:36:59,376 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 429064433
+  }
+}
+
+2026-04-17 07:36:59,427 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 479214514
+  }
+}
+
+2026-04-17 07:36:59,476 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 529307863
+  }
+}
+
+2026-04-17 07:36:59,528 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 579434841
+  }
+}
+
+2026-04-17 07:36:59,577 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 629549117
+  }
+}
+
+2026-04-17 07:36:59,627 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 679671680
+  }
+}
+
+2026-04-17 07:36:59,677 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 729783459
+  }
+}
+
+2026-04-17 07:36:59,727 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 779906310
+  }
+}
+
+2026-04-17 07:36:59,777 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 830009770
+  }
+}
+
+2026-04-17 07:36:59,830 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 880144812
+  }
+}
+
+2026-04-17 07:36:59,879 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 930320267
+  }
+}
+
+2026-04-17 07:36:59,928 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411419
+    nanosec: 980382003
+  }
+}
+
+2026-04-17 07:36:59,978 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 30482877
+  }
+}
+
+2026-04-17 07:37:00,028 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 80617865
+  }
+}
+
+2026-04-17 07:37:00,079 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 130735703
+  }
+}
+
+2026-04-17 07:37:00,130 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 180860388
+  }
+}
+
+2026-04-17 07:37:00,178 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 230980338
+  }
+}
+
+2026-04-17 07:37:00,229 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 281087776
+  }
+}
+
+2026-04-17 07:37:00,280 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 331189391
+  }
+}
+
+2026-04-17 07:37:00,330 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 382237466
+  }
+}
+
+2026-04-17 07:37:00,380 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 432344233
+  }
+}
+
+2026-04-17 07:37:00,429 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 482509171
+  }
+}
+
+2026-04-17 07:37:00,482 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 532603523
+  }
+}
+
+2026-04-17 07:37:00,532 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 582734032
+  }
+}
+
+2026-04-17 07:37:00,580 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 632856925
+  }
+}
+
+2026-04-17 07:37:00,632 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 682996617
+  }
+}
+
+2026-04-17 07:37:00,680 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 733116055
+  }
+}
+
+2026-04-17 07:37:00,734 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 783254595
+  }
+}
+
+2026-04-17 07:37:00,782 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 833368785
+  }
+}
+
+2026-04-17 07:37:00,835 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 883481503
+  }
+}
+
+2026-04-17 07:37:00,880 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 933594413
+  }
+}
+
+2026-04-17 07:37:00,931 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411420
+    nanosec: 983710107
+  }
+}
+
+2026-04-17 07:37:00,981 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 33834255
+  }
+}
+
+2026-04-17 07:37:01,032 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 83977478
+  }
+}
+
+2026-04-17 07:37:01,082 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 134064480
+  }
+}
+
+2026-04-17 07:37:01,132 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 184210774
+  }
+}
+
+2026-04-17 07:37:01,183 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 234303376
+  }
+}
+
+2026-04-17 07:37:01,232 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 284426664
+  }
+}
+
+2026-04-17 07:37:01,283 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 334547904
+  }
+}
+
+2026-04-17 07:37:01,333 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 385605685
+  }
+}
+
+2026-04-17 07:37:01,384 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 435713902
+  }
+}
+
+2026-04-17 07:37:01,434 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 485812264
+  }
+}
+
+2026-04-17 07:37:01,483 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 535935584
+  }
+}
+
+2026-04-17 07:37:01,534 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 586048760
+  }
+}
+
+2026-04-17 07:37:01,584 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 636170672
+  }
+}
+
+2026-04-17 07:37:01,634 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 686289864
+  }
+}
+
+2026-04-17 07:37:01,684 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 736395201
+  }
+}
+
+2026-04-17 07:37:01,734 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 786521497
+  }
+}
+
+2026-04-17 07:37:01,784 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 836639601
+  }
+}
+
+2026-04-17 07:37:01,834 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 886745482
+  }
+}
+
+2026-04-17 07:37:01,885 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 936856291
+  }
+}
+
+2026-04-17 07:37:01,936 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411421
+    nanosec: 987022616
+  }
+}
+
+2026-04-17 07:37:01,985 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 37111161
+  }
+}
+
+2026-04-17 07:37:02,035 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 87215133
+  }
+}
+
+2026-04-17 07:37:02,085 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 137350430
+  }
+}
+
+2026-04-17 07:37:02,135 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 187476801
+  }
+}
+
+2026-04-17 07:37:02,185 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 237615234
+  }
+}
+
+2026-04-17 07:37:02,235 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 287728485
+  }
+}
+
+2026-04-17 07:37:02,285 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 337858886
+  }
+}
+
+2026-04-17 07:37:02,337 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 388667832
+  }
+}
+
+2026-04-17 07:37:02,387 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 438802393
+  }
+}
+
+2026-04-17 07:37:02,436 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 488923420
+  }
+}
+
+2026-04-17 07:37:02,487 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 539080892
+  }
+}
+
+2026-04-17 07:37:02,537 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 589155841
+  }
+}
+
+2026-04-17 07:37:02,588 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 639298882
+  }
+}
+
+2026-04-17 07:37:02,637 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 689394598
+  }
+}
+
+2026-04-17 07:37:02,688 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 739527176
+  }
+}
+
+2026-04-17 07:37:02,737 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 789637675
+  }
+}
+
+2026-04-17 07:37:02,787 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 839783372
+  }
+}
+
+2026-04-17 07:37:02,838 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 889874640
+  }
+}
+
+2026-04-17 07:37:02,888 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 940019633
+  }
+}
+
+2026-04-17 07:37:02,938 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411422
+    nanosec: 990129012
+  }
+}
+
+2026-04-17 07:37:02,989 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 40263838
+  }
+}
+
+2026-04-17 07:37:03,038 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 90400073
+  }
+}
+
+2026-04-17 07:37:03,090 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 140500823
+  }
+}
+
+2026-04-17 07:37:03,141 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 190605989
+  }
+}
+
+2026-04-17 07:37:03,188 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 240729234
+  }
+}
+
+2026-04-17 07:37:03,239 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 290845215
+  }
+}
+
+2026-04-17 07:37:03,288 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 340962636
+  }
+}
+
+2026-04-17 07:37:03,345 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 396831999
+  }
+}
+
+2026-04-17 07:37:03,395 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 446982378
+  }
+}
+
+2026-04-17 07:37:03,446 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 497071609
+  }
+}
+
+2026-04-17 07:37:03,495 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 547209189
+  }
+}
+
+2026-04-17 07:37:03,546 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 597301971
+  }
+}
+
+2026-04-17 07:37:03,596 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 647432479
+  }
+}
+
+2026-04-17 07:37:03,644 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 697545485
+  }
+}
+
+2026-04-17 07:37:03,695 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 747666554
+  }
+}
+
+2026-04-17 07:37:03,745 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 797765576
+  }
+}
+
+2026-04-17 07:37:03,796 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 847901396
+  }
+}
+
+2026-04-17 07:37:03,845 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 898020289
+  }
+}
+
+2026-04-17 07:37:03,896 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 948159340
+  }
+}
+
+2026-04-17 07:37:03,947 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411423
+    nanosec: 998292376
+  }
+}
+
+2026-04-17 07:37:03,996 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 48410702
+  }
+}
+
+2026-04-17 07:37:04,047 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 98526246
+  }
+}
+
+2026-04-17 07:37:04,096 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 148653756
+  }
+}
+
+2026-04-17 07:37:04,147 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 198776275
+  }
+}
+
+2026-04-17 07:37:04,196 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 248903370
+  }
+}
+
+2026-04-17 07:37:04,247 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 299041407
+  }
+}
+
+2026-04-17 07:37:04,297 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 349121529
+  }
+}
+
+2026-04-17 07:37:04,353 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 404613619
+  }
+}
+
+2026-04-17 07:37:04,403 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 454727466
+  }
+}
+
+2026-04-17 07:37:04,453 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 504861952
+  }
+}
+
+2026-04-17 07:37:04,503 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 555011157
+  }
+}
+
+2026-04-17 07:37:04,553 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 605094735
+  }
+}
+
+2026-04-17 07:37:04,602 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 655211878
+  }
+}
+
+2026-04-17 07:37:04,654 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 705337789
+  }
+}
+
+2026-04-17 07:37:04,703 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 755436438
+  }
+}
+
+2026-04-17 07:37:04,753 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 805568044
+  }
+}
+
+2026-04-17 07:37:04,803 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 855673828
+  }
+}
+
+2026-04-17 07:37:04,854 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 905797435
+  }
+}
+
+2026-04-17 07:37:04,904 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411424
+    nanosec: 955898163
+  }
+}
+
+2026-04-17 07:37:04,954 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 6022091
+  }
+}
+
+2026-04-17 07:37:05,004 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 56129005
+  }
+}
+
+2026-04-17 07:37:05,054 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 106246926
+  }
+}
+
+2026-04-17 07:37:05,104 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 156379823
+  }
+}
+
+2026-04-17 07:37:05,154 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 206484241
+  }
+}
+
+2026-04-17 07:37:05,204 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 256607922
+  }
+}
+
+2026-04-17 07:37:05,255 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 306727411
+  }
+}
+
+2026-04-17 07:37:05,305 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 356836949
+  }
+}
+
+2026-04-17 07:37:05,360 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 411819486
+  }
+}
+
+2026-04-17 07:37:05,411 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 461935840
+  }
+}
+
+2026-04-17 07:37:05,462 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 512054145
+  }
+}
+
+2026-04-17 07:37:05,510 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 562181506
+  }
+}
+
+2026-04-17 07:37:05,561 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 612297347
+  }
+}
+
+2026-04-17 07:37:05,611 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 662436899
+  }
+}
+
+2026-04-17 07:37:05,663 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 712534598
+  }
+}
+
+2026-04-17 07:37:05,711 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 762658119
+  }
+}
+
+2026-04-17 07:37:05,761 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 812791207
+  }
+}
+
+2026-04-17 07:37:05,811 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 862905257
+  }
+}
+
+2026-04-17 07:37:05,865 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 913033674
+  }
+}
+
+2026-04-17 07:37:05,912 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411425
+    nanosec: 963138636
+  }
+}
+
+2026-04-17 07:37:05,963 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 13290989
+  }
+}
+
+2026-04-17 07:37:06,011 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 63409656
+  }
+}
+
+2026-04-17 07:37:06,062 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 113541763
+  }
+}
+
+2026-04-17 07:37:06,113 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 163649455
+  }
+}
+
+2026-04-17 07:37:06,161 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 213782970
+  }
+}
+
+2026-04-17 07:37:06,211 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 263904709
+  }
+}
+
+2026-04-17 07:37:06,263 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 314047151
+  }
+}
+
+2026-04-17 07:37:06,313 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 364154811
+  }
+}
+
+2026-04-17 07:37:06,367 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 419628300
+  }
+}
+
+2026-04-17 07:37:06,419 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 469752503
+  }
+}
+
+2026-04-17 07:37:06,468 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 519864803
+  }
+}
+
+2026-04-17 07:37:06,519 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 569990862
+  }
+}
+
+2026-04-17 07:37:06,567 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 620117209
+  }
+}
+
+2026-04-17 07:37:06,618 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 670258339
+  }
+}
+
+2026-04-17 07:37:06,669 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 720346928
+  }
+}
+
+2026-04-17 07:37:06,720 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 770475483
+  }
+}
+
+2026-04-17 07:37:06,768 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 820592454
+  }
+}
+
+2026-04-17 07:37:06,818 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 870710098
+  }
+}
+
+2026-04-17 07:37:06,868 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 920807039
+  }
+}
+
+2026-04-17 07:37:06,919 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411426
+    nanosec: 970958120
+  }
+}
+
+2026-04-17 07:37:06,969 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 21042202
+  }
+}
+
+2026-04-17 07:37:07,019 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 71164335
+  }
+}
+
+2026-04-17 07:37:07,069 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 121276485
+  }
+}
+
+2026-04-17 07:37:07,119 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 171404601
+  }
+}
+
+2026-04-17 07:37:07,171 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 221499984
+  }
+}
+
+2026-04-17 07:37:07,219 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 271619558
+  }
+}
+
+2026-04-17 07:37:07,269 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 321741371
+  }
+}
+
+2026-04-17 07:37:07,320 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 371844626
+  }
+}
+
+2026-04-17 07:37:07,374 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 425774939
+  }
+}
+
+2026-04-17 07:37:07,428 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 475897872
+  }
+}
+
+2026-04-17 07:37:07,474 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 526012773
+  }
+}
+
+2026-04-17 07:37:07,524 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 576151385
+  }
+}
+
+2026-04-17 07:37:07,574 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 626245745
+  }
+}
+
+2026-04-17 07:37:07,625 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 676367878
+  }
+}
+
+2026-04-17 07:37:07,674 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 726474172
+  }
+}
+
+2026-04-17 07:37:07,726 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 776596209
+  }
+}
+
+2026-04-17 07:37:07,775 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 826703336
+  }
+}
+
+2026-04-17 07:37:07,825 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 876818749
+  }
+}
+
+2026-04-17 07:37:07,876 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 926931923
+  }
+}
+
+2026-04-17 07:37:07,925 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411427
+    nanosec: 977061512
+  }
+}
+
+2026-04-17 07:37:07,975 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 27184929
+  }
+}
+
+2026-04-17 07:37:08,026 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 77319167
+  }
+}
+
+2026-04-17 07:37:08,075 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 127424512
+  }
+}
+
+2026-04-17 07:37:08,127 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 177546079
+  }
+}
+
+2026-04-17 07:37:08,176 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 227641440
+  }
+}
+
+2026-04-17 07:37:08,227 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 277767647
+  }
+}
+
+2026-04-17 07:37:08,276 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 327875455
+  }
+}
+
+2026-04-17 07:37:08,328 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 378003037
+  }
+}
+
+2026-04-17 07:37:08,382 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 433458342
+  }
+}
+
+2026-04-17 07:37:08,431 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 483572838
+  }
+}
+
+2026-04-17 07:37:08,481 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 533703748
+  }
+}
+
+2026-04-17 07:37:08,532 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 583803301
+  }
+}
+
+2026-04-17 07:37:08,584 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 633945859
+  }
+}
+
+2026-04-17 07:37:08,633 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 684068514
+  }
+}
+
+2026-04-17 07:37:08,683 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 734190753
+  }
+}
+
+2026-04-17 07:37:08,732 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 784319296
+  }
+}
+
+2026-04-17 07:37:08,782 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 834433567
+  }
+}
+
+2026-04-17 07:37:08,834 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 884555038
+  }
+}
+
+2026-04-17 07:37:08,884 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 934668222
+  }
+}
+
+2026-04-17 07:37:08,933 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411428
+    nanosec: 984794141
+  }
+}
+
+2026-04-17 07:37:08,984 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 34933600
+  }
+}
+
+2026-04-17 07:37:09,032 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 85043146
+  }
+}
+
+2026-04-17 07:37:09,084 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 135148565
+  }
+}
+
+2026-04-17 07:37:09,134 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 185270174
+  }
+}
+
+2026-04-17 07:37:09,184 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 235393350
+  }
+}
+
+2026-04-17 07:37:09,234 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 285504560
+  }
+}
+
+2026-04-17 07:37:09,287 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 335620442
+  }
+}
+
+2026-04-17 07:37:09,334 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 385728516
+  }
+}
+
+2026-04-17 07:37:09,392 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 441501857
+  }
+}
+
+2026-04-17 07:37:09,439 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 491618954
+  }
+}
+
+2026-04-17 07:37:09,490 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 541741203
+  }
+}
+
+2026-04-17 07:37:09,540 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 591841630
+  }
+}
+
+2026-04-17 07:37:09,590 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 641963559
+  }
+}
+
+2026-04-17 07:37:09,640 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 692064849
+  }
+}
+
+2026-04-17 07:37:09,691 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 742198201
+  }
+}
+
+2026-04-17 07:37:09,740 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 792301252
+  }
+}
+
+2026-04-17 07:37:09,790 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 842431692
+  }
+}
+
+2026-04-17 07:37:09,840 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 892542966
+  }
+}
+
+2026-04-17 07:37:09,891 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 942670974
+  }
+}
+
+2026-04-17 07:37:09,941 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411429
+    nanosec: 992780808
+  }
+}
+
+2026-04-17 07:37:09,995 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 42959764
+  }
+}
+
+2026-04-17 07:37:10,041 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 93035690
+  }
+}
+
+2026-04-17 07:37:10,093 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 143181243
+  }
+}
+
+2026-04-17 07:37:10,142 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 193293487
+  }
+}
+
+2026-04-17 07:37:10,191 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 243421825
+  }
+}
+
+2026-04-17 07:37:10,243 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 293537780
+  }
+}
+
+2026-04-17 07:37:10,296 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 343661383
+  }
+}
+
+2026-04-17 07:37:10,342 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 393781978
+  }
+}
+
+2026-04-17 07:37:10,397 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 444805678
+  }
+}
+
+2026-04-17 07:37:10,443 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 494925217
+  }
+}
+
+2026-04-17 07:37:10,495 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 545037076
+  }
+}
+
+2026-04-17 07:37:10,543 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 595146312
+  }
+}
+
+2026-04-17 07:37:10,595 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 645271994
+  }
+}
+
+2026-04-17 07:37:10,644 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 695393549
+  }
+}
+
+2026-04-17 07:37:10,696 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 745519232
+  }
+}
+
+2026-04-17 07:37:10,744 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 795605205
+  }
+}
+
+2026-04-17 07:37:10,794 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 845713577
+  }
+}
+
+2026-04-17 07:37:10,844 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 895832540
+  }
+}
+
+2026-04-17 07:37:10,896 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 945951151
+  }
+}
+
+2026-04-17 07:37:10,945 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411430
+    nanosec: 996060706
+  }
+}
+
+2026-04-17 07:37:10,997 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 46171549
+  }
+}
+
+2026-04-17 07:37:11,045 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 96284027
+  }
+}
+
+2026-04-17 07:37:11,095 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 146410807
+  }
+}
+
+2026-04-17 07:37:11,145 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 196512917
+  }
+}
+
+2026-04-17 07:37:11,197 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 246633809
+  }
+}
+
+2026-04-17 07:37:11,246 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 296748622
+  }
+}
+
+2026-04-17 07:37:11,296 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 346861675
+  }
+}
+
+2026-04-17 07:37:11,347 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 396971049
+  }
+}
+
+2026-04-17 07:37:11,401 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 452599525
+  }
+}
+
+2026-04-17 07:37:11,451 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 502723490
+  }
+}
+
+2026-04-17 07:37:11,501 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 552866749
+  }
+}
+
+2026-04-17 07:37:11,552 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 603004216
+  }
+}
+
+2026-04-17 07:37:11,601 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 653140916
+  }
+}
+
+2026-04-17 07:37:11,651 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 703247025
+  }
+}
+
+2026-04-17 07:37:11,703 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 753351791
+  }
+}
+
+2026-04-17 07:37:11,753 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 803477963
+  }
+}
+
+2026-04-17 07:37:11,806 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 853599688
+  }
+}
+
+2026-04-17 07:37:11,853 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 903729891
+  }
+}
+
+2026-04-17 07:37:11,902 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411431
+    nanosec: 953853408
+  }
+}
+
+2026-04-17 07:37:11,954 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411432
+    nanosec: 4005114
+  }
+}
+
+2026-04-17 07:37:12,003 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411432
+    nanosec: 54109377
+  }
+}
+
+2026-04-17 07:37:12,054 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411432
+    nanosec: 104252774
+  }
+}
+
+2026-04-17 07:37:12,103 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411432
+    nanosec: 154357197
+  }
+}
+
+2026-04-17 07:37:12,153 - WARNING - Waist has less than 2 motors, header {
+  stamp {
+    sec: 1776411432
+    nanosec: 204453877
+  }
+}
+
