@@ -74,6 +74,29 @@ class BackfillPolicyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HitlConfig:
+    enabled: bool
+    type: str
+    hand: str
+    vr_chunk_horizon: int
+    max_delta: float
+    max_step: float
+    smoothing: float
+    command_deadband: float
+    max_rot_delta_deg: float
+    max_rot_step_deg: float
+    rot_smoothing: float
+    rotation_deadband_deg: float
+    rot_map: str
+    gripper_open: float
+    gripper_closed: float
+    gripper_deadband: float
+    scaling_factor: float
+    control_freq: int
+    coordinate_mapping: str
+
+
+@dataclass(frozen=True, slots=True)
 class RobotConfig:
     assets_root: str | None
     retargeter_urdf_path: str | None
@@ -272,6 +295,7 @@ class AgiBotTrainConfig:
     wandb: WandbConfig
     policy: PolicyConfig
     backfill_policy: BackfillPolicyConfig
+    hitl: HitlConfig
     robot: RobotConfig
     controller: ControllerConfig
     env: EnvConfig
@@ -713,6 +737,77 @@ def _parse_backfill_policy_cfg(
             "backfill_policy.max_pending_chunks",
         ),
         mode=mode,
+    )
+
+
+def _parse_hitl_cfg(cfg: DictConfig) -> HitlConfig:
+    hitl_cfg = cfg.get("hitl", {})
+    hitl_type = _parse_choice(
+        hitl_cfg.get("type", "quest_vr"),
+        "hitl.type",
+        allowed=("quest_vr",),
+    )
+    hand = _parse_choice(
+        hitl_cfg.get("hand", "right"),
+        "hitl.hand",
+        allowed=("right", "left"),
+    )
+    return HitlConfig(
+        enabled=bool(hitl_cfg.get("enabled", False)),
+        type=hitl_type,
+        hand=hand,
+        vr_chunk_horizon=_positive_int(
+            hitl_cfg.get("vr_chunk_horizon", 1),
+            "hitl.vr_chunk_horizon",
+        ),
+        max_delta=_positive_float(hitl_cfg.get("max_delta", 0.10), "hitl.max_delta"),
+        max_step=_positive_float(hitl_cfg.get("max_step", 0.006), "hitl.max_step"),
+        smoothing=_nonnegative_float(hitl_cfg.get("smoothing", 0.40), "hitl.smoothing"),
+        command_deadband=_nonnegative_float(
+            hitl_cfg.get("command_deadband", 0.001),
+            "hitl.command_deadband",
+        ),
+        max_rot_delta_deg=_positive_float(
+            hitl_cfg.get("max_rot_delta_deg", 35.0),
+            "hitl.max_rot_delta_deg",
+        ),
+        max_rot_step_deg=_positive_float(
+            hitl_cfg.get("max_rot_step_deg", 2.0),
+            "hitl.max_rot_step_deg",
+        ),
+        rot_smoothing=_nonnegative_float(
+            hitl_cfg.get("rot_smoothing", 0.12),
+            "hitl.rot_smoothing",
+        ),
+        rotation_deadband_deg=_nonnegative_float(
+            hitl_cfg.get("rotation_deadband_deg", 0.8),
+            "hitl.rotation_deadband_deg",
+        ),
+        rot_map=_required_str(hitl_cfg.get("rot_map", "-ry,-rz,rx"), "hitl.rot_map"),
+        gripper_open=_float_value(
+            hitl_cfg.get("gripper_open", 0.0),
+            "hitl.gripper_open",
+        ),
+        gripper_closed=_float_value(
+            hitl_cfg.get("gripper_closed", 120.0),
+            "hitl.gripper_closed",
+        ),
+        gripper_deadband=_nonnegative_float(
+            hitl_cfg.get("gripper_deadband", 0.5),
+            "hitl.gripper_deadband",
+        ),
+        scaling_factor=_positive_float(
+            hitl_cfg.get("scaling_factor", 0.5),
+            "hitl.scaling_factor",
+        ),
+        control_freq=_positive_int(
+            hitl_cfg.get("control_freq", 30),
+            "hitl.control_freq",
+        ),
+        coordinate_mapping=_required_str(
+            hitl_cfg.get("coordinate_mapping", "sim"),
+            "hitl.coordinate_mapping",
+        ),
     )
 
 
@@ -1232,6 +1327,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         wandb=_parse_wandb_cfg(cfg, task=task),
         policy=policy,
         backfill_policy=backfill_policy,
+        hitl=_parse_hitl_cfg(cfg),
         robot=_parse_robot_cfg(cfg),
         controller=controller,
         env=env,
@@ -1320,6 +1416,7 @@ __all__ = [
     "EnvConfig",
     "EvalConfig",
     "EvalTrainingConfig",
+    "HitlConfig",
     "LoggingConfig",
     "MixedPrecisionConfig",
     "NetworkConfig",

@@ -55,6 +55,29 @@ backfill_policy:
   max_pending_chunks: 10
   mode: thread
 
+hitl:
+  enabled: false
+  type: quest_vr
+  hand: right
+  # VR is only sampled when the grip button is already active at an action
+  # boundary. RL keeps its original chunk execution when HITL is inactive.
+  vr_chunk_horizon: 1
+  max_delta: 0.10
+  max_step: 0.006
+  smoothing: 0.40
+  command_deadband: 0.001
+  max_rot_delta_deg: 35.0
+  max_rot_step_deg: 2.0
+  rot_smoothing: 0.12
+  rotation_deadband_deg: 0.8
+  rot_map: -ry,-rz,rx
+  gripper_open: 0.0
+  gripper_closed: 120.0
+  gripper_deadband: 0.5
+  scaling_factor: 0.5
+  control_freq: 30
+  coordinate_mapping: sim
+
 robot:
   assets_root: null
   retargeter_urdf_path: null

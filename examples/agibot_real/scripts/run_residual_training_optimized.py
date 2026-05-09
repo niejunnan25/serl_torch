@@ -67,6 +67,7 @@ from serl_torch.examples.agibot_real.env.factory import create_env
 from serl_torch.examples.agibot_real.env.observation import AGIBOT_STATE_DIM
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
+from serl_torch.examples.agibot_real.intervention import QuestVRHitlRuntime
 from serl_torch.examples.agibot_real.offline_data import (
     load_prepared_offline_replay,
 )
@@ -95,6 +96,7 @@ def actor(
     env = create_env(cfg, logger)
     base_policy = build_agibot_base_policy(cfg, logger=logger)
     logger.info("Chunk policy backend: %s", base_policy.describe())
+    hitl_runtime = QuestVRHitlRuntime(env=env, cfg=cfg.hitl, logger=logger)
 
     image_keys = cfg.obs.image_keys
     action_dim = cfg.env.action_dim
@@ -326,9 +328,26 @@ def actor(
                 action_chunk = np.asarray(final_actions, dtype=np.float32)[
                     :remaining_env_steps
                 ]
+                hitl_infos: list[dict[str, Any]] = []
+                hitl_chunk = hitl_runtime.poll_action_chunk()
+                if hitl_chunk is not None:
+                    action_chunk = np.asarray(hitl_chunk.actions, dtype=np.float32)[
+                        :remaining_env_steps
+                    ]
+                    hitl_infos = [dict(info) for info in hitl_chunk.infos]
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
+
+                if hitl_infos:
+                    chunk_infos_for_update = [dict(v) for v in chunk_result["infos"]]
+                    for info_idx, hitl_info in enumerate(
+                        hitl_infos[: len(chunk_infos_for_update)]
+                    ):
+                        chunk_infos_for_update[info_idx].update(hitl_info)
+                        chunk_infos_for_update[info_idx]["action_source"] = "vr"
+                    chunk_result["infos"] = chunk_infos_for_update
+                    chunk_result["info"] = dict(chunk_infos_for_update[-1])
 
                 chunk_infos = [dict(v) for v in chunk_result["infos"]]
                 executed_steps = count_executed_steps_from_infos(chunk_infos)
@@ -543,6 +562,10 @@ def actor(
             json.dump(summary, fp, indent=2, ensure_ascii=False)
         try:
             progress_bar.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            hitl_runtime.close()
         except Exception:  # noqa: BLE001
             pass
         try:
