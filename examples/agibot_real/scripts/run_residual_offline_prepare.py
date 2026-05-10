@@ -27,20 +27,22 @@ from serl_launcher.utils.seeding import set_global_seeds
 from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.config import parse_train_cfg
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
-from serl_torch.examples.agibot_real.offline_data import normalize_episode_steps
-from serl_torch.examples.agibot_real.offline_data import prepare_fingerprint
-from serl_torch.examples.agibot_real.offline_data import (
+from serl_torch.examples.agibot_real.env.offline_data import normalize_episode_steps
+from serl_torch.examples.agibot_real.env.offline_data import prepare_fingerprint
+from serl_torch.examples.agibot_real.env.offline_data import (
     prepare_reference_episode_transitions,
 )
-from serl_torch.examples.agibot_real.offline_data import prepared_dir_for_cfg
-from serl_torch.examples.agibot_real.offline_data import REFERENCE_NOTE
-from serl_torch.examples.agibot_real.offline_data import REFERENCE_SOURCE_FORMAT
-from serl_torch.examples.agibot_real.offline_data import resolve_configured_prepared_paths
-from serl_torch.examples.agibot_real.offline_data import (
+from serl_torch.examples.agibot_real.env.offline_data import prepared_dir_for_cfg
+from serl_torch.examples.agibot_real.env.offline_data import REFERENCE_NOTE
+from serl_torch.examples.agibot_real.env.offline_data import REFERENCE_SOURCE_FORMAT
+from serl_torch.examples.agibot_real.env.offline_data import (
+    resolve_configured_prepared_paths,
+)
+from serl_torch.examples.agibot_real.env.offline_data import (
     resolve_reference_raw_episode_files,
 )
-from serl_torch.examples.agibot_real.offline_data import resolve_task_spec
-from serl_torch.examples.agibot_real.offline_data import write_manifest
+from serl_torch.examples.agibot_real.env.offline_data import resolve_task_spec
+from serl_torch.examples.agibot_real.env.offline_data import write_manifest
 
 
 def prepare_offline_data(
@@ -208,11 +210,11 @@ def main(cfg: DictConfig) -> None:
     logger.info("Config:\n%s", json.dumps(cfg_to_log_payload(typed_cfg), indent=2))
     logger.warning(
         "AgiBot offline prepare is a temporary LIBERO-inspired reference implementation. "
-        "Replace examples/agibot_real/offline_data.py after the real AgiBot data source is defined."
+        "Replace examples/agibot_real/env/offline_data.py after the real AgiBot data source is defined."
     )
 
     if not typed_cfg.offline.enabled:
-        raise ValueError("prepare_offline_data.py requires offline.enabled=true")
+        raise ValueError("run_residual_offline_prepare.py requires offline.enabled=true")
     if typed_cfg.offline.prepared_path is not None:
         logger.info(
             "ignoring offline.prepared_path during prepare: %s",
@@ -226,7 +228,7 @@ def main(cfg: DictConfig) -> None:
     set_global_seeds(typed_cfg.global_seed)
     offline_inputs = prepare_offline_data(typed_cfg, logger=logger)
     summary = {
-        "role": "prepare_offline_data",
+        "role": "run_residual_offline_prepare",
         "mode": "residual",
         "reference_only": True,
         "prepared_path": (

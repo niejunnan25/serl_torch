@@ -19,14 +19,16 @@ except ModuleNotFoundError:  # pragma: no cover - environment-dependent
 
 if OmegaConf is not None:
     from serl_torch.examples.agibot_real.config import parse_train_cfg
-    from serl_torch.examples.agibot_real.offline_data import load_prepared_offline_replay
-    from serl_torch.examples.agibot_real.offline_data import (
-        _prepare_reference_episode_transitions,
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        load_prepared_offline_replay,
     )
-    from serl_torch.examples.agibot_real.offline_data import (
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        prepare_reference_episode_transitions,
+    )
+    from serl_torch.examples.agibot_real.env.offline_data import (
         resolve_and_validate_prepared_paths,
     )
-    from serl_torch.examples.agibot_real.offline_data import (
+    from serl_torch.examples.agibot_real.env.offline_data import (
         resolve_prepared_episode_files,
     )
     from serl_launcher.residual.typed_action import ResidualActionSpec
@@ -175,7 +177,7 @@ class AgiBotOfflineDataTest(unittest.TestCase):
             },
         ]
 
-        transitions, episode_stats = _prepare_reference_episode_transitions(
+        transitions, episode_stats = prepare_reference_episode_transitions(
             raw_steps=raw_steps,
             episode_id=7,
             task_prompt=cfg.task.prompt,

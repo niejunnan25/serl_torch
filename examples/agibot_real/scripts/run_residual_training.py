@@ -71,10 +71,10 @@ from serl_torch.examples.agibot_real.env.factory import create_env
 from serl_torch.examples.agibot_real.env.observation import AGIBOT_STATE_DIM
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
-from serl_torch.examples.agibot_real.offline_data import (
+from serl_torch.examples.agibot_real.env.offline_data import (
     load_prepared_offline_replay,
 )
-from serl_torch.examples.agibot_real.offline_data import (
+from serl_torch.examples.agibot_real.env.offline_data import (
     resolve_and_validate_prepared_paths,
 )
 from serl_torch.examples.agibot_real.runtime.transition_assembly import (

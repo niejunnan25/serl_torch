@@ -48,9 +48,9 @@ from serl_launcher.utils.path_utils import resolve_original_cwd
 from serl_launcher.utils.path_utils import resolve_path
 from serl_launcher.utils.serialization import to_jsonable
 
-from .config import AgiBotTrainConfig
-from .env.observation import build_agibot_state
-from .env.observation import extract_agibot_residual_images
+from ..config import AgiBotTrainConfig
+from .observation import build_agibot_state
+from .observation import extract_agibot_residual_images
 
 OFFLINE_FORMAT_VERSION = "agibot_real_offline_step_transitions_v1"
 REFERENCE_SOURCE_FORMAT = "agibot_reference_episode_pickle_v1"
