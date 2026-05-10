@@ -152,7 +152,7 @@
 - [serl_launcher/serl_launcher/data/batch_ops.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/batch_ops.py:1)
 - [serl_launcher/serl_launcher/data/data_store.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/data_store.py:104)
 - [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py:87)
-- [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:137)
+- [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:137)
 - [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:471)
 
 ### 2.1 原来的问题是什么

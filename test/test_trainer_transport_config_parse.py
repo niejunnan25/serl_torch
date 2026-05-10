@@ -20,9 +20,9 @@ def test_libero_optimized_config_parses_async_commit_defaults() -> None:
     assert typed_cfg.runtime.trainer_transport.wait_committed_on_shutdown is True
 
 
-def test_agibot_copy_config_parses_async_commit_defaults() -> None:
+def test_agibot_train_config_parses_async_commit_defaults() -> None:
     cfg = OmegaConf.load(
-        Path("examples/agibot_real/configs/train_residual_copy.yaml")
+        Path("examples/agibot_real/configs/train_residual.yaml")
     )
     typed_cfg = parse_agibot_train_cfg(cfg)
     assert typed_cfg.runtime.trainer_transport.mode == "async_commit"
@@ -38,7 +38,7 @@ def test_legacy_transport_modes_are_rejected() -> None:
         parse_libero_train_cfg(libero_cfg)
 
     agibot_cfg = OmegaConf.load(
-        Path("examples/agibot_real/configs/train_residual_copy.yaml")
+        Path("examples/agibot_real/configs/train_residual.yaml")
     )
     agibot_cfg.runtime.trainer_transport.mode = "split_queue"
     with pytest.raises(ValueError, match="runtime.trainer_transport.mode"):

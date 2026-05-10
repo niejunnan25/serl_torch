@@ -26,7 +26,7 @@
 - LIBERO actor / learner:
   [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py)
 - AgiBot actor / learner:
-  [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py)
+  [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
 - transport 实现：
   [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py)
 
@@ -437,14 +437,14 @@ class RuntimeConfig:
 当前约定是：
 
 - canonical `train_residual*.yaml` 默认 `mode: legacy_reqrep`
-- `LIBERO optimized` 和 `AgiBot copy` 的专用 yaml 默认 `mode: split_queue`
+- `LIBERO optimized` 和当前 AgiBot mainline yaml 默认 `mode: async_commit`
 
 对应文件分别是：
 
 - LIBERO optimized:
   [examples/libero/configs/train_residual_optimized.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/train_residual_optimized.yaml)
-- AgiBot copy:
-  [examples/agibot_real/configs/train_residual_copy.yaml](/home/hello/codebase/serl_torch/examples/agibot_real/configs/train_residual_copy.yaml)
+- AgiBot mainline:
+  [examples/agibot_real/configs/train_residual.yaml](/home/hello/codebase/serl_torch/examples/agibot_real/configs/train_residual.yaml)
 
 下面保留原始建议字段，作为设计记录。
 
@@ -553,7 +553,7 @@ class LearnerTrainerTransport(Protocol):
 第一批建议改这些：
 
 - [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:472)
-- [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:415)
+- [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:415)
 
 第二批再考虑：
 
@@ -565,7 +565,7 @@ class LearnerTrainerTransport(Protocol):
 当前 actor 调用 `client.update()` 的位置很多，例如：
 
 - LIBERO optimized: [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:535)
-- AgiBot copy: [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:540)
+- AgiBot copy: [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:540)
 
 Plan C 下，这些调用点原则上可以不改调用形状，但要改语义：
 
@@ -604,7 +604,7 @@ Plan C 下，这些调用点原则上可以不改调用形状，但要改语义�
 
 对于 AgiBot：
 
-- 当前 `run_residual_training_copy.py` 本地还有 async backfill 与 `commit_replay` 的阶段
+- 当前 `run_residual_training.py` 本地还有 async backfill 与 `commit_replay` 的阶段
 - 这些阶段之后再把 transition 从 actor 侧本地 `QueuedDataStore` 发到 learner
 
 Plan C 对它的直接收益是：
@@ -630,7 +630,7 @@ learner 训练主循环本身应尽量少改。
 受影响的 learner 接入点：
 
 - LIBERO learner: [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:910)
-- AgiBot learner: [examples/agibot_real/scripts/run_residual_training_copy.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training_copy.py:954)
+- AgiBot learner: [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:954)
 
 ### 11.2 learner 的 replay 可见性语义
 
@@ -833,7 +833,7 @@ Plan C 只是把慢操作从 control thread 挪开，不会凭空让 insert 变�
 第一批，已接入：
 
 - `examples/libero/scripts/run_residual_training_2_chunk_local.py`
-- `examples/agibot_real/scripts/run_residual_training_copy.py`
+- `examples/agibot_real/scripts/run_residual_training.py`
 
 第二批，当前仍保留 legacy：
 

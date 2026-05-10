@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""LIBERO-style AgiBot residual DRQ training script."""
+"""Mainline AgiBot residual DRQ training script."""
 
 from collections import deque
 import json
@@ -12,9 +12,6 @@ from threading import Lock
 from typing import Any
 
 from agentlace.data.data_store import QueuedDataStore
-from agentlace.trainer import TrainerClient
-from agentlace.trainer import TrainerConfig
-from agentlace.trainer import TrainerServer
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import numpy as np
@@ -27,7 +24,8 @@ from serl_launcher.agents.continuous.drq_typed_config import (
 from serl_launcher.common.agent_acceleration import apply_torch_compile
 from serl_launcher.common.checkpoint_codec import apply_checkpoint_payload_to_agent
 from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
-from serl_launcher.common.checkpoint_codec import snapshot_agent_checkpoint_payload
+from serl_launcher.common.trainer_transport import build_actor_trainer_transport
+from serl_launcher.common.trainer_transport import build_learner_trainer_transport
 from serl_launcher.common.training_observability import (
     configure_learner_wandb_metrics,
 )
@@ -48,7 +46,6 @@ from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
-from serl_launcher.residual.observation import build_chunk_residual_obs
 from serl_launcher.residual.observation import build_chunk_residual_observation_space
 from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
@@ -68,8 +65,6 @@ from serl_torch.examples.agibot_real.config import parse_train_cfg
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
 from serl_torch.examples.agibot_real.env.factory import create_env
 from serl_torch.examples.agibot_real.env.observation import AGIBOT_STATE_DIM
-from serl_torch.examples.agibot_real.env.observation import build_agibot_state
-from serl_torch.examples.agibot_real.env.observation import extract_agibot_residual_images
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.agibot_real.offline_data import (
@@ -78,18 +73,60 @@ from serl_torch.examples.agibot_real.offline_data import (
 from serl_torch.examples.agibot_real.offline_data import (
     resolve_and_validate_prepared_paths,
 )
+from serl_torch.examples.agibot_real.runtime_helpers import (
+    commit_finished_episode_chunks,
+)
+from serl_torch.examples.agibot_real.transition_assembly import (
+    AgiBotTransitionAssembler,
+)
+from serl_torch.examples.agibot_real.transition_assembly import AssemblyResult
+from serl_torch.examples.agibot_real.transition_assembly import RawChunkRecord
+from serl_torch.examples.agibot_real.transition_assembly import (
+    count_executed_steps_from_infos,
+)
+from serl_torch.examples.agibot_real.video_recorder import AsyncImageVideoRecorder
+from serl_torch.examples.agibot_real.video_recorder import AsyncVideoRecorderConfig
 
 
-def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
+def actor(
+    cfg: AgiBotTrainConfig,
+    *,
+    run_dir: Path,
+    logger: logging.Logger,
+) -> None:
     env = create_env(cfg, logger)
     base_policy = build_agibot_base_policy(cfg, logger=logger)
     logger.info("Chunk policy backend: %s", base_policy.describe())
+    video_recorder: AsyncImageVideoRecorder | None = None
+    if bool(cfg.video.enabled):
+        video_recorder = AsyncImageVideoRecorder(
+            config=AsyncVideoRecorderConfig(
+                camera_key=str(cfg.video.camera_key),
+                fps=float(cfg.video.fps),
+                output_dir=run_dir / str(cfg.video.output_dir),
+                max_pending_frames=int(cfg.video.max_pending_frames),
+                drop_frames_when_busy=bool(cfg.video.drop_frames_when_busy),
+            ),
+            logger=logger,
+        )
+        logger.info(
+            "Rollout video recording enabled: camera_key=%s fps=%.3f output_dir=%s max_pending_frames=%s drop_frames_when_busy=%s",
+            str(cfg.video.camera_key),
+            float(cfg.video.fps),
+            run_dir / str(cfg.video.output_dir),
+            int(cfg.video.max_pending_frames),
+            bool(cfg.video.drop_frames_when_busy),
+        )
 
     image_keys = cfg.obs.image_keys
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
-    residual_alpha = residual_action_spec.alpha
+    transition_assembler = AgiBotTransitionAssembler(
+        cfg=cfg,
+        base_policy=base_policy,
+        logger=logger,
+    )
 
     sample_obs = build_chunk_residual_sample_obs(
         state_dim=AGIBOT_STATE_DIM,
@@ -107,17 +144,18 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         critic_action_dim=residual_action_spec.chunk_critic_action_dim,
         action_transform=residual_action_spec.build_chunk_action_transform(),
     )
+
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
-    client = TrainerClient(
-        "actor_env",
-        cfg.runtime.trainer_host,
-        TrainerConfig(  # pyright: ignore[reportCallIssue]
-            port_number=cfg.runtime.trainer_port,
-            broadcast_port=cfg.runtime.broadcast_port,
-            request_types=["send-stats"],
-        ),
-        data_store,
+    client = build_actor_trainer_transport(
+        store_name="actor_env",
+        server_ip=cfg.runtime.trainer_host,
+        trainer_port=cfg.runtime.trainer_port,
+        broadcast_port=cfg.runtime.broadcast_port,
+        transport_cfg=cfg.runtime.trainer_transport,
+        data_store=data_store,
+        request_types=("send-stats",),
         wait_for_server=True,
+        log_level=logger.level,
     )
 
     def update_actor(payload: dict[str, Any]) -> None:
@@ -129,6 +167,12 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
 
     client.recv_network_callback(update_actor)
 
+    prepare_episode_reset_fn = getattr(env, "prepare_episode_reset", None)
+    start_episode_after_reset_fn = getattr(env, "start_episode_after_reset", None)
+    supports_staged_reset = bool(
+        callable(prepare_episode_reset_fn) and callable(start_episode_after_reset_fn)
+    )
+
     timer = Timer()
     steps_per_update = cfg.training.steps_per_update
     log_period = cfg.training.log_period
@@ -136,6 +180,7 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     max_episodes = cfg.training.max_episodes
 
     env_steps = 0
+    committed_env_steps = 0
     episode_id = 0
     success_count = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
@@ -145,6 +190,7 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
     summary: dict[str, Any] = {
         "role": "actor",
         "mode": "residual",
+        "transport_mode": str(cfg.runtime.trainer_transport.mode),
         "env_steps": 0,
         "episodes": 0,
         "successes": 0,
@@ -152,92 +198,148 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
         "episode_log_path": str(rollout_log_path),
     }
 
-    progress_bar = tqdm(total=int(max_env_steps), desc="actor env_steps", dynamic_ncols=True, leave=True)
+    def _transport_status() -> dict[str, Any]:
+        try:
+            return dict(client.get_transport_status("actor_env"))
+        except Exception:  # noqa: BLE001
+            return {"transport_mode": str(cfg.runtime.trainer_transport.mode)}
 
-    def _backfill_post_step_residual_obs(
-        *,
-        observations: list[dict[str, Any]],
-        task_prompt: str,
-    ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
-        base_action_chunks: list[np.ndarray] = []
-        residual_observations: list[dict[str, np.ndarray]] = []
-        for post_step_obs in observations:
-            next_base_actions, _ = base_policy.infer(post_step_obs, prompt=task_prompt)
-            next_residual_obs = build_chunk_residual_obs(
-                robot_state=build_agibot_state(post_step_obs),
-                images=extract_agibot_residual_images(
-                    post_step_obs,
-                    image_keys=image_keys,
-                ),
-                image_keys=image_keys,
-                base_actions=next_base_actions,
-                residual_alpha=residual_alpha,
+    consecutive_update_failures = 0
+    consecutive_stats_failures = 0
+
+    def _update_trainer_transport(*, context: str) -> bool:
+        nonlocal consecutive_update_failures
+        ok = bool(client.update())
+        if ok:
+            consecutive_update_failures = 0
+            return True
+        consecutive_update_failures += 1
+        logger.warning(
+            "trainer transport update failed: context=%s consecutive_failures=%s status=%s",
+            str(context),
+            int(consecutive_update_failures),
+            _transport_status(),
+        )
+        if int(consecutive_update_failures) >= 5:
+            raise RuntimeError(
+                "trainer transport update failed repeatedly; aborting actor run"
             )
-            base_action_chunks.append(next_base_actions)
-            residual_observations.append(next_residual_obs)
-        return base_action_chunks, residual_observations
+        return False
+
+    def _send_rollout_stats(*, payload: dict[str, Any]) -> None:
+        nonlocal consecutive_stats_failures
+        response = client.request("send-stats", payload)
+        if response is not None:
+            consecutive_stats_failures = 0
+            return
+        consecutive_stats_failures += 1
+        logger.warning(
+            "trainer transport send-stats failed: consecutive_failures=%s status=%s",
+            int(consecutive_stats_failures),
+            _transport_status(),
+        )
+
+    wait_for_episode_commit = bool(
+        cfg.runtime.trainer_transport.wait_committed_on_episode_end
+    )
+    current_task_prompt: str | None = None
+    pending_last_transition: dict[str, Any] | None = None
+
+    def _flush_pending_last_transition() -> None:
+        nonlocal pending_last_transition
+        if pending_last_transition is None:
+            return
+        data_store.insert(pending_last_transition)
+        pending_last_transition = None
+
+    def _finalize_pending_last_transition(
+        *,
+        terminal_reward: float,
+        boundary_flag: bool,
+    ) -> None:
+        nonlocal pending_last_transition
+        if pending_last_transition is None:
+            return
+        pending_last_transition["rewards"] = float(
+            pending_last_transition["rewards"]
+        ) + float(terminal_reward)
+        pending_last_transition["dones"] = bool(boundary_flag)
+        pending_last_transition["masks"] = 0.0
+        data_store.insert(pending_last_transition)
+        pending_last_transition = None
+
+    def _commit_assembled_chunks(assembled_chunks: list[AssemblyResult]) -> None:
+        nonlocal committed_env_steps
+        nonlocal pending_last_transition
+        for assembled_chunk in assembled_chunks:
+            _flush_pending_last_transition()
+            if bool(assembled_chunk.episode_done):
+                transitions_to_insert = assembled_chunk.transitions
+            else:
+                transitions_to_insert = assembled_chunk.transitions[:-1]
+                pending_last_transition = assembled_chunk.transitions[-1]
+            for transition in transitions_to_insert:
+                data_store.insert(transition)
+            for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
+                next_committed_env_step = int(committed_env_steps + step_offset)
+                if next_committed_env_step % steps_per_update == 0:
+                    _update_trainer_transport(
+                        context=f"commit_step_{int(next_committed_env_step)}"
+                    )
+            committed_env_steps += int(assembled_chunk.env_steps_delta)
+
+    progress_bar = tqdm(
+        total=int(max_env_steps),
+        desc="actor env_steps",
+        dynamic_ncols=True,
+        leave=True,
+    )
+    prefetched_reset_prepared = False
 
     try:
         while env_steps < max_env_steps and episode_id < max_episodes:
             episode_id += 1
-            obs = env.reset()
+            if prefetched_reset_prepared:
+                with timer.context("reset_obs"):
+                    assert callable(start_episode_after_reset_fn)
+                    obs = dict(start_episode_after_reset_fn())
+                task_prompt = str(env.task_description)
+                prefetched_reset_prepared = False
+            else:
+                with timer.context("reset_env"):
+                    obs = dict(env.reset())
+                task_prompt = str(env.task_description)
+            current_task_prompt = str(task_prompt)
+            if video_recorder is not None:
+                video_recorder.start_episode(int(episode_id))
+                video_recorder.add_obs_frame(obs)
 
-            task_prompt = str(env.task_description)
-
-            prefetched = None
-            pending_last_transition: dict[str, Any] | None = None
+            pending_last_transition = None
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
 
-            def _flush_pending_last_transition() -> None:
-                nonlocal pending_last_transition
-                if pending_last_transition is None:
-                    return
-                data_store.insert(pending_last_transition)
-                pending_last_transition = None
-
-            def _finalize_pending_last_transition(
-                *,
-                terminal_reward: float,
-                boundary_flag: bool,
-            ) -> None:
-                nonlocal pending_last_transition
-                if pending_last_transition is None:
-                    return
-                pending_last_transition["rewards"] = float(
-                    pending_last_transition["rewards"]
-                ) + float(terminal_reward)
-                pending_last_transition["dones"] = bool(boundary_flag)
-                pending_last_transition["masks"] = 0.0
-                data_store.insert(pending_last_transition)
-                pending_last_transition = None
-
             while env_steps < max_env_steps:
+                if transition_assembler.async_transition_assembly_enabled:
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(transition_assembler.drain_ready())
                 timer.tick("total")
-                with timer.context("sample_actions"):
-                    if prefetched is None:
-                        base_actions, _ = base_policy.infer(obs, prompt=task_prompt)
-
-                        residual_obs = build_chunk_residual_obs(
-                            robot_state=build_agibot_state(obs),
-                            images=extract_agibot_residual_images(
-                                obs,
-                                image_keys=image_keys,
-                            ),
-                            image_keys=image_keys,
-                            base_actions=base_actions,
-                            residual_alpha=residual_alpha,
+                with timer.context("prepare_action_chunk"):
+                    decision_obs = transition_assembler.pop_prefetched_decision_obs()
+                    if decision_obs is None:
+                        decision_obs = transition_assembler.infer_decision_obs(
+                            obs=obs,
+                            task_prompt=task_prompt,
                         )
-                    else:
-                        base_actions = prefetched["base_actions"]
-                        residual_obs = prefetched["residual_obs"]
-                        prefetched = None
-
-                    residual_actions = agent.sample_action(residual_obs, deterministic=False)
-
-                    final_actions = residual_action_spec.compose_chunk(base_action_chunk=base_actions, residual_action=residual_actions)
+                    residual_actions = agent.sample_action(
+                        decision_obs.residual_obs,
+                        deterministic=False,
+                    )
+                    final_actions = residual_action_spec.compose_chunk(
+                        base_action_chunk=decision_obs.base_actions,
+                        residual_action=residual_actions,
+                    )
 
                 episode_done = False
                 should_log_timer = False
@@ -246,22 +348,19 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     timer.tock("total")
                     break
 
-                action_chunk = np.asarray(final_actions, dtype=np.float32)[:remaining_env_steps]
+                action_chunk = np.asarray(final_actions, dtype=np.float32)[
+                    :remaining_env_steps
+                ]
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
+                if video_recorder is not None:
+                    for post_step_obs in chunk_result.get("observations", ()):
+                        if isinstance(post_step_obs, dict):
+                            video_recorder.add_obs_frame(post_step_obs)
 
-                chunk_observations = list(chunk_result["observations"])
-                chunk_rewards = [float(v) for v in chunk_result["rewards"]]
-                chunk_dones = [bool(v) for v in chunk_result["dones"]]
                 chunk_infos = [dict(v) for v in chunk_result["infos"]]
-
-                executed_steps = 0
-                for info in chunk_infos:
-                    if not bool(info.get("controller_action_executed", True)):
-                        break
-                    executed_steps += 1
-
+                executed_steps = count_executed_steps_from_infos(chunk_infos)
                 last_info = dict(chunk_result["info"])
                 obs = dict(chunk_result["obs"])
 
@@ -270,6 +369,13 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     if not done_flag:
                         raise RuntimeError(
                             "step_chunk returned no executed actions without a terminal outcome"
+                        )
+                    with timer.context("commit_replay"):
+                        commit_finished_episode_chunks(
+                            transition_assembler=transition_assembler,
+                            commit_assembled_chunks=_commit_assembled_chunks,
+                            wait_for_episode_commit=bool(wait_for_episode_commit),
+                            require_last_transition_ready=True,
                         )
                     _finalize_pending_last_transition(
                         terminal_reward=float(chunk_result["reward_sum"]),
@@ -281,7 +387,6 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                     episode_success = bool(
                         episode_success or chunk_result["info"].get("success", False)
                     )
-                    prefetched = None
                     episode_done = True
                     timer.tock("total")
                     if should_log_timer:
@@ -293,79 +398,51 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                                 "episode_id": int(episode_id),
                                 "episode_steps": int(episode_steps),
                                 "timer": timer.get_average_times(),
+                                "transport": _transport_status(),
                             },
                         )
                     break
 
-                executed_actions = np.asarray(action_chunk[:executed_steps], dtype=np.float32)
-                executed_observations = chunk_observations[:executed_steps]
-                executed_rewards = chunk_rewards[:executed_steps]
-                executed_dones = chunk_dones[:executed_steps]
-                executed_infos = chunk_infos[:executed_steps]
-
-                with timer.context("build_decision_obs"):
-                    backfilled_base_actions, backfilled_residual_obs = (
-                        _backfill_post_step_residual_obs(
-                            observations=executed_observations,
-                            task_prompt=task_prompt,
-                        )
+                raw_chunk = RawChunkRecord.from_step_chunk_result(
+                    episode_id=int(episode_id),
+                    episode_step_start=int(episode_steps),
+                    residual_obs_before_chunk=decision_obs.residual_obs,
+                    action_chunk=action_chunk,
+                    chunk_result=chunk_result,
+                )
+                previous_env_steps = int(env_steps)
+                with timer.context("assemble_transitions"):
+                    assembled_chunks = transition_assembler.handle_chunk(
+                        raw=raw_chunk,
+                        task_prompt=task_prompt,
                     )
 
-                current_residual_obs = residual_obs
-                chunk_transitions: list[dict[str, Any]] = []
-                for step_idx in range(executed_steps):
-                    step_done = bool(executed_dones[step_idx])
-                    step_truncated = bool(
-                        step_idx == (executed_steps - 1) and chunk_result["truncated"]
-                    )
-                    done_flag = bool(step_done or step_truncated)
-                    next_residual_obs = backfilled_residual_obs[step_idx]
-                    step_info = executed_infos[step_idx]
+                env_steps += int(raw_chunk.executed_steps)
+                progress_bar.update(int(raw_chunk.executed_steps))
+                episode_steps += int(raw_chunk.executed_steps)
+                episode_return += float(raw_chunk.reward_sum)
+                episode_success = bool(
+                    episode_success
+                    or any(bool(info.get("success", False)) for info in raw_chunk.infos)
+                )
+                last_info = dict(raw_chunk.chunk_info)
+                obs = dict(raw_chunk.final_obs)
 
-                    transition = {
-                        "episode_id": int(episode_id),
-                        "episode_step": int(episode_steps),
-                        "observations": current_residual_obs,
-                        "actions": np.asarray(
-                            executed_actions[step_idx], dtype=np.float32
-                        ).reshape(-1),
-                        "next_observations": next_residual_obs,
-                        "rewards": float(executed_rewards[step_idx]),
-                        "masks": float(0.0 if done_flag else 1.0),
-                        "dones": done_flag,
-                    }
-                    chunk_transitions.append(transition)
-
-                    env_steps += 1
-                    progress_bar.update(1)
-                    episode_steps += 1
-                    episode_return += float(executed_rewards[step_idx])
-                    episode_success = bool(
-                        episode_success or step_info.get("success", False)
-                    )
-                    current_residual_obs = next_residual_obs
-                    last_info = dict(step_info)
-
-                    if env_steps % steps_per_update == 0:
-                        client.update()
-                    if env_steps % log_period == 0:
+                for step_offset in range(1, int(raw_chunk.executed_steps) + 1):
+                    next_env_step = int(previous_env_steps + step_offset)
+                    if next_env_step % log_period == 0:
                         should_log_timer = True
 
-                _flush_pending_last_transition()
-                prefetched = None
-                if bool(chunk_result["done"] or chunk_result["truncated"]):
-                    for transition in chunk_transitions:
-                        data_store.insert(transition)
-                    last_info = dict(chunk_result["info"])
+                if transition_assembler.async_transition_assembly_enabled:
+                    with timer.context("commit_replay"):
+                        _commit_assembled_chunks(assembled_chunks)
                 else:
-                    for transition in chunk_transitions[:-1]:
-                        data_store.insert(transition)
-                    pending_last_transition = chunk_transitions[-1]
-                    prefetched = {
-                        "base_actions": backfilled_base_actions[-1],
-                        "residual_obs": backfilled_residual_obs[-1],
-                    }
-                if bool(chunk_result["done"] or chunk_result["truncated"]) or env_steps >= max_env_steps:
+                    _commit_assembled_chunks(assembled_chunks)
+
+                if (
+                    bool(chunk_result["done"] or chunk_result["truncated"])
+                    or env_steps >= max_env_steps
+                ):
                     episode_done = True
 
                 timer.tock("total")
@@ -379,14 +456,41 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                             "episode_id": int(episode_id),
                             "episode_steps": int(episode_steps),
                             "timer": timer.get_average_times(),
+                            "transport": _transport_status(),
                         },
                     )
 
                 if episode_done:
                     break
 
+            next_reset_error: Exception | None = None
+            should_prefetch_next_reset = bool(
+                transition_assembler.async_transition_assembly_enabled
+                and supports_staged_reset
+                and env_steps < max_env_steps
+                and episode_id < max_episodes
+            )
+
+            if should_prefetch_next_reset:
+                try:
+                    with timer.context("reset_env"):
+                        assert callable(prepare_episode_reset_fn)
+                        prepare_episode_reset_fn()
+                except Exception as exc:  # noqa: BLE001
+                    next_reset_error = exc
+            if transition_assembler.async_transition_assembly_enabled:
+                with timer.context("commit_replay"):
+                    commit_finished_episode_chunks(
+                        transition_assembler=transition_assembler,
+                        commit_assembled_chunks=_commit_assembled_chunks,
+                        wait_for_episode_commit=bool(wait_for_episode_commit),
+                    )
+            else:
+                _commit_assembled_chunks(
+                    transition_assembler.finish_episode()
+                )
             _flush_pending_last_transition()
-            client.update()
+            _update_trainer_transport(context="episode_end")
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
             recent_success_rate_20 = float(sum(recent_episode_successes)) / float(
@@ -412,14 +516,20 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 {
                     "source": "rollout",
                     **episode_stats,
+                    "transport": _transport_status(),
                 },
             )
-            client.request("send-stats", episode_stats)
+            if wait_for_episode_commit:
+                client.wait_until_committed()
+            _send_rollout_stats(payload=episode_stats)
             progress_bar.set_postfix(
                 episode=int(episode_id),
                 success=int(bool(episode_success)),
                 refresh=False,
             )
+            if next_reset_error is not None:
+                raise next_reset_error
+            prefetched_reset_prepared = bool(should_prefetch_next_reset)
             logger.info(
                 "episode=%s success=%s steps=%s return=%.3f env_steps=%s",
                 int(episode_id),
@@ -428,21 +538,43 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
                 float(episode_return),
                 int(env_steps),
             )
+            if video_recorder is not None:
+                video_recorder.end_episode(
+                    episode_id=int(episode_id),
+                    success=bool(episode_success),
+                    episode_steps=int(episode_steps),
+                )
 
     finally:
+        if current_task_prompt is not None:
+            try:
+                _commit_assembled_chunks(
+                    transition_assembler.finish_episode(
+                        block=True,
+                    )
+                )
+                _flush_pending_last_transition()
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "ignored final actor replay flush error",
+                    exc_info=True,
+                )
+        try:
+            _update_trainer_transport(context="shutdown")
+            if bool(cfg.runtime.trainer_transport.wait_committed_on_shutdown):
+                client.wait_until_committed()
+        except Exception:  # noqa: BLE001
+            pass
         summary.update(
             {
                 "env_steps": int(env_steps),
                 "episodes": int(episode_id),
                 "successes": int(success_count),
+                "transport": _transport_status(),
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2, ensure_ascii=False)
-        try:
-            client.update()
-        except Exception:  # noqa: BLE001
-            pass
         try:
             progress_bar.close()
         except Exception:  # noqa: BLE001
@@ -453,6 +585,19 @@ def actor(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> N
             pass
         try:
             base_policy.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            transition_assembler.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if video_recorder is not None:
+                video_recorder.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            client.stop()
         except Exception:  # noqa: BLE001
             pass
 
@@ -538,11 +683,37 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     summary: dict[str, Any] = {
         "role": "learner",
         "mode": "residual",
+        "transport_mode": str(cfg.runtime.trainer_transport.mode),
         "update_steps": 0,
         "env_steps": 0,
         "replay_size": 0,
         "timer_log_path": str(learner_timer_log_path),
     }
+
+    def _transport_status() -> dict[str, Any]:
+        try:
+            return dict(server.get_transport_status("actor_env"))
+        except Exception:  # noqa: BLE001
+            return {"transport_mode": str(cfg.runtime.trainer_transport.mode)}
+
+    def _committed_online_steps() -> int:
+        return int(replay_buffer.latest_data_id())
+
+    def _should_stop_after_actor_done(*, online_update_steps: int) -> bool:
+        if int(env_steps) < int(cfg.training.max_env_steps):
+            return False
+        committed_online_steps = int(_committed_online_steps())
+        if int(online_update_steps) < int(committed_online_steps):
+            return False
+        transport_status = _transport_status()
+        accepted = int(transport_status.get("accepted_update_id", -1))
+        committed = int(transport_status.get("committed_update_id", -1))
+        target_last_online_id = max(0, int(env_steps) - 1)
+        if accepted < int(target_last_online_id) or committed < int(target_last_online_id):
+            return False
+        if accepted >= 0 and committed >= 0 and accepted > committed:
+            return False
+        return True
 
     def stats_callback(request_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal env_steps
@@ -567,13 +738,13 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             wandb_logger.log(to_jsonable(rollout_metrics))
         return {}
 
-    server = TrainerServer(
-        TrainerConfig(  # pyright: ignore[reportCallIssue]
-            port_number=cfg.runtime.trainer_port,
-            broadcast_port=cfg.runtime.broadcast_port,
-            request_types=["send-stats"],
-        ),
+    server = build_learner_trainer_transport(
+        trainer_port=cfg.runtime.trainer_port,
+        broadcast_port=cfg.runtime.broadcast_port,
+        transport_cfg=cfg.runtime.trainer_transport,
         request_callback=stats_callback,
+        request_types=("send-stats",),
+        log_level=logger.level,
     )
     server.register_data_store("actor_env", replay_buffer)
     server.start(threaded=True)
@@ -764,10 +935,20 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             int(env_steps),
         )
 
+    interrupted = False
     try:
         while update_steps < max_update_steps:
             online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
-            if not online_update_steps < env_steps:
+            if _should_stop_after_actor_done(online_update_steps=int(online_update_steps)):
+                logger.info(
+                    "stopping learner after actor env limit: update_steps=%s env_steps=%s replay_size=%s transport=%s",
+                    int(update_steps),
+                    int(env_steps),
+                    int(len(replay_buffer)),
+                    _transport_status(),
+                )
+                break
+            if not online_update_steps < _committed_online_steps():
                 time.sleep(idle_poll_interval_sec)
                 continue
 
@@ -807,6 +988,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         "replay_size": int(len(replay_buffer)),
                         "updates_per_sec": float(updates_per_sec),
                         "timer": timer_metrics,
+                        "transport": _transport_status(),
                     },
                 )
                 offline_suffix = ""
@@ -851,6 +1033,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                     int(env_steps),
                     checkpoint_path,
                 )
+    except KeyboardInterrupt:
+        interrupted = True
+        logger.info("learner interrupted; shutting down gracefully")
 
     finally:
         with progress_state_lock:
@@ -861,6 +1046,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                 "env_steps": int(env_steps),
                 "replay_size": int(len(replay_buffer)),
                 "last_completed_episode_id": int(summary_last_completed_episode_id),
+                "transport": _transport_status(),
                 "offline": {
                     "enabled": bool(cfg.offline.enabled),
                     "ratio": float(cfg.offline.ratio),
@@ -901,6 +1087,8 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             server.stop()
         except Exception:  # noqa: BLE001
             pass
+    if interrupted:
+        return
 
 
 @hydra.main(

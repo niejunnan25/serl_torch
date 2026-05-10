@@ -2,8 +2,8 @@
 
 ## Startup
 
-- 用 `examples/agibot_real/scripts/run_residual_training_copy.py` 默认配置启动，确认默认 `config_name=train_residual_copy`。
-- learner 和 actor 的日志里确认 `transport_mode=split_queue`。
+- 用 `examples/agibot_real/scripts/run_residual_training.py` 默认配置启动，确认默认 `config_name=train_residual`。
+- learner 和 actor 的日志里确认 `transport_mode=async_commit`。
 - 端口确认：
   - control: `runtime.trainer_port`
   - broadcast: `runtime.broadcast_port`

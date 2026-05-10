@@ -5,7 +5,6 @@
 当前主线以这些文件为准：
 
 - 配置：[../configs/train_residual.yaml](../configs/train_residual.yaml)
-- optimized 配置：[../configs/train_residual_optimized.yaml](../configs/train_residual_optimized.yaml)
 - 训练入口：[../scripts/run_residual_training.py](../scripts/run_residual_training.py)
 - actor wrapper：[../tools/run_actor.sh](../tools/run_actor.sh)
 - learner wrapper：[../tools/run_learner.sh](../tools/run_learner.sh)
@@ -340,13 +339,13 @@ bash tools/run_actor.sh policy.type=joyra policy.port=9001
 默认 Hydra 输出根目录是：
 
 ```text
-outputs/agibot_real
+output
 ```
 
 训练 run 默认落在：
 
 ```text
-outputs/agibot_real/train_residual/<timestamp>/
+output/train_residual/<timestamp>/
 ```
 
 常见文件包括：

@@ -10,7 +10,6 @@
 
 默认配置见：
 
-- [../configs/train_residual_copy.yaml](../configs/train_residual_copy.yaml)
 - [../configs/train_residual.yaml](../configs/train_residual.yaml)
 - [../configs/eval_residual.yaml](../configs/eval_residual.yaml)
 
