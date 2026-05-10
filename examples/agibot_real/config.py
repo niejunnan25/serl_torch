@@ -16,8 +16,8 @@ from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.common.trainer_transport import validate_transport_mode
 from serl_launcher.utils.serialization import to_jsonable
 
-from .schema import build_agibot_task_key
-from .schema import resolve_agibot_image_keys
+from .env.schema import build_agibot_task_key
+from .env.schema import resolve_agibot_image_keys
 
 RuntimeRole = Literal["actor", "learner"]
 EnvBackend = Literal["local"]
