@@ -35,6 +35,9 @@ def reset_to_task_initial_pose(
     # Optional tuning (seconds), same order as agi_robot.AgiRobot.reset
     sleep_hw = float(os.environ.get("AGIBOT_RESET_SLEEP_HEAD_WAIST_SEC", "2.0"))
     sleep_arm = float(os.environ.get("AGIBOT_RESET_SLEEP_ARM_SEC", "1.0"))
+    sleep_after_reset = float(
+        os.environ.get("AGIBOT_RESET_SLEEP_AFTER_RESET_SEC", "2.0")
+    )
 
     init_key = normalize_task_name_for_init_pose(str(task_name))
     try:
@@ -62,3 +65,4 @@ def reset_to_task_initial_pose(
     time.sleep(sleep_hw)
     robot_node.publish_joint_command_reset(joint)
     time.sleep(sleep_arm)
+    time.sleep(sleep_after_reset)

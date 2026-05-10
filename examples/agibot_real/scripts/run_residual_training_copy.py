@@ -82,6 +82,8 @@ from serl_torch.examples.agibot_real.transition_assembly import RawChunkRecord
 from serl_torch.examples.agibot_real.transition_assembly import (
     count_executed_steps_from_infos,
 )
+from serl_torch.examples.agibot_real.video_recorder import AsyncImageVideoRecorder
+from serl_torch.examples.agibot_real.video_recorder import AsyncVideoRecorderConfig
 
 
 def actor(
@@ -93,6 +95,26 @@ def actor(
     env = create_env(cfg, logger)
     base_policy = build_agibot_base_policy(cfg, logger=logger)
     logger.info("Chunk policy backend: %s", base_policy.describe())
+    video_recorder: AsyncImageVideoRecorder | None = None
+    if bool(cfg.video.enabled):
+        video_recorder = AsyncImageVideoRecorder(
+            config=AsyncVideoRecorderConfig(
+                camera_key=str(cfg.video.camera_key),
+                fps=float(cfg.video.fps),
+                output_dir=run_dir / str(cfg.video.output_dir),
+                max_pending_frames=int(cfg.video.max_pending_frames),
+                drop_frames_when_busy=bool(cfg.video.drop_frames_when_busy),
+            ),
+            logger=logger,
+        )
+        logger.info(
+            "Rollout video recording enabled: camera_key=%s fps=%.3f output_dir=%s max_pending_frames=%s drop_frames_when_busy=%s",
+            str(cfg.video.camera_key),
+            float(cfg.video.fps),
+            run_dir / str(cfg.video.output_dir),
+            int(cfg.video.max_pending_frames),
+            bool(cfg.video.drop_frames_when_busy),
+        )
 
     image_keys = cfg.obs.image_keys
     action_dim = cfg.env.action_dim
@@ -185,6 +207,68 @@ def actor(
         "timer_log_path": str(actor_timer_log_path),
         "episode_log_path": str(rollout_log_path),
     }
+
+    filter_enabled = bool(cfg.action_filter.enabled)
+    filter_alpha = float(cfg.action_filter.alpha)
+    filter_max_delta = cfg.action_filter.max_delta
+    filter_warmup_steps = int(cfg.action_filter.warmup_steps)
+    filter_reset_each_episode = bool(cfg.action_filter.reset_each_episode)
+    filtered_residual_delta_prev: np.ndarray | None = None
+    filtered_action_total_steps = 0
+
+    if filter_enabled:
+        logger.info(
+            "Residual-delta filter enabled: alpha=%.4f max_delta=%s warmup_steps=%s reset_each_episode=%s",
+            float(filter_alpha),
+            None if filter_max_delta is None else float(filter_max_delta),
+            int(filter_warmup_steps),
+            bool(filter_reset_each_episode),
+        )
+
+    def _filter_residual_delta_chunk(residual_delta_chunk: np.ndarray) -> np.ndarray:
+        nonlocal filtered_residual_delta_prev
+        nonlocal filtered_action_total_steps
+        if not filter_enabled:
+            return residual_delta_chunk
+
+        filtered = np.array(residual_delta_chunk, dtype=np.float32, copy=True)
+        if filtered.ndim != 2:
+            return filtered
+
+        for i in range(filtered.shape[0]):
+            current_delta = filtered[i]
+
+            if filtered_residual_delta_prev is None:
+                filtered_residual_delta_prev = np.array(
+                    current_delta,
+                    dtype=np.float32,
+                    copy=True,
+                )
+            elif filtered_action_total_steps >= filter_warmup_steps:
+                smoothed = (
+                    float(filter_alpha) * current_delta
+                    + (1.0 - float(filter_alpha)) * filtered_residual_delta_prev
+                )
+                if filter_max_delta is not None:
+                    max_delta = float(filter_max_delta)
+                    delta = smoothed - filtered_residual_delta_prev
+                    smoothed = filtered_residual_delta_prev + np.clip(
+                        delta,
+                        -max_delta,
+                        max_delta,
+                    )
+                filtered_residual_delta_prev = np.asarray(smoothed, dtype=np.float32)
+            else:
+                filtered_residual_delta_prev = np.array(
+                    current_delta,
+                    dtype=np.float32,
+                    copy=True,
+                )
+
+            filtered[i] = filtered_residual_delta_prev
+            filtered_action_total_steps += 1
+
+        return filtered
 
     def _transport_status() -> dict[str, Any]:
         try:
@@ -287,6 +371,8 @@ def actor(
     try:
         while env_steps < max_env_steps and episode_id < max_episodes:
             episode_id += 1
+            if filter_reset_each_episode:
+                filtered_residual_delta_prev = None
             if prefetched_reset_prepared:
                 with timer.context("reset_obs"):
                     assert callable(start_episode_after_reset_fn)
@@ -296,8 +382,12 @@ def actor(
             else:
                 with timer.context("reset_env"):
                     obs = dict(env.reset())
+                    
                 task_prompt = str(env.task_description)
             current_task_prompt = str(task_prompt)
+            if video_recorder is not None:
+                video_recorder.start_episode(int(episode_id))
+                video_recorder.add_obs_frame(obs)
 
             pending_last_transition = None
             episode_return = 0.0
@@ -334,9 +424,26 @@ def actor(
                 action_chunk = np.asarray(final_actions, dtype=np.float32)[
                     :remaining_env_steps
                 ]
+                base_action_chunk = np.asarray(decision_obs.base_actions, dtype=np.float32)
+                if base_action_chunk.shape != np.asarray(final_actions).shape:
+                    if int(base_action_chunk.size) != int(np.asarray(final_actions).size):
+                        raise ValueError(
+                            "base and final action chunk shape mismatch: "
+                            f"base={base_action_chunk.shape} final={np.asarray(final_actions).shape}"
+                        )
+                    base_action_chunk = base_action_chunk.reshape(np.asarray(final_actions).shape)
+                base_action_chunk = base_action_chunk[:remaining_env_steps]
+
+                residual_delta_chunk = action_chunk - base_action_chunk
+                residual_delta_chunk = _filter_residual_delta_chunk(residual_delta_chunk)
+                action_chunk = base_action_chunk + residual_delta_chunk
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
+                if video_recorder is not None:
+                    for post_step_obs in chunk_result.get("observations", ()):
+                        if isinstance(post_step_obs, dict):
+                            video_recorder.add_obs_frame(post_step_obs)
 
                 chunk_infos = [dict(v) for v in chunk_result["infos"]]
                 executed_steps = count_executed_steps_from_infos(chunk_infos)
@@ -521,6 +628,12 @@ def actor(
                 float(episode_return),
                 int(env_steps),
             )
+            if video_recorder is not None:
+                video_recorder.end_episode(
+                    episode_id=int(episode_id),
+                    success=bool(episode_success),
+                    episode_steps=int(episode_steps),
+                )
 
     finally:
         if current_task_prompt is not None:
@@ -567,6 +680,11 @@ def actor(
             pass
         try:
             transition_assembler.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if video_recorder is not None:
+                video_recorder.close()
         except Exception:  # noqa: BLE001
             pass
         try:

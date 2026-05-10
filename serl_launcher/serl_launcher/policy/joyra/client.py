@@ -115,7 +115,7 @@ class JoyRAPolicyClient:
         self._logger.info("Waiting for JoyRA server at %s", uri)
         while True:
             try:
-                conn = websockets.sync.client.connect(uri, **connect_kwargs)
+                conn = websockets.sync.client.connect(uri, **connect_kwargs, proxy=None)
                 metadata = msgpack_numpy.unpackb(conn.recv())
                 if not isinstance(metadata, dict):
                     raise RuntimeError(

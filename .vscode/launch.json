@@ -1,0 +1,33 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+
+        {
+            "name": "Learner: run_residual_training_copy",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/agibot_real/scripts/run_residual_training_copy.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/serl_launcher:${env:PYTHONPATH}",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "args": [
+                "runtime.role=learner",
+                "policy.port=8001",
+                "backfill_policy.port=8001"
+            ]
+        }
+    ]
+}
