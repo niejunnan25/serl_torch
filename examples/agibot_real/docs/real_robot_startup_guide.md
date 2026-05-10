@@ -9,7 +9,7 @@
 - actor wrapper：[../tools/run_actor.sh](../tools/run_actor.sh)
 - learner wrapper：[../tools/run_learner.sh](../tools/run_learner.sh)
 - robot-service wrapper：[../tools/start_robot_service.sh](../tools/start_robot_service.sh)
-- eval 入口：[../scripts/evaluate_checkpoint.py](../scripts/evaluate_checkpoint.py)
+- eval 入口：[../scripts/run_residual_eval.py](../scripts/run_residual_eval.py)
 
 如果你想直接用 optimized 配置启动训练，请看：
 
@@ -414,7 +414,7 @@ output/train_residual/<timestamp>/
 ```bash
 cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
-python scripts/evaluate_checkpoint.py \
+python scripts/run_residual_eval.py \
   eval.checkpoint_path=/path/to/checkpoints \
   eval.checkpoint_step=10000
 ```
@@ -422,7 +422,7 @@ python scripts/evaluate_checkpoint.py \
 也可以直接传单个 checkpoint 文件：
 
 ```bash
-python scripts/evaluate_checkpoint.py \
+python scripts/run_residual_eval.py \
   eval.checkpoint_path=/path/to/checkpoints/checkpoint_10000
 ```
 

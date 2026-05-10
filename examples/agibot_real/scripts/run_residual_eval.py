@@ -16,7 +16,7 @@ if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
 
 from serl_torch.examples.agibot_real.config import parse_eval_cfg
-from serl_torch.examples.agibot_real.eval_runner import run_eval
+from serl_torch.examples.agibot_real.runtime.eval_runner import run_eval
 
 
 @hydra.main(

@@ -14,11 +14,20 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - environment-dependent
     torch = None
 
+_resolve_checkpoint_input = None
 if torch is not None:
-    from serl_torch.examples.agibot_real.eval_runner import _resolve_checkpoint_input
+    try:
+        from serl_torch.examples.agibot_real.runtime.eval_runner import (
+            _resolve_checkpoint_input,
+        )
+    except ModuleNotFoundError:  # pragma: no cover - environment-dependent
+        _resolve_checkpoint_input = None
 
 
-@unittest.skipIf(torch is None, "torch is not installed")
+@unittest.skipIf(
+    torch is None or _resolve_checkpoint_input is None,
+    "AgiBot eval runner dependencies are not installed",
+)
 class AgiBotEvalRunnerTest(unittest.TestCase):
     def test_resolve_checkpoint_input_from_directory_and_step(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
