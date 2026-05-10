@@ -26,12 +26,20 @@ if "gym" not in sys.modules and "gymnasium" not in sys.modules:
     fake_gym.spaces = types.SimpleNamespace(Box=_FakeBox, Dict=_FakeDict)
     sys.modules["gym"] = fake_gym
 
-from serl_launcher.policy.base import PolicyInput
-from serl_launcher.policy.joyra import msgpack_numpy
-from serl_launcher.policy.joyra.client import JoyRAPolicyClient
-from serl_torch.examples.agibot_real.transition_assembly import (
-    backfill_post_step_residual_obs,
-)
+_IMPORT_ERROR: ModuleNotFoundError | None = None
+try:
+    from serl_launcher.policy.base import PolicyInput
+    from serl_launcher.policy.joyra import msgpack_numpy
+    from serl_launcher.policy.joyra.client import JoyRAPolicyClient
+    from serl_torch.examples.agibot_real.runtime.transition_assembly import (
+        backfill_post_step_residual_obs,
+    )
+except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
+    _IMPORT_ERROR = exc
+    PolicyInput = object  # type: ignore[assignment]
+    JoyRAPolicyClient = object  # type: ignore[assignment]
+    msgpack_numpy = None  # type: ignore[assignment]
+    backfill_post_step_residual_obs = None  # type: ignore[assignment]
 
 
 def _make_policy_input(seed: int) -> PolicyInput:
@@ -138,6 +146,7 @@ class _FakeSerialBasePolicy:
         return np.full((3, 14), fill_value=fill_value, dtype=np.float32), {}
 
 
+@unittest.skipIf(_IMPORT_ERROR is not None, f"missing dependency: {_IMPORT_ERROR}")
 class AgiBotBatchBackfillTest(unittest.TestCase):
     def test_joyra_client_infer_many_packs_examples_and_decodes_batch(self) -> None:
         packer = msgpack_numpy.Packer()

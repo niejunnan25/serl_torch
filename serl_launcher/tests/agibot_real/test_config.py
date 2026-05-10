@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import unittest
+from unittest import mock
 
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
@@ -30,10 +31,18 @@ class AgiBotConfigTest(unittest.TestCase):
         )
 
         parsed = parse_train_cfg(cfg)
+        self.assertEqual(parsed.wandb.project, "agibot_real")
+        self.assertEqual(parsed.wandb.mode, "online")
+        self.assertFalse(parsed.wandb.debug)
         self.assertFalse(parsed.offline.enabled)
         self.assertEqual(parsed.offline.prepared_path, None)
         self.assertEqual(parsed.offline.ratio, 0.5)
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
+        self.assertFalse(parsed.action_filter.enabled)
+        self.assertEqual(parsed.action_filter.alpha, 0.25)
+        self.assertIsNone(parsed.action_filter.max_delta)
+        self.assertEqual(parsed.action_filter.warmup_steps, 0)
+        self.assertTrue(parsed.action_filter.reset_each_episode)
 
     def test_parse_eval_cfg_from_yaml(self) -> None:
         cfg = OmegaConf.load(
@@ -81,11 +90,73 @@ class AgiBotConfigTest(unittest.TestCase):
         )
 
         parsed = parse_train_cfg(cfg)
+        self.assertEqual(parsed.wandb.mode, "online")
         self.assertFalse(parsed.offline.enabled)
         self.assertEqual(parsed.offline.pretrain_steps, 0)
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
         self.assertFalse(parsed.backfill_policy.enabled)
         self.assertEqual(parsed.backfill_policy.port, 30001)
+        self.assertFalse(parsed.action_filter.enabled)
+        self.assertEqual(parsed.action_filter.alpha, 0.25)
+
+    def test_parse_train_cfg_uses_wandb_entity_env_default(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+
+        with mock.patch.dict("os.environ", {"WANDB_ENTITY": "robotics"}, clear=False):
+            parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.wandb.entity, "robotics")
+
+    def test_parse_train_cfg_debug_disables_wandb_mode(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.wandb.mode = "offline"
+        cfg.wandb.debug = True
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.wandb.mode, "disabled")
+        self.assertTrue(parsed.wandb.debug)
+
+    def test_parse_train_cfg_rejects_invalid_wandb_mode(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.wandb.mode = "cloud"
+
+        with self.assertRaisesRegex(ValueError, "wandb.mode must be one of"):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_rejects_action_filter_alpha_above_one(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.action_filter.alpha = 1.5
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "action_filter.alpha must be <= 1.0",
+        ):
+            parse_train_cfg(cfg)
 
     def test_parse_train_cfg_requires_explicit_backfill_policy_block(self) -> None:
         cfg = OmegaConf.create(

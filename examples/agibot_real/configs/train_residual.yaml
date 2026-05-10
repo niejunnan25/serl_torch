@@ -32,6 +32,7 @@ wandb:
   project: agibot_real
   exp_name: ${task.name}_residual_copy
   group: residual_copy
+  mode: online
   debug: false
 
 policy:
@@ -80,6 +81,13 @@ residual:
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
   chunk_horizon: 30
+
+action_filter:
+  enabled: false
+  alpha: 0.25
+  max_delta: null
+  warmup_steps: 0
+  reset_each_episode: true
 
 encoder:
   type: resnet

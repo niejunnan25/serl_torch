@@ -44,11 +44,15 @@ from serl_launcher.common.training_payloads import parse_rollout_stats_payload
 from serl_launcher.common.training_reporting import format_learner_heartbeat
 from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
+from serl_launcher.residual.action_filter import ResidualDeltaActionFilter
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
 from serl_launcher.residual.observation import build_chunk_residual_observation_space
 from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
+from serl_launcher.rollout.runtime_helpers import commit_finished_episode_chunks
+from serl_launcher.rollout.video_recorder import AsyncImageVideoRecorder
+from serl_launcher.rollout.video_recorder import AsyncVideoRecorderConfig
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl
 from serl_launcher.utils.seeding import set_global_seeds
@@ -73,19 +77,14 @@ from serl_torch.examples.agibot_real.offline_data import (
 from serl_torch.examples.agibot_real.offline_data import (
     resolve_and_validate_prepared_paths,
 )
-from serl_torch.examples.agibot_real.runtime_helpers import (
-    commit_finished_episode_chunks,
-)
-from serl_torch.examples.agibot_real.transition_assembly import (
+from serl_torch.examples.agibot_real.runtime.transition_assembly import (
     AgiBotTransitionAssembler,
 )
-from serl_torch.examples.agibot_real.transition_assembly import AssemblyResult
-from serl_torch.examples.agibot_real.transition_assembly import RawChunkRecord
-from serl_torch.examples.agibot_real.transition_assembly import (
+from serl_torch.examples.agibot_real.runtime.transition_assembly import AssemblyResult
+from serl_torch.examples.agibot_real.runtime.transition_assembly import RawChunkRecord
+from serl_torch.examples.agibot_real.runtime.transition_assembly import (
     count_executed_steps_from_infos,
 )
-from serl_torch.examples.agibot_real.video_recorder import AsyncImageVideoRecorder
-from serl_torch.examples.agibot_real.video_recorder import AsyncVideoRecorderConfig
 
 
 def actor(
@@ -198,6 +197,25 @@ def actor(
         "episode_log_path": str(rollout_log_path),
     }
 
+    residual_delta_filter = ResidualDeltaActionFilter(
+        enabled=bool(cfg.action_filter.enabled),
+        alpha=float(cfg.action_filter.alpha),
+        max_delta=cfg.action_filter.max_delta,
+        warmup_steps=int(cfg.action_filter.warmup_steps),
+        reset_each_episode=bool(cfg.action_filter.reset_each_episode),
+    )
+    if residual_delta_filter.enabled:
+        logger.info(
+            "Residual-delta filter enabled: alpha=%.4f max_delta=%s "
+            "warmup_steps=%s reset_each_episode=%s",
+            float(residual_delta_filter.alpha),
+            None
+            if residual_delta_filter.max_delta is None
+            else float(residual_delta_filter.max_delta),
+            int(residual_delta_filter.warmup_steps),
+            bool(residual_delta_filter.reset_each_episode),
+        )
+
     def _transport_status() -> dict[str, Any]:
         try:
             return dict(client.get_transport_status("actor_env"))
@@ -299,6 +317,7 @@ def actor(
     try:
         while env_steps < max_env_steps and episode_id < max_episodes:
             episode_id += 1
+            residual_delta_filter.reset_episode()
             if prefetched_reset_prepared:
                 with timer.context("reset_obs"):
                     assert callable(start_episode_after_reset_fn)
@@ -348,9 +367,27 @@ def actor(
                     timer.tock("total")
                     break
 
-                action_chunk = np.asarray(final_actions, dtype=np.float32)[
-                    :remaining_env_steps
-                ]
+                final_actions_array = np.asarray(final_actions, dtype=np.float32)
+                action_chunk = final_actions_array[:remaining_env_steps]
+                if residual_delta_filter.enabled:
+                    base_action_chunk = np.asarray(
+                        decision_obs.base_actions,
+                        dtype=np.float32,
+                    )
+                    if base_action_chunk.shape != final_actions_array.shape:
+                        if int(base_action_chunk.size) != int(final_actions_array.size):
+                            raise ValueError(
+                                "base and final action chunk shape mismatch: "
+                                f"base={base_action_chunk.shape} "
+                                f"final={final_actions_array.shape}"
+                            )
+                        base_action_chunk = base_action_chunk.reshape(
+                            final_actions_array.shape
+                        )
+                    action_chunk = residual_delta_filter.filter_action_chunk(
+                        base_action_chunk=base_action_chunk[:remaining_env_steps],
+                        final_action_chunk=action_chunk,
+                    )
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
@@ -658,9 +695,11 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     wandb_cfg.update(
         {
             "project": cfg.wandb.project,
+            "entity": cfg.wandb.entity,
             "exp_descriptor": run_name,
             "tag": [run_name],
             "group": cfg.wandb.group,
+            "mode": cfg.wandb.mode,
         }
     )
     wandb_variant = cfg_to_log_payload(cfg)
@@ -670,6 +709,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         wandb_config=wandb_cfg,
         variant=wandb_variant,
         wandb_output_dir=str(wandb_dir),
+        mode=cfg.wandb.mode,
         debug=cfg.wandb.debug,
     )
     configure_rollout_wandb_metrics(wandb_logger=wandb_logger)

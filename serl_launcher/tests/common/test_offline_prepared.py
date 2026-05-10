@@ -6,8 +6,13 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from serl_launcher.data.offline_prepared import build_residual_prepared_fingerprint
+from serl_launcher.data.offline_prepared import build_residual_training_signature
+from serl_launcher.data.offline_prepared import extract_residual_manifest_signature
+from serl_launcher.data.offline_prepared import format_residual_alpha_token
 from serl_launcher.data.offline_prepared import load_prepared_offline_replay
 from serl_launcher.data.offline_prepared import resolve_prepared_episode_files
+from serl_launcher.data.offline_prepared import resolve_residual_prepared_dir
 from serl_launcher.data.offline_prepared import validate_prepared_paths
 from serl_launcher.residual.expert_projection import project_expert_action
 
@@ -26,6 +31,75 @@ class _FakeLogger:
 
     def warning(self, *args: object, **kwargs: object) -> None:
         del args, kwargs
+
+
+def test_residual_prepared_metadata_helpers_build_shared_signature() -> None:
+    fingerprint = build_residual_prepared_fingerprint(
+        format_version="format_v1",
+        task_key="suite_task_1",
+        task_description="pick object",
+        policy_backend_type="openpi",
+        policy_backend_id="openpi:v1",
+        chunk_horizon=30,
+        action_dim=7,
+        alpha=0.2,
+        action_mask=(True, False),
+        action_limits=(1, 2),
+        clip_gripper=True,
+        expert_reference_scale=1.5,
+        clip_residual_to_unit=False,
+        filter_unrepresentable_steps=True,
+        image_keys=("agentview", "wrist"),
+        vector_obs_keys=("robot",),
+        raw_dataset_path="/tmp/raw.hdf5",
+        extra_fields={"raw_source_format": "reference"},
+    )
+
+    assert fingerprint["format_version"] == "format_v1"
+    assert fingerprint["task_key"] == "suite_task_1"
+    assert fingerprint["task_description"] == "pick object"
+    assert fingerprint["action_mask"] == [True, False]
+    assert fingerprint["action_limits"] == [1.0, 2.0]
+    assert fingerprint["image_keys"] == ["agentview", "wrist"]
+    assert fingerprint["vector_obs_keys"] == ["robot"]
+    assert fingerprint["raw_dataset_path"] == "/tmp/raw.hdf5"
+    assert fingerprint["raw_source_format"] == "reference"
+
+    expected_signature = build_residual_training_signature(
+        task_key="suite_task_1",
+        policy_backend_type="openpi",
+        policy_backend_id="openpi:v1",
+        chunk_horizon=30,
+        action_dim=7,
+        alpha=0.2,
+        action_mask=(True, False),
+        action_limits=(1, 2),
+        clip_gripper=True,
+        expert_reference_scale=1.5,
+        clip_residual_to_unit=False,
+        filter_unrepresentable_steps=True,
+        image_keys=("agentview", "wrist"),
+        vector_obs_keys=("robot",),
+    )
+
+    assert extract_residual_manifest_signature({"fingerprint": fingerprint}) == (
+        expected_signature
+    )
+    assert extract_residual_manifest_signature({}) is None
+
+
+def test_residual_prepared_dir_uses_shared_chunk_alpha_naming() -> None:
+    prepared_dir = resolve_residual_prepared_dir(
+        output_root="offline_data",
+        task_key="suite_task_1",
+        policy_backend="joyra:office",
+        chunk_horizon=30,
+        alpha=0.2,
+    )
+
+    assert format_residual_alpha_token(0.2) == "0p2"
+    assert prepared_dir.name == "joyra_office_chunk30_alpha0p2"
+    assert prepared_dir.parent.name == "suite_task_1"
 
 
 def test_validate_prepared_paths_rejects_manifestless_directory() -> None:

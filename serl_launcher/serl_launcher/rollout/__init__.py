@@ -10,9 +10,14 @@ from .processor_transport import RolloutProcessorControlServer
 from .processor_transport import RolloutProcessorDataClient
 from .processor_transport import RolloutProcessorDataServer
 from .processor_transport import RolloutProcessorServer
+from .runtime_helpers import commit_finished_episode_chunks
+from .video_recorder import AsyncImageVideoRecorder
+from .video_recorder import AsyncVideoRecorderConfig
 
 __all__ = [
     "AsyncTransitionAssemblyCoordinator",
+    "AsyncImageVideoRecorder",
+    "AsyncVideoRecorderConfig",
     "ProcessorClient",
     "ProcessorServer",
     "ProcessorTransportConfig",
@@ -22,4 +27,5 @@ __all__ = [
     "RolloutProcessorDataClient",
     "RolloutProcessorDataServer",
     "RolloutProcessorServer",
+    "commit_finished_episode_chunks",
 ]

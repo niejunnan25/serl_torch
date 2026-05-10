@@ -1,5 +1,6 @@
-"""Asynchronous rollout video recording helpers."""
 from __future__ import annotations
+
+"""Asynchronous rollout video recording helpers."""
 
 import logging
 from dataclasses import dataclass
@@ -46,11 +47,13 @@ class AsyncImageVideoRecorder:
         self._logger = logger
         self._cv2 = _load_cv2()
         self._config.output_dir.mkdir(parents=True, exist_ok=True)
-        self._queue: Queue[tuple[str, Any]] = Queue(maxsize=int(config.max_pending_frames))
+        self._queue: Queue[tuple[str, Any]] = Queue(
+            maxsize=int(config.max_pending_frames)
+        )
         self._stop_event = threading.Event()
         self._worker = threading.Thread(
             target=self._worker_main,
-            name="agibot-rollout-video-writer",
+            name="rollout-video-writer",
             daemon=True,
         )
         self._worker.start()
@@ -81,7 +84,10 @@ class AsyncImageVideoRecorder:
             with self._lock:
                 if self._active_episode_id is not None:
                     self._dropped_frames_by_episode[self._active_episode_id] = (
-                        self._dropped_frames_by_episode.get(self._active_episode_id, 0) + 1
+                        self._dropped_frames_by_episode.get(
+                            self._active_episode_id, 0
+                        )
+                        + 1
                     )
 
     def end_episode(

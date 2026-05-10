@@ -32,14 +32,18 @@ if "gym" not in sys.modules and "gymnasium" not in sys.modules:
 
 _IMPORT_ERROR: ModuleNotFoundError | None = None
 try:
-    from serl_torch.examples.agibot_real.transition_assembly import (
+    from serl_torch.examples.agibot_real.runtime.transition_assembly import (
         AgiBotTransitionAssembler,
     )
-    from serl_torch.examples.agibot_real.transition_assembly import AssemblyResult
-    from serl_torch.examples.agibot_real.transition_assembly import (
+    from serl_torch.examples.agibot_real.runtime.transition_assembly import (
+        AssemblyResult,
+    )
+    from serl_torch.examples.agibot_real.runtime.transition_assembly import (
         PrefetchedDecisionObs,
     )
-    from serl_torch.examples.agibot_real.transition_assembly import RawChunkRecord
+    from serl_torch.examples.agibot_real.runtime.transition_assembly import (
+        RawChunkRecord,
+    )
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
     _IMPORT_ERROR = exc
     AgiBotTransitionAssembler = object  # type: ignore[assignment]
@@ -176,7 +180,7 @@ class AgiBotTransitionAssemblerRuntimeTest(unittest.TestCase):
     def test_async_path_backfills_full_chunk_without_next_decision_handoff(self) -> None:
         fake_backfill_policy = SimpleNamespace(close=lambda: None)
         with mock.patch(
-            "serl_torch.examples.agibot_real.transition_assembly.build_agibot_base_policy",
+            "serl_torch.examples.agibot_real.runtime.transition_assembly.build_agibot_base_policy",
             return_value=fake_backfill_policy,
         ):
             assembler = AgiBotTransitionAssembler(
@@ -220,7 +224,7 @@ class AgiBotTransitionAssemblerRuntimeTest(unittest.TestCase):
     def test_finish_episode_blocks_until_pending_chunk_commits(self) -> None:
         fake_backfill_policy = SimpleNamespace(close=lambda: None)
         with mock.patch(
-            "serl_torch.examples.agibot_real.transition_assembly.build_agibot_base_policy",
+            "serl_torch.examples.agibot_real.runtime.transition_assembly.build_agibot_base_policy",
             return_value=fake_backfill_policy,
         ):
             assembler = AgiBotTransitionAssembler(
