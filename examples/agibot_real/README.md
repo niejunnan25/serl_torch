@@ -263,9 +263,43 @@ python examples/agibot_real/scripts/reset_robot.py \
 
 到这里为止，新机器已经具备运行本仓库 AgiBot 真机代码的最低条件。之后再根据实验需要启动 JoyRA / OpenPI policy server、learner 和 actor。
 
-## 8. 标准启动命令
 
-下面是当前真机 residual 训练的标准启动顺序，整理自 `run.txt`。当前主线已经把旧的 `run_residual_training_copy.py` 合并为 `run_residual_training.py`。
+## 8.准备离线数据：
+
+
+### 终端 1：生成离线 pkl
+```bash
+sudo docker exec -it docker--agibot /bin/bash
+conda activate robot
+python /home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_offline_prepare.py \
+  --config-name train_residual_openpi_right_arm
+```
+
+
+
+### 终端 2：运行 JoyRA 服务端
+```bash
+bash /home/hello/codebase/serl_torch/examples/agibot_real/tools/serve_joyra.sh \
+  --joyra-root /home/hello/codebase/JoyRA \
+  --ckpt-path /home/hello/codebase/JoyRA/outputs/pre_ego30w_sq_nw1000_nw-all-fourier_vla_post_sq_3w_office_1/checkpoints/steps_30000_pytorch_model.pt \
+  --port 9002
+```
+
+### 终端 2： 运行 OpenPi 服务端
+```bash
+cd /home/hello/codebase/serl_torch/examples/agibot_real
+
+bash tools/serve_openpi.sh \
+  --openpi-root /home/hello/codebase/niejunnan/openpi \
+  --policy-dir /home/hello/codebase/niejunnan/openpi-assets/pi05_task_3463_3540_mouse_only_right_hand_camera_position_15hz/4000/ \
+  --policy-config pi05_task_3463_3540_mouse_only_right_hand_camera_position_15hz \
+  --port 30001 \
+  --gpu-id 0
+```
+
+
+
+## 9. 标准启动命令
 
 ### 终端 1：启动 JoyRA
 
@@ -309,37 +343,3 @@ python examples/agibot_real/scripts/run_residual_training.py \
 ```
 
 `train_residual.yaml` 默认已经开启 `backfill_policy.enabled=true`。上面的命令把 `policy.port` 和 `backfill_policy.port` 都设为 `8001`，表示主控制推理和 backfill 共用同一个 JoyRA 服务。如果需要减少真机控制路径和 backfill 的推理竞争，可以再启动一个 JoyRA 服务，把 `backfill_policy.port` 改成独立端口。
-
-
-
-## 9.准备离线数据：
-
-```bash
-sudo docker exec -it docker--agibot /bin/bash
-conda activate robot
-python /home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_offline_prepare.py \
-    offline.enabled=true \
-    offline.prepare.raw_dataset_path=/home/hello/codebase/datasets/task_3463_mouse \
-    offline.prepare.output_root=/home/hello/codebase/serl_torch/examples/agibot_real/output/offline_data \
-    task.task_key=office_setting \
-    task.prompt="The right arm picks up the white mouse from the desk and places the mouse on the black mouse pad" \
-    policy.type=openpi \
-    policy.host=127.0.0.1 \
-    policy.port=30001
-```
-
-
-```bash
-bash /home/hello/codebase/serl_torch/examples/agibot_real/tools/serve_joyra.sh \
-  --joyra-root /home/hello/codebase/JoyRA \
-  --ckpt-path /home/hello/codebase/JoyRA/outputs/pre_ego30w_sq_nw1000_nw-all-fourier_vla_post_sq_3w_office_1/checkpoints/steps_30000_pytorch_model.pt \
-  --port 9002
-```
-
-```bash
-cd /home/hello/codebase/serl_torch/examples/agibot_real
-
-OPENPI_ROOT=/home/hello/codebase/niejunnan/openpi \
-POLICY_DIR=/home/hello/codebase/niejunnan/openpi-assets/pi05_task_3463_3540_mouse_only_right_hand_camera_position_15hz/4000/ \
-bash tools/serve_openpi.sh --port 30001
-```
