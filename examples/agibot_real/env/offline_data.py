@@ -1,22 +1,25 @@
 from __future__ import annotations
 
-"""Temporary AgiBot offline-data helpers aligned to the LIBERO train flow.
+"""AgiBot offline-data helpers aligned to the LIBERO train flow.
 
 This module intentionally mirrors the shape of ``examples/libero/env/offline_data.py``
-for the first alignment pass. The prepared replay contract is stable, while the
-raw input format remains a temporary reference-only pickle layout until a real
-AgiBot data source is wired in.
+for the first alignment pass. The prepared replay contract is stable; raw inputs
+can be either the legacy reference pickle episodes or LeRobot v2.x episode
+parquet files.
 """
 
 import dataclasses
+import io
 import json
 import logging
+import pickle
 import time
 from pathlib import Path
 from typing import Any
 from typing import Iterable
 from typing import Iterator
 from typing import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -48,16 +51,31 @@ from serl_launcher.utils.path_utils import resolve_original_cwd
 from serl_launcher.utils.path_utils import resolve_path
 from serl_launcher.utils.serialization import to_jsonable
 
-from ..config import AgiBotTrainConfig
 from .observation import build_agibot_state
 from .observation import extract_agibot_residual_images
 
+if TYPE_CHECKING:
+    from ..config import AgiBotTrainConfig
+
 OFFLINE_FORMAT_VERSION = "agibot_real_offline_step_transitions_v1"
-REFERENCE_SOURCE_FORMAT = "agibot_reference_episode_pickle_v1"
+PICKLE_REFERENCE_SOURCE_FORMAT = "agibot_reference_episode_pickle_v1"
+LEROBOT_REFERENCE_SOURCE_FORMAT = "agibot_lerobot_episode_parquet_v1"
+REFERENCE_SOURCE_FORMAT = "agibot_reference_episode_raw_v2"
 REFERENCE_NOTE = (
-    "Temporary reference offline pipeline modeled after examples/libero. "
-    "Replace this raw source format once the real AgiBot data source is defined."
+    "AgiBot residual offline pipeline modeled after examples/libero. "
+    "Raw sources may be legacy reference pickle episodes or LeRobot v2.x datasets."
 )
+LEROBOT_INFO_RELATIVE_PATH = Path("meta") / "info.json"
+LEROBOT_DATA_FILE_GLOB = "data/chunk-*/episode_*.parquet"
+LEROBOT_STATE_COLUMN = "observation.state"
+LEROBOT_JOYRA_ACTION_COLUMN = "action"
+LEROBOT_OPENPI_ACTION_COLUMN = "actions"
+LEROBOT_TARGET_STATE_ACTION_DIM = 14
+LEROBOT_IMAGE_KEY_MAP = {
+    "observation.images.head_color": "image/head",
+    "observation.images.hand_left": "image/left_wrist",
+    "observation.images.hand_right": "image/right_wrist",
+}
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -66,6 +84,67 @@ class AgiBotTaskSpec:
     task_key: str
     task_description: str
     dataset_path: Path
+
+
+@dataclasses.dataclass(slots=True)
+class _LazyLerobotImageBytes:
+    data: bytes
+    _array: np.ndarray | None = dataclasses.field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def as_array(self) -> np.ndarray:
+        if self._array is None:
+            from PIL import Image
+
+            image = Image.open(io.BytesIO(self.data)).convert("RGB")
+            self._array = np.asarray(image, dtype=np.uint8)
+        return self._array
+
+    def __array__(
+        self,
+        dtype: np.dtype[Any] | None = None,
+        copy: bool | None = None,
+    ) -> np.ndarray:
+        array = self.as_array()
+        if dtype is not None:
+            return np.array(array, dtype=dtype, copy=True if copy is None else copy)
+        if copy:
+            return np.array(array, copy=True)
+        return array
+
+
+@dataclasses.dataclass(slots=True)
+class _LazyLerobotVideoFrame:
+    video_path: Path
+    frame_index: int
+    _array: np.ndarray | None = dataclasses.field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def as_array(self) -> np.ndarray:
+        if self._array is None:
+            import imageio.v3 as iio
+
+            frame = iio.imread(self.video_path, index=int(self.frame_index))
+            self._array = np.asarray(frame, dtype=np.uint8)
+        return self._array
+
+    def __array__(
+        self,
+        dtype: np.dtype[Any] | None = None,
+        copy: bool | None = None,
+    ) -> np.ndarray:
+        array = self.as_array()
+        if dtype is not None:
+            return np.array(array, dtype=dtype, copy=True if copy is None else copy)
+        if copy:
+            return np.array(array, copy=True)
+        return array
 
 
 def resolve_task_spec(cfg: AgiBotTrainConfig) -> AgiBotTaskSpec:
@@ -80,6 +159,62 @@ def resolve_task_spec(cfg: AgiBotTrainConfig) -> AgiBotTaskSpec:
         task_key=str(cfg.task.task_key),
         task_description=str(cfg.task.prompt),
         dataset_path=dataset_path,
+    )
+
+
+def _is_lerobot_dataset_dir(path: Path) -> bool:
+    return path.is_dir() and (path / LEROBOT_INFO_RELATIVE_PATH).is_file()
+
+
+def _find_lerobot_dataset_root(path: Path) -> Path | None:
+    current = path if path.is_dir() else path.parent
+    for candidate in (current, *current.parents):
+        if _is_lerobot_dataset_dir(candidate):
+            return candidate
+    return None
+
+
+def _resolve_lerobot_episode_files(dataset_path: Path) -> list[Path]:
+    if dataset_path.is_file() and dataset_path.suffix == ".parquet":
+        dataset_root = _find_lerobot_dataset_root(dataset_path)
+        if dataset_root is None:
+            raise ValueError(
+                f"LeRobot parquet file is not under a dataset root with meta/info.json: {dataset_path}"
+            )
+        return [dataset_path.resolve()]
+
+    if not dataset_path.is_dir():
+        return []
+
+    if _is_lerobot_dataset_dir(dataset_path):
+        episode_files = sorted(dataset_path.glob(LEROBOT_DATA_FILE_GLOB))
+        return [path.resolve() for path in episode_files]
+
+    dataset_roots = sorted(
+        path.parent.parent
+        for path in dataset_path.glob(f"**/{LEROBOT_INFO_RELATIVE_PATH.as_posix()}")
+        if path.is_file()
+    )
+    episode_files: list[Path] = []
+    for dataset_root in dataset_roots:
+        episode_files.extend(sorted(dataset_root.glob(LEROBOT_DATA_FILE_GLOB)))
+    return [path.resolve() for path in episode_files]
+
+
+def resolve_reference_source_format(dataset_path: Path) -> str:
+    if dataset_path.is_file() and dataset_path.suffix == ".pkl":
+        return PICKLE_REFERENCE_SOURCE_FORMAT
+    if dataset_path.is_file() and dataset_path.suffix == ".parquet":
+        return LEROBOT_REFERENCE_SOURCE_FORMAT
+    if dataset_path.is_dir():
+        if sorted(dataset_path.glob(EPISODE_FILE_GLOB)):
+            return PICKLE_REFERENCE_SOURCE_FORMAT
+        if _resolve_lerobot_episode_files(dataset_path):
+            return LEROBOT_REFERENCE_SOURCE_FORMAT
+    raise ValueError(
+        "AgiBot offline prepare expects offline.prepare.raw_dataset_path to be "
+        f"a directory of {EPISODE_FILE_GLOB} files, a single .pkl file, or a LeRobot v2.x "
+        f"dataset containing {LEROBOT_DATA_FILE_GLOB}; got {dataset_path}"
     )
 
 
@@ -108,7 +243,11 @@ def prepare_fingerprint(
         image_keys=cfg.obs.image_keys,
         vector_obs_keys=cfg.obs.vector_obs_keys,
         raw_dataset_path=task_spec.dataset_path,
-        extra_fields={"raw_source_format": REFERENCE_SOURCE_FORMAT},
+        extra_fields={
+            "raw_source_format": resolve_reference_source_format(
+                task_spec.dataset_path,
+            )
+        },
     )
 
 
@@ -213,6 +352,411 @@ def normalize_episode_steps(payload: Any, *, source_path: Path) -> list[dict[str
             )
         normalized.append(dict(step))
     return normalized
+
+
+def _read_jsonl_records(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    with open(path, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
+def _read_lerobot_info(dataset_root: Path) -> dict[str, Any]:
+    info_path = dataset_root / LEROBOT_INFO_RELATIVE_PATH
+    with open(info_path, encoding="utf-8") as fp:
+        info = json.load(fp)
+    if not isinstance(info, dict):
+        raise ValueError(f"LeRobot info.json must contain an object: {info_path}")
+    return info
+
+
+def _episode_index_from_lerobot_path(parquet_path: Path) -> int:
+    stem = parquet_path.stem
+    prefix = "episode_"
+    if not stem.startswith(prefix):
+        raise ValueError(f"Unexpected LeRobot episode parquet name: {parquet_path}")
+    return int(stem[len(prefix) :])
+
+
+def _episode_chunk_from_lerobot_path(
+    parquet_path: Path,
+    *,
+    episode_index: int,
+    info: dict[str, Any],
+) -> int:
+    chunk_name = parquet_path.parent.name
+    prefix = "chunk-"
+    if chunk_name.startswith(prefix):
+        return int(chunk_name[len(prefix) :])
+    return int(episode_index // int(info.get("chunks_size", 1000)))
+
+
+def _patch_fastparquet_dotted_schema(parquet_file: Any) -> None:
+    schema_helper = parquet_file.schema
+    original_schema_element = schema_helper.schema_element
+
+    def normalize_parts(parts: str | Sequence[str]) -> list[str]:
+        raw_parts = parts.split(".") if isinstance(parts, str) else list(parts)
+        if not raw_parts:
+            return raw_parts
+        root_children = schema_helper.root["children"]
+        if raw_parts[0] in root_children:
+            return raw_parts
+        for end_idx in range(len(raw_parts), 0, -1):
+            candidate = ".".join(raw_parts[:end_idx])
+            if candidate in root_children:
+                return [candidate, *raw_parts[end_idx:]]
+        return raw_parts
+
+    def schema_element(name: str | Sequence[str]) -> Any:
+        return original_schema_element(normalize_parts(name))
+
+    def is_required(name: str | Sequence[str]) -> bool:
+        from fastparquet import parquet_thrift
+
+        required = True
+        parts = normalize_parts(name)
+        for idx in range(len(parts)):
+            element = schema_element(parts[: idx + 1])
+            if (
+                element.repetition_type
+                != parquet_thrift.FieldRepetitionType.REQUIRED
+            ):
+                required = False
+                break
+        return required
+
+    def max_definition_level(parts: str | Sequence[str]) -> int:
+        from fastparquet import parquet_thrift
+
+        max_level = 0
+        normalized_parts = normalize_parts(parts)
+        for idx in range(len(normalized_parts)):
+            element = schema_element(normalized_parts[: idx + 1])
+            if (
+                element.repetition_type
+                != parquet_thrift.FieldRepetitionType.REQUIRED
+            ):
+                max_level += 1
+        return max_level
+
+    def max_repetition_level(parts: str | Sequence[str]) -> int:
+        from fastparquet import parquet_thrift
+
+        max_level = 0
+        normalized_parts = normalize_parts(parts)
+        for idx in range(len(normalized_parts)):
+            element = schema_element(normalized_parts[: idx + 1])
+            if (
+                element.repetition_type
+                == parquet_thrift.FieldRepetitionType.REPEATED
+            ):
+                max_level += 1
+        return max_level
+
+    schema_helper.schema_element = schema_element
+    schema_helper.is_required = is_required
+    schema_helper.max_definition_level = max_definition_level
+    schema_helper.max_repetition_level = max_repetition_level
+
+
+def _read_pyarrow_parquet_column(parquet_path: Path, column: str) -> list[Any]:
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(parquet_path, columns=[column])
+    if column not in table.column_names:
+        raise KeyError(f"Parquet column {column!r} not found in {parquet_path}")
+    column_array = table.column(column)
+    return [column_array[idx].as_py() for idx in range(table.num_rows)]
+
+
+def _read_fastparquet_column(
+    parquet_path: Path,
+    column: str,
+    *,
+    patch_dotted_schema: bool,
+) -> list[Any]:
+    from fastparquet import ParquetFile
+
+    parquet_file = ParquetFile(parquet_path)
+    if patch_dotted_schema:
+        _patch_fastparquet_dotted_schema(parquet_file)
+    frame = parquet_file.to_pandas(columns=[column])
+    if column not in frame.columns:
+        raise KeyError(f"Parquet column {column!r} not found in {parquet_path}")
+    return frame[column].tolist()
+
+
+def _read_parquet_column_values(parquet_path: Path, column: str) -> list[Any]:
+    errors: list[str] = []
+    for reader_name, reader_fn in (
+        ("pyarrow", lambda: _read_pyarrow_parquet_column(parquet_path, column)),
+        (
+            "fastparquet",
+            lambda: _read_fastparquet_column(
+                parquet_path,
+                column,
+                patch_dotted_schema=False,
+            ),
+        ),
+        (
+            "fastparquet patched dotted schema",
+            lambda: _read_fastparquet_column(
+                parquet_path,
+                column,
+                patch_dotted_schema=True,
+            ),
+        ),
+    ):
+        try:
+            return reader_fn()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{reader_name}: {type(exc).__name__}: {exc}")
+    raise RuntimeError(
+        f"Unable to read LeRobot parquet column {column!r} from {parquet_path}. "
+        "Install compatible pyarrow/fastparquet versions or rewrite the parquet. "
+        f"Reader errors: {' | '.join(errors)}"
+    )
+
+
+def _coerce_lerobot_state_action_vector(
+    value: Any,
+    *,
+    column: str,
+    source_path: Path,
+) -> np.ndarray:
+    vector = np.asarray(value, dtype=np.float32).reshape(-1)
+    if int(vector.shape[0]) == LEROBOT_TARGET_STATE_ACTION_DIM:
+        return vector
+    if int(vector.shape[0]) == 30:
+        return np.asarray(vector[-LEROBOT_TARGET_STATE_ACTION_DIM:], dtype=np.float32)
+    raise ValueError(
+        f"LeRobot {column} in {source_path} must be 14D OpenPI data or 30D JoyRA data, "
+        f"got {vector.shape}"
+    )
+
+
+def _lerobot_action_column(info: dict[str, Any], *, source_path: Path) -> str:
+    features = info.get("features", {})
+    if not isinstance(features, dict):
+        raise ValueError(f"LeRobot info.json has invalid features: {source_path}")
+    if LEROBOT_OPENPI_ACTION_COLUMN in features:
+        return LEROBOT_OPENPI_ACTION_COLUMN
+    if LEROBOT_JOYRA_ACTION_COLUMN in features:
+        return LEROBOT_JOYRA_ACTION_COLUMN
+    raise ValueError(
+        f"LeRobot dataset missing action/actions feature in {source_path}"
+    )
+
+
+def _lerobot_video_path(
+    dataset_root: Path,
+    *,
+    info: dict[str, Any],
+    video_key: str,
+    episode_index: int,
+    episode_chunk: int,
+) -> Path:
+    template = str(
+        info.get(
+            "video_path",
+            "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+        )
+    )
+    return dataset_root / template.format(
+        episode_chunk=int(episode_chunk),
+        video_key=str(video_key),
+        episode_index=int(episode_index),
+    )
+
+
+def _lerobot_image_values(
+    *,
+    dataset_root: Path,
+    parquet_path: Path,
+    info: dict[str, Any],
+    episode_index: int,
+    episode_chunk: int,
+    frame_indices: Sequence[int],
+) -> dict[str, list[Any]]:
+    features = info.get("features", {})
+    if not isinstance(features, dict):
+        raise ValueError(f"LeRobot info.json has invalid features: {parquet_path}")
+
+    images: dict[str, list[Any]] = {}
+    for lerobot_key, agibot_key in LEROBOT_IMAGE_KEY_MAP.items():
+        feature = features.get(lerobot_key, None)
+        if not isinstance(feature, dict):
+            raise ValueError(
+                f"LeRobot dataset missing required image feature {lerobot_key}: {parquet_path}"
+            )
+        dtype = str(feature.get("dtype", ""))
+        if dtype == "video":
+            video_path = _lerobot_video_path(
+                dataset_root,
+                info=info,
+                video_key=lerobot_key,
+                episode_index=episode_index,
+                episode_chunk=episode_chunk,
+            )
+            if not video_path.is_file():
+                raise FileNotFoundError(
+                    f"LeRobot video file for {lerobot_key} is missing: {video_path}"
+                )
+            images[agibot_key] = [
+                _LazyLerobotVideoFrame(video_path=video_path, frame_index=int(frame_idx))
+                for frame_idx in frame_indices
+            ]
+            continue
+        if dtype == "image":
+            byte_column = f"{lerobot_key}.bytes"
+            byte_values = _read_parquet_column_values(parquet_path, byte_column)
+            if len(byte_values) != len(frame_indices):
+                raise ValueError(
+                    f"LeRobot image/state length mismatch for {byte_column} in {parquet_path}: "
+                    f"{len(byte_values)} vs {len(frame_indices)}"
+                )
+            image_refs: list[Any] = []
+            for value in byte_values:
+                if isinstance(value, (bytes, bytearray, memoryview)):
+                    image_refs.append(_LazyLerobotImageBytes(bytes(value)))
+                else:
+                    raise ValueError(
+                        f"LeRobot image column {byte_column} must contain bytes, "
+                        f"got {type(value)} in {parquet_path}"
+                    )
+            images[agibot_key] = image_refs
+            continue
+        raise ValueError(
+            f"Unsupported LeRobot image dtype for {lerobot_key} in {parquet_path}: {dtype!r}"
+        )
+    return images
+
+
+def _lerobot_task_prompts(dataset_root: Path) -> dict[int, str]:
+    prompts: dict[int, str] = {}
+    for record in _read_jsonl_records(dataset_root / "meta" / "tasks.jsonl"):
+        if "task_index" in record and "task" in record:
+            prompts[int(record["task_index"])] = str(record["task"])
+    return prompts
+
+
+def _lerobot_episode_tasks(dataset_root: Path) -> dict[int, str]:
+    episode_tasks: dict[int, str] = {}
+    for record in _read_jsonl_records(dataset_root / "meta" / "episodes.jsonl"):
+        tasks = record.get("tasks", None)
+        if "episode_index" in record and isinstance(tasks, list) and tasks:
+            episode_tasks[int(record["episode_index"])] = str(tasks[0])
+    return episode_tasks
+
+
+def load_lerobot_episode_steps(parquet_path: Path) -> list[dict[str, Any]]:
+    dataset_root = _find_lerobot_dataset_root(parquet_path)
+    if dataset_root is None:
+        raise ValueError(
+            f"LeRobot parquet file is not under a dataset root with meta/info.json: {parquet_path}"
+        )
+
+    info = _read_lerobot_info(dataset_root)
+    episode_index = _episode_index_from_lerobot_path(parquet_path)
+    episode_chunk = _episode_chunk_from_lerobot_path(
+        parquet_path,
+        episode_index=episode_index,
+        info=info,
+    )
+    action_column = _lerobot_action_column(info, source_path=parquet_path)
+
+    state_values = _read_parquet_column_values(parquet_path, LEROBOT_STATE_COLUMN)
+    action_values = _read_parquet_column_values(parquet_path, action_column)
+    frame_values = _read_parquet_column_values(parquet_path, "frame_index")
+    task_values: list[Any] | None
+    try:
+        task_values = _read_parquet_column_values(parquet_path, "task_index")
+    except RuntimeError:
+        task_values = None
+
+    if len(state_values) != len(action_values):
+        raise ValueError(
+            f"LeRobot state/action length mismatch in {parquet_path}: "
+            f"{len(state_values)} vs {len(action_values)}"
+        )
+    if len(frame_values) != len(state_values):
+        raise ValueError(
+            f"LeRobot frame/state length mismatch in {parquet_path}: "
+            f"{len(frame_values)} vs {len(state_values)}"
+        )
+
+    frame_indices = [int(value) for value in frame_values]
+    image_values = _lerobot_image_values(
+        dataset_root=dataset_root,
+        parquet_path=parquet_path,
+        info=info,
+        episode_index=episode_index,
+        episode_chunk=episode_chunk,
+        frame_indices=frame_indices,
+    )
+    task_prompts = _lerobot_task_prompts(dataset_root)
+    episode_tasks = _lerobot_episode_tasks(dataset_root)
+    fallback_prompt = episode_tasks.get(episode_index, "")
+
+    steps: list[dict[str, Any]] = []
+    num_steps = len(state_values)
+    for step_idx in range(num_steps):
+        task_prompt = fallback_prompt
+        if task_values is not None:
+            task_prompt = task_prompts.get(int(task_values[step_idx]), task_prompt)
+
+        observations: dict[str, Any] = {
+            "state/pose": _coerce_lerobot_state_action_vector(
+                state_values[step_idx],
+                column=LEROBOT_STATE_COLUMN,
+                source_path=parquet_path,
+            ),
+        }
+        for agibot_key, values in image_values.items():
+            observations[agibot_key] = values[step_idx]
+
+        is_last = bool(step_idx >= num_steps - 1)
+        steps.append(
+            {
+                "observations": observations,
+                "expert_action": _coerce_lerobot_state_action_vector(
+                    action_values[step_idx],
+                    column=action_column,
+                    source_path=parquet_path,
+                ),
+                "reward": 1.0 if is_last else 0.0,
+                "done": is_last,
+                "success": is_last,
+                "task_prompt": task_prompt,
+                "metadata": {
+                    "source_format": LEROBOT_REFERENCE_SOURCE_FORMAT,
+                    "dataset_root": str(dataset_root),
+                    "episode_index": int(episode_index),
+                    "frame_index": int(frame_indices[step_idx]),
+                    "action_column": action_column,
+                },
+            }
+        )
+    return steps
+
+
+def load_reference_raw_episode_steps(source_path: Path) -> list[dict[str, Any]]:
+    if source_path.suffix == ".pkl":
+        with open(source_path, "rb") as fp:
+            raw_payload = pickle.load(fp)
+        return normalize_episode_steps(raw_payload, source_path=source_path)
+    if source_path.suffix == ".parquet":
+        return load_lerobot_episode_steps(source_path)
+    raise ValueError(
+        f"Unsupported AgiBot raw offline episode file: {source_path}. "
+        "Expected .pkl or LeRobot .parquet."
+    )
 
 
 def _raw_obs_from_step(step: dict[str, Any], *, source_path: Path) -> dict[str, Any]:
@@ -321,7 +865,8 @@ def _precompute_base_chunks_for_steps(
     )
     for step_idx in step_iter:
         obs_raw = _raw_obs_from_step(steps[step_idx], source_path=source_path)
-        action_chunk, _ = base_policy.infer(obs_raw, prompt=task_prompt)
+        step_task_prompt = str(steps[step_idx].get("task_prompt") or task_prompt)
+        action_chunk, _ = base_policy.infer(obs_raw, prompt=step_task_prompt)
         precomputed_chunks[step_idx] = prepare_base_actions_chunk(
             base_actions=action_chunk,
             chunk_horizon=chunk_horizon,
@@ -505,7 +1050,9 @@ def write_manifest(
             "filter_unrepresentable_steps": bool(
                 cfg.offline.prepare.filter_unrepresentable_steps
             ),
-            "raw_source_format": REFERENCE_SOURCE_FORMAT,
+            "raw_source_format": resolve_reference_source_format(
+                task_spec.dataset_path,
+            ),
         },
         "fingerprint": to_jsonable(fingerprint),
         "prepare_stats": to_jsonable(prepare_stats),
@@ -530,14 +1077,21 @@ def resolve_reference_raw_episode_files(dataset_path: Path) -> list[Path]:
         episode_files = sorted(dataset_path.glob(EPISODE_FILE_GLOB))
         if episode_files:
             return [path.resolve() for path in episode_files]
+        lerobot_episode_files = _resolve_lerobot_episode_files(dataset_path)
+        if lerobot_episode_files:
+            return lerobot_episode_files
         raise FileNotFoundError(
-            f"Temporary AgiBot raw offline directory has no {EPISODE_FILE_GLOB} files: {dataset_path}"
+            f"AgiBot raw offline directory has no {EPISODE_FILE_GLOB} files and no "
+            f"LeRobot {LEROBOT_DATA_FILE_GLOB} files: {dataset_path}"
         )
     if dataset_path.is_file() and dataset_path.suffix == ".pkl":
         return [dataset_path.resolve()]
+    if dataset_path.is_file() and dataset_path.suffix == ".parquet":
+        return _resolve_lerobot_episode_files(dataset_path)
     raise ValueError(
-        "Temporary AgiBot offline prepare expects offline.prepare.raw_dataset_path "
-        f"to be a directory of {EPISODE_FILE_GLOB} files or a single .pkl file, got {dataset_path}"
+        "AgiBot offline prepare expects offline.prepare.raw_dataset_path "
+        f"to be a directory of {EPISODE_FILE_GLOB} files, a single .pkl file, or "
+        f"a LeRobot dataset containing {LEROBOT_DATA_FILE_GLOB}; got {dataset_path}"
     )
 
 
@@ -565,9 +1119,13 @@ __all__ = [
     "AgiBotTaskSpec",
     "OfflinePreparedResolution",
     "OFFLINE_FORMAT_VERSION",
+    "LEROBOT_REFERENCE_SOURCE_FORMAT",
+    "PICKLE_REFERENCE_SOURCE_FORMAT",
     "REFERENCE_NOTE",
     "REFERENCE_SOURCE_FORMAT",
+    "load_lerobot_episode_steps",
     "load_prepared_offline_replay",
+    "load_reference_raw_episode_steps",
     "normalize_episode_steps",
     "prepare_fingerprint",
     "prepare_reference_episode_transitions",
@@ -576,6 +1134,7 @@ __all__ = [
     "resolve_configured_prepared_paths",
     "resolve_prepared_episode_files",
     "resolve_reference_raw_episode_files",
+    "resolve_reference_source_format",
     "resolve_task_spec",
     "write_manifest",
 ]

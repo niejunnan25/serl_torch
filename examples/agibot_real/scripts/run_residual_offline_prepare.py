@@ -27,19 +27,23 @@ from serl_launcher.utils.seeding import set_global_seeds
 from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.config import parse_train_cfg
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
-from serl_torch.examples.agibot_real.env.offline_data import normalize_episode_steps
+from serl_torch.examples.agibot_real.env.offline_data import (
+    load_reference_raw_episode_steps,
+)
 from serl_torch.examples.agibot_real.env.offline_data import prepare_fingerprint
 from serl_torch.examples.agibot_real.env.offline_data import (
     prepare_reference_episode_transitions,
 )
 from serl_torch.examples.agibot_real.env.offline_data import prepared_dir_for_cfg
 from serl_torch.examples.agibot_real.env.offline_data import REFERENCE_NOTE
-from serl_torch.examples.agibot_real.env.offline_data import REFERENCE_SOURCE_FORMAT
 from serl_torch.examples.agibot_real.env.offline_data import (
     resolve_configured_prepared_paths,
 )
 from serl_torch.examples.agibot_real.env.offline_data import (
     resolve_reference_raw_episode_files,
+)
+from serl_torch.examples.agibot_real.env.offline_data import (
+    resolve_reference_source_format,
 )
 from serl_torch.examples.agibot_real.env.offline_data import resolve_task_spec
 from serl_torch.examples.agibot_real.env.offline_data import write_manifest
@@ -80,9 +84,10 @@ def prepare_offline_data(
     action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=cfg.env.action_dim)
     image_keys = cfg.obs.image_keys
     base_policy = build_agibot_base_policy(cfg, logger=logger)
+    reference_source_format = resolve_reference_source_format(task_spec.dataset_path)
     prepare_stats: dict[str, object] = {
         "reference_only": True,
-        "reference_source_format": REFERENCE_SOURCE_FORMAT,
+        "reference_source_format": reference_source_format,
         "reference_note": REFERENCE_NOTE,
         "raw_dataset_path": str(task_spec.dataset_path),
         "prepared_dir": str(prepared_dir),
@@ -114,12 +119,7 @@ def prepare_offline_data(
             leave=True,
         )
         for episode_index, episode_source_path in episode_iter:
-            with open(episode_source_path, "rb") as fp:
-                raw_payload = pickle.load(fp)
-            raw_steps = normalize_episode_steps(
-                raw_payload,
-                source_path=episode_source_path,
-            )
+            raw_steps = load_reference_raw_episode_steps(episode_source_path)
             transitions, episode_stats = prepare_reference_episode_transitions(
                 raw_steps=raw_steps,
                 episode_id=int(episode_index),
