@@ -309,3 +309,29 @@ python examples/agibot_real/scripts/run_residual_training.py \
 ```
 
 `train_residual.yaml` 默认已经开启 `backfill_policy.enabled=true`。上面的命令把 `policy.port` 和 `backfill_policy.port` 都设为 `8001`，表示主控制推理和 backfill 共用同一个 JoyRA 服务。如果需要减少真机控制路径和 backfill 的推理竞争，可以再启动一个 JoyRA 服务，把 `backfill_policy.port` 改成独立端口。
+
+
+
+## 9.准备离线数据：
+
+```bash
+sudo docker exec -it docker--agibot /bin/bash
+conda activate robot
+python examples/agibot_real/scripts/run_residual_offline_prepare.py \
+  offline.enabled=true \
+  offline.prepare.raw_dataset_path=/path/to/expert_joyra_lerobot_dataset \
+  offline.prepare.output_root=examples/agibot_real/output/offline_data \
+  task.task_key=office_setting \
+  task.prompt="The right arm picks up the white mouse from the desk and places the mouse on the black mouse pad" \
+  policy.type=joyra \
+  policy.host=127.0.0.1 \
+  policy.port=9001
+```
+
+
+```bash
+bash /home/hello/codebase/tangyili/code/serl_torch/examples/agibot_real/tools/serve_joyra.sh \
+  --joyra-root /home/hello/codebase/JoyRA \
+  --ckpt-path /home/hello/codebase/JoyRA/outputs/pre_ego30w_sq_nw1000_nw-all-fourier_vla_post_sq_3w_office_1/checkpoints/steps_30000_pytorch_model.pt \
+  --port 9001
+```
