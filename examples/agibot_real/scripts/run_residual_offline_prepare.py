@@ -49,13 +49,33 @@ from serl_torch.examples.agibot_real.env.offline_data import resolve_task_spec
 from serl_torch.examples.agibot_real.env.offline_data import write_manifest
 
 
+def _resolve_prepare_output_dir(cfg, *, task_spec) -> Path:
+    prepared_paths = resolve_configured_prepared_paths(cfg)
+    if not prepared_paths:
+        return prepared_dir_for_cfg(cfg, task_spec=task_spec)
+    if len(prepared_paths) != 1:
+        raise ValueError(
+            "AgiBot offline prepare accepts at most one offline.prepared_path, "
+            f"got {len(prepared_paths)}"
+        )
+    prepared_path = prepared_paths[0]
+    if prepared_path.name == MANIFEST_FILENAME:
+        return prepared_path.parent
+    if prepared_path.suffix == ".pkl":
+        raise ValueError(
+            "AgiBot offline prepare cannot write to a single episode .pkl path; "
+            "set offline.prepared_path to a prepared directory or manifest path"
+        )
+    return prepared_path
+
+
 def prepare_offline_data(
     cfg,
     *,
     logger: logging.Logger,
 ) -> OfflinePreparedInputs:
     prepared_paths = resolve_configured_prepared_paths(cfg)
-    if prepared_paths:
+    if prepared_paths and cfg.offline.prepare.raw_dataset_path is None:
         return OfflinePreparedInputs(
             prepared_paths=prepared_paths,
             prepare_stats=None,
@@ -67,7 +87,7 @@ def prepare_offline_data(
         )
 
     task_spec = resolve_task_spec(cfg)
-    prepared_dir = prepared_dir_for_cfg(cfg, task_spec=task_spec)
+    prepared_dir = _resolve_prepare_output_dir(cfg, task_spec=task_spec)
     manifest_path = prepared_dir / MANIFEST_FILENAME
     fingerprint = prepare_fingerprint(cfg, task_spec=task_spec)
     raw_episode_files = resolve_reference_raw_episode_files(task_spec.dataset_path)
