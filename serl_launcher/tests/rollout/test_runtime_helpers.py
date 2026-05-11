@@ -5,17 +5,23 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
+SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
-REPO_PARENT = Path(__file__).resolve().parents[4]
-if str(REPO_PARENT) not in sys.path:
-    sys.path.insert(0, str(REPO_PARENT))
-
-from serl_torch.examples.agibot_real.runtime_helpers import (  # noqa: E402
-    commit_finished_episode_chunks,
+from serl_launcher.rollout.runtime_helpers import commit_finished_episode_chunks
+from serl_launcher.rollout import (
+    commit_finished_episode_chunks as exported_commit_finished_episode_chunks,
 )
 
 
-class AgiBotRuntimeHelpersTest(unittest.TestCase):
+class RolloutRuntimeHelpersTest(unittest.TestCase):
+    def test_package_export_matches_module_function(self) -> None:
+        self.assertIs(
+            exported_commit_finished_episode_chunks,
+            commit_finished_episode_chunks,
+        )
+
     def test_regular_episode_end_respects_nonblocking_config(self) -> None:
         transition_assembler = mock.Mock()
         transition_assembler.finish_episode.return_value = ["assembled"]

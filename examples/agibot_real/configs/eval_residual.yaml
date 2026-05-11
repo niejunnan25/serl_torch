@@ -120,7 +120,7 @@ logging:
   episode_log_file: episode_logs.jsonl
 
 launch:
-  output_root: outputs/agibot_real
+  output_root: output
 
 hydra:
   run:

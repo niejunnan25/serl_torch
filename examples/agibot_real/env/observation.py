@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from ..schema import resolve_agibot_image_keys
+from .schema import resolve_agibot_image_keys
 
 AGIBOT_STATE_DIM = 14
 AGIBOT_JOYRA_STATE_DIM = 18

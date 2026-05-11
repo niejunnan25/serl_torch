@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from typing import Callable
 from typing import Iterable
+from typing import Mapping
 from typing import Sequence
 
 from tqdm.auto import tqdm
@@ -20,6 +21,22 @@ from serl_launcher.utils.serialization import to_jsonable
 
 MANIFEST_FILENAME = "manifest.json"
 EPISODE_FILE_GLOB = "episode_*.pkl"
+RESIDUAL_PREPARED_SIGNATURE_KEYS = (
+    "task_key",
+    "policy_backend_type",
+    "policy_backend_id",
+    "chunk_horizon",
+    "action_dim",
+    "alpha",
+    "action_mask",
+    "action_limits",
+    "clip_gripper",
+    "expert_reference_scale",
+    "clip_residual_to_unit",
+    "filter_unrepresentable_steps",
+    "image_keys",
+    "vector_obs_keys",
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -34,6 +51,141 @@ class OfflinePreparedResolution:
     prepared_paths: tuple[Path, ...]
     manifest_paths: tuple[Path, ...]
     validation_stats: dict[str, Any]
+
+
+def format_residual_alpha_token(alpha: float) -> str:
+    return f"{float(alpha):.4f}".rstrip("0").rstrip(".").replace(".", "p")
+
+
+def build_residual_prepared_fingerprint(
+    *,
+    format_version: str,
+    task_key: str,
+    task_description: str,
+    policy_backend_type: str,
+    policy_backend_id: str,
+    chunk_horizon: int,
+    action_dim: int,
+    alpha: float,
+    action_mask: Sequence[bool] | None,
+    action_limits: Sequence[float],
+    clip_gripper: bool,
+    expert_reference_scale: float,
+    clip_residual_to_unit: bool,
+    filter_unrepresentable_steps: bool,
+    image_keys: Sequence[str],
+    vector_obs_keys: Sequence[str] | None,
+    raw_dataset_path: str | Path,
+    extra_fields: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    signature = build_residual_training_signature(
+        task_key=task_key,
+        policy_backend_type=policy_backend_type,
+        policy_backend_id=policy_backend_id,
+        chunk_horizon=chunk_horizon,
+        action_dim=action_dim,
+        alpha=alpha,
+        action_mask=action_mask,
+        action_limits=action_limits,
+        clip_gripper=clip_gripper,
+        expert_reference_scale=expert_reference_scale,
+        clip_residual_to_unit=clip_residual_to_unit,
+        filter_unrepresentable_steps=filter_unrepresentable_steps,
+        image_keys=image_keys,
+        vector_obs_keys=vector_obs_keys,
+    )
+    fingerprint = {
+        "format_version": str(format_version),
+        "task_key": signature["task_key"],
+        "task_description": str(task_description),
+    }
+    fingerprint.update(
+        {key: value for key, value in signature.items() if key != "task_key"}
+    )
+    fingerprint["raw_dataset_path"] = str(raw_dataset_path)
+    if extra_fields is not None:
+        fingerprint.update(dict(extra_fields))
+    return fingerprint
+
+
+def build_residual_training_signature(
+    *,
+    task_key: str,
+    policy_backend_type: str,
+    policy_backend_id: str,
+    chunk_horizon: int,
+    action_dim: int,
+    alpha: float,
+    action_mask: Sequence[bool] | None,
+    action_limits: Sequence[float],
+    clip_gripper: bool,
+    expert_reference_scale: float,
+    clip_residual_to_unit: bool,
+    filter_unrepresentable_steps: bool,
+    image_keys: Sequence[str],
+    vector_obs_keys: Sequence[str] | None,
+) -> dict[str, Any]:
+    return {
+        "task_key": str(task_key),
+        "policy_backend_type": str(policy_backend_type),
+        "policy_backend_id": str(policy_backend_id),
+        "chunk_horizon": int(chunk_horizon),
+        "action_dim": int(action_dim),
+        "alpha": float(alpha),
+        "action_mask": (
+            None if action_mask is None else [bool(value) for value in action_mask]
+        ),
+        "action_limits": [float(value) for value in action_limits],
+        "clip_gripper": bool(clip_gripper),
+        "expert_reference_scale": float(expert_reference_scale),
+        "clip_residual_to_unit": bool(clip_residual_to_unit),
+        "filter_unrepresentable_steps": bool(filter_unrepresentable_steps),
+        "image_keys": [str(value) for value in image_keys],
+        "vector_obs_keys": (
+            None
+            if vector_obs_keys is None
+            else [str(value) for value in vector_obs_keys]
+        ),
+    }
+
+
+def extract_residual_manifest_signature(
+    manifest: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if manifest is None:
+        return None
+    fingerprint = manifest.get("fingerprint", None)
+    if not isinstance(fingerprint, dict):
+        return None
+    signature = {
+        key: fingerprint.get(key, None) for key in RESIDUAL_PREPARED_SIGNATURE_KEYS
+    }
+    signature["filter_unrepresentable_steps"] = bool(
+        fingerprint.get("filter_unrepresentable_steps", False)
+    )
+    return signature
+
+
+def resolve_residual_prepared_dir(
+    *,
+    output_root: str | Path,
+    task_key: str,
+    policy_backend: str,
+    chunk_horizon: int,
+    alpha: float,
+) -> Path:
+    output_root_path = resolve_path(str(output_root), base=resolve_original_cwd())
+    resolved_task_key = str(task_key)
+    task_root = (
+        output_root_path
+        if output_root_path.name == resolved_task_key
+        else (output_root_path / resolved_task_key)
+    )
+    backend = str(policy_backend).replace(":", "_")
+    alpha_token = format_residual_alpha_token(alpha)
+    return (
+        task_root / f"{backend}_chunk{int(chunk_horizon)}_alpha{alpha_token}"
+    ).resolve()
 
 
 def resolve_prepared_path_value(prepared_path: str | None) -> tuple[Path, ...]:
@@ -311,9 +463,15 @@ __all__ = [
     "MANIFEST_FILENAME",
     "OfflinePreparedInputs",
     "OfflinePreparedResolution",
+    "RESIDUAL_PREPARED_SIGNATURE_KEYS",
+    "build_residual_prepared_fingerprint",
+    "build_residual_training_signature",
+    "extract_residual_manifest_signature",
+    "format_residual_alpha_token",
     "load_prepared_offline_replay",
     "read_manifest",
     "resolve_prepared_episode_files",
     "resolve_prepared_path_value",
+    "resolve_residual_prepared_dir",
     "validate_prepared_paths",
 ]

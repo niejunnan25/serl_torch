@@ -8,30 +8,12 @@ from typing import Any, Sequence
 import numpy as np
 
 from serl_launcher.policy.base import PolicyInferInfo
+from serl_launcher.policy.typed_factory import describe_policy_backend
+from serl_launcher.policy.typed_factory import resolve_policy_backend_type
 
 from .policy_input import build_agibot_policy_input
 
 JOYRA_RAW_ACTION_DIM = 18
-
-
-def _resolve_policy_backend_type(cfg: Any) -> str:
-    policy_type = str(cfg.policy.type).strip().lower()
-    return policy_type if policy_type else "openpi"
-
-
-def _resolve_policy_backend_id(cfg: Any) -> str:
-    policy_type = _resolve_policy_backend_type(cfg)
-    policy_id_value = getattr(cfg.policy, "id", None)
-    if policy_id_value is None:
-        return policy_type
-    policy_id = str(policy_id_value).strip()
-    return policy_id if policy_id else policy_type
-
-
-def _describe_policy_backend(cfg: Any) -> str:
-    policy_type = _resolve_policy_backend_type(cfg)
-    policy_id = _resolve_policy_backend_id(cfg)
-    return policy_type if policy_id == policy_type else f"{policy_type}:{policy_id}"
 
 
 def _canonicalize_action_chunk(
@@ -174,8 +156,8 @@ def build_agibot_base_policy(
     host: str | None = None,
     port: int | None = None,
 ) -> AgiBotBasePolicy:
-    backend_type = _resolve_policy_backend_type(cfg)
-    description = _describe_policy_backend(cfg)
+    backend_type = resolve_policy_backend_type(cfg)
+    description = describe_policy_backend(cfg)
     host = str(cfg.policy.host) if host is None else str(host)
     port = int(cfg.policy.port) if port is None else int(port)
     action_dim = int(cfg.env.action_dim)

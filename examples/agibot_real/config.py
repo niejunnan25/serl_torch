@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import asdict
 from dataclasses import dataclass
 from typing import Any
@@ -15,8 +16,8 @@ from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.common.trainer_transport import validate_transport_mode
 from serl_launcher.utils.serialization import to_jsonable
 
-from .schema import build_agibot_task_key
-from .schema import resolve_agibot_image_keys
+from .env.schema import build_agibot_task_key
+from .env.schema import resolve_agibot_image_keys
 
 RuntimeRole = Literal["actor", "learner"]
 EnvBackend = Literal["local"]
@@ -51,8 +52,10 @@ class RuntimeConfig:
 @dataclass(frozen=True, slots=True)
 class WandbConfig:
     project: str
+    entity: str | None
     exp_name: str
     group: str | None
+    mode: str
     debug: bool
 
 
@@ -119,6 +122,15 @@ class ResidualConfig:
     action_limits: tuple[float, ...]
     clip_gripper: bool
     chunk_horizon: int
+
+
+@dataclass(frozen=True, slots=True)
+class ActionFilterConfig:
+    enabled: bool
+    alpha: float
+    max_delta: float | None
+    warmup_steps: int
+    reset_each_episode: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +277,16 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class VideoConfig:
+    enabled: bool
+    camera_key: str
+    fps: float
+    output_dir: str
+    max_pending_frames: int
+    drop_frames_when_busy: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AgiBotTrainConfig:
     global_seed: int
     task: TaskConfig
@@ -277,6 +299,7 @@ class AgiBotTrainConfig:
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    action_filter: ActionFilterConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -284,6 +307,7 @@ class AgiBotTrainConfig:
     offline: OfflineConfig
     training: TrainingConfig
     logging: LoggingConfig
+    video: VideoConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,6 +326,7 @@ class AgiBotEvalConfig:
     training: EvalTrainingConfig
     logging: LoggingConfig
     eval: EvalConfig
+    video: VideoConfig
 
 
 AgiBotRunConfig = AgiBotTrainConfig | AgiBotEvalConfig
@@ -613,17 +638,31 @@ def _parse_trainer_transport_cfg(
 def _parse_wandb_cfg(cfg: DictConfig, *, task: TaskConfig) -> WandbConfig:
     wandb_cfg = cfg.get("wandb", {})
     default_exp_name = f"{task.task_key}_residual"
+    debug = bool(wandb_cfg.get("debug", False))
+    mode_value = wandb_cfg.get("mode", None)
+    if mode_value is None:
+        resolved_mode = "online"
+    else:
+        resolved_mode = _parse_choice(
+            mode_value,
+            "wandb.mode",
+            allowed=("online", "offline", "disabled"),
+        )
+    if debug:
+        resolved_mode = "disabled"
     return WandbConfig(
         project=_required_str(
             wandb_cfg.get("project", "agibot_real"),
             "wandb.project",
         ),
+        entity=_optional_str(wandb_cfg.get("entity", os.environ.get("WANDB_ENTITY"))),
         exp_name=_required_str(
             wandb_cfg.get("exp_name", default_exp_name),
             "wandb.exp_name",
         ),
         group=_optional_str(wandb_cfg.get("group", None)),
-        debug=bool(wandb_cfg.get("debug", False)),
+        mode=str(resolved_mode),
+        debug=debug,
     )
 
 
@@ -839,6 +878,29 @@ def _parse_residual_cfg(cfg: DictConfig, *, action_dim: int) -> ResidualConfig:
             residual_cfg.get("chunk_horizon", 1),
             "residual.chunk_horizon",
         ),
+    )
+
+
+def _parse_action_filter_cfg(cfg: DictConfig) -> ActionFilterConfig:
+    filter_cfg = cfg.get("action_filter", {}) or {}
+    alpha = _positive_float(
+        filter_cfg.get("alpha", 0.25),
+        "action_filter.alpha",
+    )
+    if alpha > 1.0:
+        raise ValueError(f"action_filter.alpha must be <= 1.0, got {alpha}")
+    return ActionFilterConfig(
+        enabled=bool(filter_cfg.get("enabled", False)),
+        alpha=alpha,
+        max_delta=_optional_positive_float(
+            filter_cfg.get("max_delta", None),
+            "action_filter.max_delta",
+        ),
+        warmup_steps=_nonnegative_int(
+            filter_cfg.get("warmup_steps", 0),
+            "action_filter.warmup_steps",
+        ),
+        reset_each_episode=bool(filter_cfg.get("reset_each_episode", True)),
     )
 
 
@@ -1208,6 +1270,27 @@ def _parse_logging_cfg(
     )
 
 
+def _parse_video_cfg(cfg: DictConfig, *, default_fps: float) -> VideoConfig:
+    video_cfg = cfg.get("video", {})
+    return VideoConfig(
+        enabled=bool(video_cfg.get("enabled", False)),
+        camera_key=_required_str(
+            video_cfg.get("camera_key", "image/head"),
+            "video.camera_key",
+        ),
+        fps=_positive_float(video_cfg.get("fps", default_fps), "video.fps"),
+        output_dir=_required_str(
+            video_cfg.get("output_dir", "videos"),
+            "video.output_dir",
+        ),
+        max_pending_frames=_positive_int(
+            video_cfg.get("max_pending_frames", 64),
+            "video.max_pending_frames",
+        ),
+        drop_frames_when_busy=bool(video_cfg.get("drop_frames_when_busy", True)),
+    )
+
+
 def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
@@ -1218,6 +1301,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     _validate_canonical_controller_cfg(controller, context="train")
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    action_filter = _parse_action_filter_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
@@ -1237,6 +1321,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         env=env,
         obs=obs,
         residual=residual,
+        action_filter=action_filter,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
@@ -1244,6 +1329,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         offline=_parse_offline_cfg(cfg),
         training=_parse_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
+        video=_parse_video_cfg(cfg, default_fps=task.hz),
     )
 
 
@@ -1276,6 +1362,7 @@ def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
         training=_parse_eval_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
         eval=_parse_eval_cfg_block(cfg),
+        video=_parse_video_cfg(cfg, default_fps=task.hz),
     )
 
 
@@ -1311,6 +1398,7 @@ __all__ = [
     "AgiBotEvalConfig",
     "AgiBotRunConfig",
     "AgiBotTrainConfig",
+    "ActionFilterConfig",
     "BackfillPolicyConfig",
     "CheckpointConfig",
     "ControllerConfig",
@@ -1340,6 +1428,7 @@ __all__ = [
     "TaskConfig",
     "TorchCompileConfig",
     "TrainingConfig",
+    "VideoConfig",
     "WandbConfig",
     "cfg_to_log_payload",
     "parse_eval_cfg",

@@ -6,10 +6,6 @@ from typing import Any
 
 from serl_launcher.policy.base import PolicyClient
 from serl_launcher.policy.base import PolicyPrefetcher
-from serl_launcher.policy.joyra.client import JoyRAPolicyClient
-from serl_launcher.policy.joyra.prefetch import AsyncJoyRAPolicyPrefetcher
-from serl_launcher.policy.openpi.client import OpenPIPolicyClient
-from serl_launcher.policy.openpi.prefetch import AsyncOpenPIPolicyPrefetcher
 
 
 def resolve_policy_backend_type(cfg: Any) -> str:
@@ -45,6 +41,8 @@ def build_policy_client(
     host, port = _resolve_policy_endpoint(cfg)
     action_dim = int(cfg.env.action_dim)
     if policy_type == "openpi":
+        from serl_launcher.policy.openpi.client import OpenPIPolicyClient
+
         return OpenPIPolicyClient(
             host=host,
             port=port,
@@ -52,6 +50,8 @@ def build_policy_client(
             logger=logger,
         )
     if policy_type == "joyra":
+        from serl_launcher.policy.joyra.client import JoyRAPolicyClient
+
         return JoyRAPolicyClient(
             host=host,
             port=port,
@@ -70,6 +70,8 @@ def build_policy_prefetcher(
     host, port = _resolve_policy_endpoint(cfg)
     action_dim = int(cfg.env.action_dim)
     if policy_type == "openpi":
+        from serl_launcher.policy.openpi.prefetch import AsyncOpenPIPolicyPrefetcher
+
         return AsyncOpenPIPolicyPrefetcher(
             host=host,
             port=port,
@@ -77,6 +79,8 @@ def build_policy_prefetcher(
             logger=logger,
         )
     if policy_type == "joyra":
+        from serl_launcher.policy.joyra.prefetch import AsyncJoyRAPolicyPrefetcher
+
         return AsyncJoyRAPolicyPrefetcher(
             host=host,
             port=port,
@@ -84,4 +88,3 @@ def build_policy_prefetcher(
             logger=logger,
         )
     raise ValueError(f"Unsupported policy backend type: {policy_type!r}")
-

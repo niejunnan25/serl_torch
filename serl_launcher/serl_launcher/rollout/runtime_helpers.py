@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Lightweight runtime helpers for AgiBot actor-side episode boundaries."""
+"""Lightweight helpers for rollout episode boundaries."""
 
 from typing import Any
 from typing import Callable
@@ -13,11 +13,10 @@ def commit_finished_episode_chunks(
     wait_for_episode_commit: bool,
     require_last_transition_ready: bool = False,
 ) -> None:
-    """Drain finished-episode chunks before applying boundary-side bookkeeping.
+    """Drain finished-episode chunks before boundary-side bookkeeping.
 
-    AgiBot's ``executed_steps == 0`` terminal path needs the previous real step to
-    be materialized first, otherwise synthetic terminal reward/final flags have no
-    transition to attach to.
+    This lets callers materialize the previous real step before attaching any
+    synthetic terminal reward or final flags.
     """
 
     assembled_chunks = transition_assembler.finish_episode(

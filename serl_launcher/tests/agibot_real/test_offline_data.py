@@ -11,25 +11,32 @@ import unittest
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
+SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 try:
     from omegaconf import OmegaConf
-except ModuleNotFoundError:  # pragma: no cover - environment-dependent
-    OmegaConf = None
-
-if OmegaConf is not None:
     from serl_torch.examples.agibot_real.config import parse_train_cfg
-    from serl_torch.examples.agibot_real.offline_data import load_prepared_offline_replay
-    from serl_torch.examples.agibot_real.offline_data import (
-        _prepare_reference_episode_transitions,
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        load_prepared_offline_replay,
     )
-    from serl_torch.examples.agibot_real.offline_data import (
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        prepare_reference_episode_transitions,
+    )
+    from serl_torch.examples.agibot_real.env.offline_data import (
         resolve_and_validate_prepared_paths,
     )
-    from serl_torch.examples.agibot_real.offline_data import (
+    from serl_torch.examples.agibot_real.env.offline_data import (
         resolve_prepared_episode_files,
     )
     from serl_launcher.residual.typed_action import ResidualActionSpec
+except ModuleNotFoundError:  # pragma: no cover - environment-dependent
+    OmegaConf = None
+
+from serl_torch.examples.agibot_real.env.offline_data import (
+    _coerce_lerobot_state_action_vector,
+)
 
 
 class _FakeReplayBuffer:
@@ -69,6 +76,34 @@ def _make_raw_obs() -> dict[str, object]:
         "image/left_wrist": [[[0, 0, 0]] * 8 for _ in range(8)],
         "image/right_wrist": [[[0, 0, 0]] * 8 for _ in range(8)],
     }
+
+
+class AgiBotLeRobotRawDataTest(unittest.TestCase):
+    def test_openpi_14d_vector_is_used_as_is(self) -> None:
+        vector = list(range(14))
+        result = _coerce_lerobot_state_action_vector(
+            vector,
+            column="actions",
+            source_path=Path("/tmp/episode.parquet"),
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in vector])
+
+    def test_joyra_30d_vector_uses_last_14_dimensions(self) -> None:
+        vector = list(range(30))
+        result = _coerce_lerobot_state_action_vector(
+            vector,
+            column="action",
+            source_path=Path("/tmp/episode.parquet"),
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in range(16, 30)])
+
+    def test_rejects_unexpected_vector_width(self) -> None:
+        with self.assertRaisesRegex(ValueError, "14D OpenPI data or 30D JoyRA data"):
+            _coerce_lerobot_state_action_vector(
+                [0.0] * 16,
+                column="action",
+                source_path=Path("/tmp/episode.parquet"),
+            )
 
 
 @unittest.skipIf(OmegaConf is None, "omegaconf is not installed")
@@ -175,7 +210,7 @@ class AgiBotOfflineDataTest(unittest.TestCase):
             },
         ]
 
-        transitions, episode_stats = _prepare_reference_episode_transitions(
+        transitions, episode_stats = prepare_reference_episode_transitions(
             raw_steps=raw_steps,
             episode_id=7,
             task_prompt=cfg.task.prompt,

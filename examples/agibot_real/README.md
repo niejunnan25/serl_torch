@@ -2,7 +2,7 @@
 
 这份 README 只说明一件事：把这个仓库同步到一台新的机器人控制机后，如何安装依赖，并确认代码已经能连上 AgiBot 真机。
 
-完整 residual RL 训练、learner / actor 启动和 backfill 配置不放在这里；先把下面的连接测试跑通，再看 `examples/agibot_real/docs/` 里的训练文档。
+完整 residual RL 训练、learner / actor 启动和 backfill 配置见本文后面的标准启动命令；新机器先把下面的连接测试跑通，再启动训练。
 
 ## 前提
 
@@ -262,3 +262,50 @@ python examples/agibot_real/scripts/reset_robot.py \
 看到 `Robot reset completed.` 就说明基础动作通道也能工作。
 
 到这里为止，新机器已经具备运行本仓库 AgiBot 真机代码的最低条件。之后再根据实验需要启动 JoyRA / OpenPI policy server、learner 和 actor。
+
+## 8. 标准启动命令
+
+下面是当前真机 residual 训练的标准启动顺序，整理自 `run.txt`。当前主线已经把旧的 `run_residual_training_copy.py` 合并为 `run_residual_training.py`。
+
+### 终端 1：启动 JoyRA
+
+```bash
+bash /home/hello/codebase/tangyili/code/serl_torch/examples/agibot_real/tools/serve_joyra.sh \
+  --joyra-root /home/hello/codebase/JoyRA \
+  --ckpt-path /home/hello/codebase/JoyRA/outputs/pre_ego30w_sq_nw1000_nw-all-fourier_vla_post_sq_3w_office_1/checkpoints/steps_30000_pytorch_model.pt \
+  --port 8001
+```
+
+### 终端 2：启动 learner
+
+```bash
+sudo docker exec -it docker--agibot /bin/bash
+conda activate robot
+cd /home/hello/codebase/serl_torch
+export PYTHONPATH=/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export CUDA_VISIBLE_DEVICES=0
+
+python examples/agibot_real/scripts/run_residual_training.py \
+  runtime.role=learner \
+  policy.port=8001 \
+  backfill_policy.port=8001
+```
+
+### 终端 3：启动 actor
+
+```bash
+sudo docker exec -it docker--agibot /bin/bash
+conda activate robot
+cd /home/hello/codebase/tangyili/code/serl_torch/examples/agibot_real
+source robot/service/env.sh
+cd /home/hello/codebase/tangyili/code/serl_torch
+export PYTHONPATH=/home/hello/codebase/tangyili/code/serl_torch/serl_launcher:$PYTHONPATH
+export CUDA_VISIBLE_DEVICES=1
+
+python examples/agibot_real/scripts/run_residual_training.py \
+  runtime.role=actor \
+  policy.port=8001 \
+  backfill_policy.port=8001
+```
+
+`train_residual.yaml` 默认已经开启 `backfill_policy.enabled=true`。上面的命令把 `policy.port` 和 `backfill_policy.port` 都设为 `8001`，表示主控制推理和 backfill 共用同一个 JoyRA 服务。如果需要减少真机控制路径和 backfill 的推理竞争，可以再启动一个 JoyRA 服务，把 `backfill_policy.port` 改成独立端口。

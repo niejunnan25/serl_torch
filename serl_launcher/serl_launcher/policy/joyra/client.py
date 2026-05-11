@@ -103,11 +103,14 @@ class JoyRAPolicyClient:
             "close_timeout": self._close_timeout_sec,
             "proxy": None,
         }
-        return {
+        filtered_kwargs = {
             key: value
             for key, value in kwargs.items()
             if (key in supported_params) and (value is not None)
         }
+        if "proxy" in supported_params:
+            filtered_kwargs["proxy"] = None
+        return filtered_kwargs
 
     def _wait_for_server(self):
         uri = self._uri()

@@ -18,6 +18,9 @@ from tqdm.auto import tqdm
 from serl_launcher.data.offline_prepared import EPISODE_FILE_GLOB
 from serl_launcher.data.offline_prepared import MANIFEST_FILENAME
 from serl_launcher.data.offline_prepared import OfflinePreparedResolution
+from serl_launcher.data.offline_prepared import build_residual_prepared_fingerprint
+from serl_launcher.data.offline_prepared import build_residual_training_signature
+from serl_launcher.data.offline_prepared import extract_residual_manifest_signature
 from serl_launcher.data.offline_prepared import (
     load_prepared_offline_replay as _load_prepared_offline_replay,
 )
@@ -26,6 +29,7 @@ from serl_launcher.data.offline_prepared import (
     resolve_prepared_episode_files as _resolve_prepared_episode_files,
 )
 from serl_launcher.data.offline_prepared import resolve_prepared_path_value
+from serl_launcher.data.offline_prepared import resolve_residual_prepared_dir
 from serl_launcher.data.offline_prepared import validate_prepared_paths
 from serl_launcher.policy.typed_factory import describe_policy_backend
 from serl_launcher.policy.typed_factory import resolve_policy_backend_id
@@ -123,74 +127,54 @@ def resolve_task_spec(cfg: LiberoTrainConfig) -> LiberoTaskSpec:
     )
 
 
-def _format_alpha(alpha: float) -> str:
-    return f"{float(alpha):.4f}".rstrip("0").rstrip(".").replace(".", "p")
-
-
 def prepare_fingerprint(
     cfg: LiberoTrainConfig,
     *,
     task_spec: LiberoTaskSpec,
     offline_format_version: str,
 ) -> dict[str, Any]:
-    return {
-        "format_version": offline_format_version,
-        "task_key": task_spec.task_key,
-        "task_description": task_spec.task_description,
-        "policy_backend_type": resolve_policy_backend_type(cfg),
-        "policy_backend_id": resolve_policy_backend_id(cfg),
-        "chunk_horizon": int(cfg.residual.chunk_horizon),
-        "action_dim": int(cfg.env.action_dim),
-        "alpha": float(cfg.residual.alpha),
-        "action_mask": (
-            None
-            if cfg.residual.action_mask is None
-            else [bool(v) for v in cfg.residual.action_mask]
-        ),
-        "action_limits": [float(v) for v in cfg.residual.action_limits],
-        "clip_gripper": bool(cfg.residual.clip_gripper),
-        "expert_reference_scale": float(cfg.offline.prepare.expert_reference_scale),
-        "clip_residual_to_unit": bool(cfg.offline.prepare.clip_residual_to_unit),
-        "filter_unrepresentable_steps": bool(
+    return build_residual_prepared_fingerprint(
+        format_version=offline_format_version,
+        task_key=str(task_spec.task_key),
+        task_description=str(task_spec.task_description),
+        policy_backend_type=resolve_policy_backend_type(cfg),
+        policy_backend_id=resolve_policy_backend_id(cfg),
+        chunk_horizon=int(cfg.residual.chunk_horizon),
+        action_dim=int(cfg.env.action_dim),
+        alpha=float(cfg.residual.alpha),
+        action_mask=cfg.residual.action_mask,
+        action_limits=cfg.residual.action_limits,
+        clip_gripper=bool(cfg.residual.clip_gripper),
+        expert_reference_scale=float(cfg.offline.prepare.expert_reference_scale),
+        clip_residual_to_unit=bool(cfg.offline.prepare.clip_residual_to_unit),
+        filter_unrepresentable_steps=bool(
             cfg.offline.prepare.filter_unrepresentable_steps
         ),
-        "image_keys": [str(v) for v in cfg.obs.image_keys],
-        "vector_obs_keys": (
-            None
-            if cfg.obs.vector_obs_keys is None
-            else [str(v) for v in cfg.obs.vector_obs_keys]
-        ),
-        "raw_dataset_path": str(task_spec.dataset_path),
-    }
+        image_keys=cfg.obs.image_keys,
+        vector_obs_keys=cfg.obs.vector_obs_keys,
+        raw_dataset_path=task_spec.dataset_path,
+    )
 
 
 def training_compatibility_signature(cfg: LiberoTrainConfig) -> dict[str, Any]:
-    return {
-        "task_key": f"{cfg.task.suite_name}_task_{cfg.task.task_id}",
-        "policy_backend_type": resolve_policy_backend_type(cfg),
-        "policy_backend_id": resolve_policy_backend_id(cfg),
-        "chunk_horizon": int(cfg.residual.chunk_horizon),
-        "action_dim": int(cfg.env.action_dim),
-        "alpha": float(cfg.residual.alpha),
-        "action_mask": (
-            None
-            if cfg.residual.action_mask is None
-            else [bool(v) for v in cfg.residual.action_mask]
-        ),
-        "action_limits": [float(v) for v in cfg.residual.action_limits],
-        "clip_gripper": bool(cfg.residual.clip_gripper),
-        "expert_reference_scale": float(cfg.offline.prepare.expert_reference_scale),
-        "clip_residual_to_unit": bool(cfg.offline.prepare.clip_residual_to_unit),
-        "filter_unrepresentable_steps": bool(
+    return build_residual_training_signature(
+        task_key=f"{cfg.task.suite_name}_task_{cfg.task.task_id}",
+        policy_backend_type=resolve_policy_backend_type(cfg),
+        policy_backend_id=resolve_policy_backend_id(cfg),
+        chunk_horizon=int(cfg.residual.chunk_horizon),
+        action_dim=int(cfg.env.action_dim),
+        alpha=float(cfg.residual.alpha),
+        action_mask=cfg.residual.action_mask,
+        action_limits=cfg.residual.action_limits,
+        clip_gripper=bool(cfg.residual.clip_gripper),
+        expert_reference_scale=float(cfg.offline.prepare.expert_reference_scale),
+        clip_residual_to_unit=bool(cfg.offline.prepare.clip_residual_to_unit),
+        filter_unrepresentable_steps=bool(
             cfg.offline.prepare.filter_unrepresentable_steps
         ),
-        "image_keys": [str(v) for v in cfg.obs.image_keys],
-        "vector_obs_keys": (
-            None
-            if cfg.obs.vector_obs_keys is None
-            else [str(v) for v in cfg.obs.vector_obs_keys]
-        ),
-    }
+        image_keys=cfg.obs.image_keys,
+        vector_obs_keys=cfg.obs.vector_obs_keys,
+    )
 
 
 def prepared_dir_for_cfg(
@@ -198,20 +182,13 @@ def prepared_dir_for_cfg(
     *,
     task_spec: LiberoTaskSpec,
 ) -> Path:
-    output_root = resolve_path(
-        cfg.offline.prepare.output_root,
-        base=resolve_original_cwd(),
+    return resolve_residual_prepared_dir(
+        output_root=cfg.offline.prepare.output_root,
+        task_key=str(task_spec.task_key),
+        policy_backend=describe_policy_backend(cfg),
+        chunk_horizon=int(cfg.residual.chunk_horizon),
+        alpha=float(cfg.residual.alpha),
     )
-    backend = describe_policy_backend(cfg).replace(":", "_")
-    alpha_token = _format_alpha(cfg.residual.alpha)
-    task_root = (
-        output_root
-        if output_root.name == str(task_spec.task_key)
-        else (output_root / task_spec.task_key)
-    )
-    return (
-        task_root / f"{backend}_chunk{int(cfg.residual.chunk_horizon)}_alpha{alpha_token}"
-    ).resolve()
 
 
 def build_frame_obs(
@@ -425,29 +402,7 @@ def prepare_demo_transitions(
 def _manifest_signature(
     manifest: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if manifest is None:
-        return None
-    manifest_fingerprint = manifest.get("fingerprint", None)
-    if not isinstance(manifest_fingerprint, dict):
-        return None
-    return {
-        "task_key": manifest_fingerprint.get("task_key", None),
-        "policy_backend_type": manifest_fingerprint.get("policy_backend_type", None),
-        "policy_backend_id": manifest_fingerprint.get("policy_backend_id", None),
-        "chunk_horizon": manifest_fingerprint.get("chunk_horizon", None),
-        "action_dim": manifest_fingerprint.get("action_dim", None),
-        "alpha": manifest_fingerprint.get("alpha", None),
-        "action_mask": manifest_fingerprint.get("action_mask", None),
-        "action_limits": manifest_fingerprint.get("action_limits", None),
-        "clip_gripper": manifest_fingerprint.get("clip_gripper", None),
-        "expert_reference_scale": manifest_fingerprint.get("expert_reference_scale", None),
-        "clip_residual_to_unit": manifest_fingerprint.get("clip_residual_to_unit", None),
-        "filter_unrepresentable_steps": bool(
-            manifest_fingerprint.get("filter_unrepresentable_steps", False)
-        ),
-        "image_keys": manifest_fingerprint.get("image_keys", None),
-        "vector_obs_keys": manifest_fingerprint.get("vector_obs_keys", None),
-    }
+    return extract_residual_manifest_signature(manifest)
 
 
 def resolve_configured_prepared_paths(cfg: LiberoTrainConfig) -> tuple[Path, ...]:
