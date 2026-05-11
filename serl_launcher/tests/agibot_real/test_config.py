@@ -113,6 +113,21 @@ class AgiBotConfigTest(unittest.TestCase):
 
         self.assertEqual(parsed.wandb.entity, "robotics")
 
+    def test_parse_train_cfg_accepts_right_arm_policy_action_layout(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.policy.type = "openpi"
+        cfg.policy.action_layout = "right_arm"
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.policy.action_layout, "right_arm")
+
     def test_parse_train_cfg_debug_disables_wandb_mode(self) -> None:
         cfg = OmegaConf.load(
             Path(__file__).resolve().parents[3]

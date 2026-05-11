@@ -71,6 +71,8 @@ LEROBOT_STATE_COLUMN = "observation.state"
 LEROBOT_JOYRA_ACTION_COLUMN = "action"
 LEROBOT_OPENPI_ACTION_COLUMN = "actions"
 LEROBOT_TARGET_STATE_ACTION_DIM = 14
+LEROBOT_RIGHT_ARM_STATE_ACTION_DIM = 7
+OFFLINE_BASE_POLICY_INFER_BATCH_SIZE = 15
 LEROBOT_IMAGE_KEY_MAP = {
     "observation.images.head_color": "image/head",
     "observation.images.hand_left": "image/left_wrist",
@@ -468,11 +470,56 @@ def _patch_fastparquet_dotted_schema(parquet_file: Any) -> None:
 def _read_pyarrow_parquet_column(parquet_path: Path, column: str) -> list[Any]:
     import pyarrow.parquet as pq
 
-    table = pq.read_table(parquet_path, columns=[column])
+    try:
+        table = pq.read_table(parquet_path, columns=[column])
+    except Exception:
+        dotted_struct_values = _read_pyarrow_dotted_struct_column(
+            parquet_path,
+            column,
+        )
+        if dotted_struct_values is not None:
+            return dotted_struct_values
+        raise
     if column not in table.column_names:
         raise KeyError(f"Parquet column {column!r} not found in {parquet_path}")
     column_array = table.column(column)
     return [column_array[idx].as_py() for idx in range(table.num_rows)]
+
+
+def _read_pyarrow_dotted_struct_column(
+    parquet_path: Path,
+    column: str,
+) -> list[Any] | None:
+    import pyarrow.parquet as pq
+
+    parts = column.split(".")
+    if len(parts) < 2:
+        return None
+
+    for split_idx in range(len(parts) - 1, 0, -1):
+        top_level_column = ".".join(parts[:split_idx])
+        nested_parts = parts[split_idx:]
+        try:
+            table = pq.read_table(parquet_path, columns=[top_level_column])
+        except Exception:  # noqa: BLE001
+            continue
+        if top_level_column not in table.column_names:
+            continue
+
+        column_array = table.column(top_level_column)
+        values: list[Any] = []
+        for row_idx in range(table.num_rows):
+            value = column_array[row_idx].as_py()
+            for nested_key in nested_parts:
+                if not isinstance(value, dict) or nested_key not in value:
+                    raise KeyError(
+                        f"Nested field {nested_key!r} not found in {top_level_column!r} "
+                        f"while reading {column!r} from {parquet_path}"
+                    )
+                value = value[nested_key]
+            values.append(value)
+        return values
+    return None
 
 
 def _read_fastparquet_column(
@@ -533,10 +580,15 @@ def _coerce_lerobot_state_action_vector(
     vector = np.asarray(value, dtype=np.float32).reshape(-1)
     if int(vector.shape[0]) == LEROBOT_TARGET_STATE_ACTION_DIM:
         return vector
+    if int(vector.shape[0]) == LEROBOT_RIGHT_ARM_STATE_ACTION_DIM:
+        full_vector = np.zeros((LEROBOT_TARGET_STATE_ACTION_DIM,), dtype=np.float32)
+        full_vector[-LEROBOT_RIGHT_ARM_STATE_ACTION_DIM:] = vector
+        return full_vector
     if int(vector.shape[0]) == 30:
         return np.asarray(vector[-LEROBOT_TARGET_STATE_ACTION_DIM:], dtype=np.float32)
     raise ValueError(
-        f"LeRobot {column} in {source_path} must be 14D OpenPI data or 30D JoyRA data, "
+        f"LeRobot {column} in {source_path} must be 7D right-arm OpenPI data, "
+        "14D canonical OpenPI data, or 30D JoyRA data, "
         f"got {vector.shape}"
     )
 
@@ -855,23 +907,62 @@ def _precompute_base_chunks_for_steps(
     if not missing_indices:
         return np.asarray(precomputed_chunks, dtype=np.float32)
 
-    step_iter: Iterable[int] = tqdm(
-        missing_indices,
+    batched_infer_many = getattr(base_policy, "infer_many", None)
+    if not callable(batched_infer_many):
+        step_iter: Iterable[int] = tqdm(
+            missing_indices,
+            total=len(missing_indices),
+            desc=f"offline base chunks {source_path.name}",
+            unit="step",
+            dynamic_ncols=True,
+            leave=False,
+        )
+        for step_idx in step_iter:
+            obs_raw = _raw_obs_from_step(steps[step_idx], source_path=source_path)
+            step_task_prompt = str(steps[step_idx].get("task_prompt") or task_prompt)
+            action_chunk, _ = base_policy.infer(obs_raw, prompt=step_task_prompt)
+            precomputed_chunks[step_idx] = prepare_base_actions_chunk(
+                base_actions=action_chunk,
+                chunk_horizon=chunk_horizon,
+                source="offline base policy",
+            )
+        return np.asarray(precomputed_chunks, dtype=np.float32)
+
+    with tqdm(
         total=len(missing_indices),
         desc=f"offline base chunks {source_path.name}",
         unit="step",
         dynamic_ncols=True,
         leave=False,
-    )
-    for step_idx in step_iter:
-        obs_raw = _raw_obs_from_step(steps[step_idx], source_path=source_path)
-        step_task_prompt = str(steps[step_idx].get("task_prompt") or task_prompt)
-        action_chunk, _ = base_policy.infer(obs_raw, prompt=step_task_prompt)
-        precomputed_chunks[step_idx] = prepare_base_actions_chunk(
-            base_actions=action_chunk,
-            chunk_horizon=chunk_horizon,
-            source="offline base policy",
-        )
+    ) as step_iter:
+        for batch_start in range(0, len(missing_indices), OFFLINE_BASE_POLICY_INFER_BATCH_SIZE):
+            batch_indices = missing_indices[
+                batch_start : batch_start + OFFLINE_BASE_POLICY_INFER_BATCH_SIZE
+            ]
+            obs_batch = [
+                _raw_obs_from_step(steps[step_idx], source_path=source_path)
+                for step_idx in batch_indices
+            ]
+            prompt_batch = [
+                str(steps[step_idx].get("task_prompt") or task_prompt)
+                for step_idx in batch_indices
+            ]
+            action_chunks, _batch_info = batched_infer_many(
+                obs_batch,
+                prompt=prompt_batch,
+            )
+            if len(action_chunks) != len(batch_indices):
+                raise ValueError(
+                    "Batched base policy returned a different number of chunks than requested: "
+                    f"{len(action_chunks)} != {len(batch_indices)}"
+                )
+            for step_idx, action_chunk in zip(batch_indices, action_chunks, strict=True):
+                precomputed_chunks[step_idx] = prepare_base_actions_chunk(
+                    base_actions=action_chunk,
+                    chunk_horizon=chunk_horizon,
+                    source="offline base policy",
+                )
+            step_iter.update(len(batch_indices))
     return np.asarray(precomputed_chunks, dtype=np.float32)
 
 
@@ -901,7 +992,7 @@ def prepare_reference_episode_transitions(
         task_prompt=task_prompt,
         base_policy=base_policy,
         chunk_horizon=int(action_spec.chunk_horizon),
-        action_dim=int(action_spec.action_dim),
+        action_dim=int(action_spec.full_action_dim),
         source_path=source_path,
     )
     if base_chunks_per_step.shape[:2] != (
@@ -937,7 +1028,7 @@ def prepare_reference_episode_transitions(
         final_action, step_unrepresentable_values, step_unrepresentable = project_expert_action(
             expert_action=_expert_action_from_step(
                 raw_step,
-                action_dim=int(action_spec.action_dim),
+                action_dim=int(action_spec.full_action_dim),
             ),
             base_action=base_chunk[0],
             action_spec=action_spec,

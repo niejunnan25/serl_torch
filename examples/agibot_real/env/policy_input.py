@@ -15,9 +15,12 @@ from .observation import extract_agibot_policy_images
 def build_agibot_policy_input(
     obs: dict[str, Any],
     prompt: str,
+    *,
+    state_slice: slice | None = None,
 ) -> PolicyInput:
     images = extract_agibot_policy_images(obs)
-    state = build_agibot_state(obs)
+    full_state = build_agibot_state(obs)
+    state = full_state if state_slice is None else full_state[state_slice]
     joyra_state = build_agibot_joyra_state(obs)
     metadata: dict[str, Any] = {"openpi_layout": "dual_wrist"}
     if joyra_state is not None:
@@ -43,9 +46,12 @@ def build_agibot_policy_input(
 def build_agibot_policy_inputs(
     observations: Sequence[dict[str, Any]],
     prompt: str,
+    *,
+    state_slice: slice | None = None,
 ) -> tuple[PolicyInput, ...]:
     return tuple(
-        build_agibot_policy_input(obs=obs, prompt=prompt) for obs in observations
+        build_agibot_policy_input(obs=obs, prompt=prompt, state_slice=state_slice)
+        for obs in observations
     )
 
 

@@ -40,6 +40,7 @@ policy:
   host: 127.0.0.1
   port: 9001
   id: joyra_office_setting
+  action_layout: full
 
 backfill_policy:
   enabled: true
@@ -152,6 +153,7 @@ offline:
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
     filter_unrepresentable_steps: false
+    max_episodes: null
 
 training:
   training_starts: 1000

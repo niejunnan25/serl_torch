@@ -71,6 +71,9 @@ def prepare_offline_data(
     manifest_path = prepared_dir / MANIFEST_FILENAME
     fingerprint = prepare_fingerprint(cfg, task_spec=task_spec)
     raw_episode_files = resolve_reference_raw_episode_files(task_spec.dataset_path)
+    max_prepare_episodes = cfg.offline.prepare.max_episodes
+    if max_prepare_episodes is not None:
+        raw_episode_files = raw_episode_files[: int(max_prepare_episodes)]
 
     logger.warning(
         "Preparing AgiBot offline data with a temporary reference-only pipeline. "
@@ -91,6 +94,7 @@ def prepare_offline_data(
         "reference_note": REFERENCE_NOTE,
         "raw_dataset_path": str(task_spec.dataset_path),
         "prepared_dir": str(prepared_dir),
+        "max_episodes": max_prepare_episodes,
         "episodes_total": 0,
         "steps_total": 0,
         "steps_unrepresentable": 0,

@@ -14,11 +14,9 @@ from serl_launcher.rollout.async_transition_assembly import (
 )
 from serl_torch.examples.agibot_real.env.base_policy import (
     build_agibot_base_policy,
-    canonicalize_agibot_action_chunks,
 )
 from serl_torch.examples.agibot_real.env.observation import build_agibot_state
 from serl_torch.examples.agibot_real.env.observation import extract_agibot_residual_images
-from serl_torch.examples.agibot_real.env.policy_input import build_agibot_policy_inputs
 
 
 @dataclass(frozen=True)
@@ -151,10 +149,10 @@ def infer_chunk_residual_obs(
 
 
 def _supports_batched_backfill(base_policy: Any) -> bool:
-    backend_type = getattr(base_policy, "backend_type", None)
+    policy_infer_many = getattr(base_policy, "infer_many", None)
     client = getattr(base_policy, "client", None)
-    infer_many = getattr(client, "infer_many", None)
-    return bool(backend_type == "joyra" and callable(infer_many))
+    client_infer_many = getattr(client, "infer_many", None)
+    return bool(callable(policy_infer_many) and callable(client_infer_many))
 
 
 class AgiBotTransitionAssembler:
@@ -407,16 +405,9 @@ def backfill_post_step_residual_obs(
     if not observations:
         return [], []
     if _supports_batched_backfill(base_policy):
-        policy_inputs = build_agibot_policy_inputs(
+        base_action_chunks, _batch_info = base_policy.infer_many(
             observations=observations,
             prompt=task_prompt,
-        )
-        raw_action_chunks, _batch_info = base_policy.client.infer_many(policy_inputs)
-        base_action_chunks = canonicalize_agibot_action_chunks(
-            raw_actions=raw_action_chunks,
-            backend_type=str(base_policy.backend_type),
-            action_dim=int(base_policy.action_dim),
-            chunk_horizon=int(base_policy.chunk_horizon),
         )
         residual_observations = [
             build_chunk_residual_obs(

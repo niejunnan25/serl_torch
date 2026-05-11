@@ -65,6 +65,7 @@ class PolicyConfig:
     host: str
     port: int
     id: str | None = None
+    action_layout: str = "full"
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +205,7 @@ class OfflinePrepareConfig:
     expert_reference_scale: float
     clip_residual_to_unit: bool
     filter_unrepresentable_steps: bool
+    max_episodes: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -685,6 +687,11 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
             "policy.port",
         ),
         id=_optional_str(policy_cfg.get("id", None)),
+        action_layout=_parse_choice(
+            policy_cfg.get("action_layout", "full"),
+            "policy.action_layout",
+            allowed=("full", "right_arm"),
+        ),
     )
 
 
@@ -1082,6 +1089,10 @@ def _parse_offline_prepare_cfg(cfg: DictConfig) -> OfflinePrepareConfig:
         ),
         filter_unrepresentable_steps=bool(
             prepare_cfg.get("filter_unrepresentable_steps", False)
+        ),
+        max_episodes=_optional_nonnegative_int(
+            prepare_cfg.get("max_episodes", None),
+            "offline.prepare.max_episodes",
         ),
     )
 

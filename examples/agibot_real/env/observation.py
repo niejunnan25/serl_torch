@@ -9,6 +9,9 @@ from PIL import Image
 from .schema import resolve_agibot_image_keys
 
 AGIBOT_STATE_DIM = 14
+AGIBOT_ARM_STATE_DIM = 7
+AGIBOT_LEFT_ARM_STATE_SLICE = slice(0, 7)
+AGIBOT_RIGHT_ARM_STATE_SLICE = slice(7, 14)
 AGIBOT_JOYRA_STATE_DIM = 18
 RESIDUAL_IMAGE_HEIGHT = 224
 RESIDUAL_IMAGE_WIDTH = 224
@@ -70,6 +73,13 @@ def build_agibot_state(obs: dict[str, Any]) -> np.ndarray:
             f"AgiBot camera-position state must be {AGIBOT_STATE_DIM}D, got {pose.shape}"
         )
     return np.asarray(pose, dtype=np.float32)
+
+
+def build_agibot_right_arm_state(obs: dict[str, Any]) -> np.ndarray:
+    return np.asarray(
+        build_agibot_state(obs)[AGIBOT_RIGHT_ARM_STATE_SLICE],
+        dtype=np.float32,
+    )
 
 
 def build_agibot_joyra_state(obs: dict[str, Any]) -> np.ndarray | None:
@@ -142,11 +152,15 @@ def extract_agibot_residual_images(
 
 
 __all__ = [
+    "AGIBOT_ARM_STATE_DIM",
     "AGIBOT_JOYRA_STATE_DIM",
+    "AGIBOT_LEFT_ARM_STATE_SLICE",
+    "AGIBOT_RIGHT_ARM_STATE_SLICE",
     "AGIBOT_STATE_DIM",
     "RESIDUAL_IMAGE_HEIGHT",
     "RESIDUAL_IMAGE_WIDTH",
     "build_agibot_joyra_state",
+    "build_agibot_right_arm_state",
     "build_agibot_state",
     "extract_agibot_policy_images",
     "extract_agibot_residual_images",
