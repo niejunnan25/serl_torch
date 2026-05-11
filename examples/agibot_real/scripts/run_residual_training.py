@@ -68,7 +68,6 @@ from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.config import parse_train_cfg
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
 from serl_torch.examples.agibot_real.env.factory import create_env
-from serl_torch.examples.agibot_real.env.observation import AGIBOT_STATE_DIM
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.agibot_real.env.offline_data import (
@@ -128,7 +127,7 @@ def actor(
     )
 
     sample_obs = build_chunk_residual_sample_obs(
-        state_dim=AGIBOT_STATE_DIM,
+        state_dim=action_dim,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
@@ -648,7 +647,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         action_dim=action_dim,
     )
     sample_obs = build_chunk_residual_sample_obs(
-        state_dim=AGIBOT_STATE_DIM,
+        state_dim=action_dim,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,

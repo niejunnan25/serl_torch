@@ -16,6 +16,11 @@ from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.common.trainer_transport import validate_transport_mode
 from serl_launcher.utils.serialization import to_jsonable
 
+from .env.arm_layout import AGIBOT_ROBOT_ACTION_DIM
+from .env.arm_layout import ARM_LAYOUT_DUAL
+from .env.arm_layout import get_arm_layout_spec
+from .env.arm_layout import normalize_arm_layout
+from .env.arm_layout import validate_arm_layout_dims
 from .env.schema import build_agibot_task_key
 from .env.schema import resolve_agibot_image_keys
 
@@ -65,7 +70,7 @@ class PolicyConfig:
     host: str
     port: int
     id: str | None = None
-    action_layout: str = "full"
+    action_layout: str = ARM_LAYOUT_DUAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +110,9 @@ class ControllerConfig:
 
 @dataclass(frozen=True, slots=True)
 class EnvConfig:
+    arm_layout: str
     action_dim: int
+    robot_action_dim: int
     backend: EnvBackend
 
 
@@ -668,7 +675,7 @@ def _parse_wandb_cfg(cfg: DictConfig, *, task: TaskConfig) -> WandbConfig:
     )
 
 
-def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
+def _parse_policy_cfg(cfg: DictConfig, *, env: EnvConfig) -> PolicyConfig:
     policy_cfg = cfg.get("policy", {})
     policy_type = _parse_choice(
         policy_cfg.get("type", "openpi"),
@@ -676,6 +683,13 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
         allowed=("openpi", "joyra"),
     )
     legacy_policy_cfg = cfg.get(str(policy_type), {})
+    policy_layout_value = policy_cfg.get("action_layout", env.arm_layout)
+    policy_layout = normalize_arm_layout(policy_layout_value)
+    if policy_layout != env.arm_layout:
+        raise ValueError(
+            "policy.action_layout must match env.arm_layout: "
+            f"{policy_layout!r} != {env.arm_layout!r}"
+        )
     return PolicyConfig(
         type=cast(PolicyBackend, policy_type),
         host=_required_str(
@@ -687,11 +701,7 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
             "policy.port",
         ),
         id=_optional_str(policy_cfg.get("id", None)),
-        action_layout=_parse_choice(
-            policy_cfg.get("action_layout", "full"),
-            "policy.action_layout",
-            allowed=("full", "right_arm"),
-        ),
+        action_layout=policy_layout,
     )
 
 
@@ -811,13 +821,22 @@ def _parse_env_cfg(cfg: DictConfig) -> EnvConfig:
         "env.backend",
         allowed=("local",),
     )
+    arm_layout = normalize_arm_layout(env_cfg.get("arm_layout", ARM_LAYOUT_DUAL))
+    spec = get_arm_layout_spec(arm_layout)
     action_dim = _positive_int(env_cfg.get("action_dim", None), "env.action_dim")
-    if action_dim != 14:
-        raise ValueError(
-            f"AgiBot v1 currently requires env.action_dim=14, got {action_dim}"
-        )
-    return EnvConfig(
+    robot_action_dim = _positive_int(
+        env_cfg.get("robot_action_dim", AGIBOT_ROBOT_ACTION_DIM),
+        "env.robot_action_dim",
+    )
+    validate_arm_layout_dims(
+        arm_layout=arm_layout,
         action_dim=action_dim,
+        robot_action_dim=robot_action_dim,
+    )
+    return EnvConfig(
+        arm_layout=spec.name,
+        action_dim=action_dim,
+        robot_action_dim=robot_action_dim,
         backend=cast(EnvBackend, backend),
     )
 
@@ -1306,7 +1325,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
     runtime = _parse_runtime_cfg(cfg)
-    policy = _parse_policy_cfg(cfg)
+    policy = _parse_policy_cfg(cfg, env=env)
     backfill_policy = _parse_backfill_policy_cfg(cfg, policy=policy)
     controller = _parse_controller_cfg(cfg)
     _validate_canonical_controller_cfg(controller, context="train")
@@ -1361,7 +1380,7 @@ def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
     return AgiBotEvalConfig(
         global_seed=_int_value(cfg.get("global_seed", cfg.get("seed", 0)), "global_seed"),
         task=task,
-        policy=_parse_policy_cfg(cfg),
+        policy=_parse_policy_cfg(cfg, env=env),
         robot=_parse_robot_cfg(cfg),
         controller=controller,
         env=env,

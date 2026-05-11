@@ -7,8 +7,10 @@ import numpy as np
 
 from serl_launcher.policy.base import PolicyInput
 
-from .observation import build_agibot_joyra_state
-from .observation import build_agibot_state
+from .arm_layout import ARM_LAYOUT_DUAL
+from .arm_layout import normalize_arm_layout
+from .observation import build_agibot_layout_joyra_state
+from .observation import build_agibot_layout_state
 from .observation import extract_agibot_policy_images
 
 
@@ -16,12 +18,12 @@ def build_agibot_policy_input(
     obs: dict[str, Any],
     prompt: str,
     *,
-    state_slice: slice | None = None,
+    arm_layout: str = ARM_LAYOUT_DUAL,
 ) -> PolicyInput:
     images = extract_agibot_policy_images(obs)
-    full_state = build_agibot_state(obs)
-    state = full_state if state_slice is None else full_state[state_slice]
-    joyra_state = build_agibot_joyra_state(obs)
+    layout = normalize_arm_layout(arm_layout)
+    state = build_agibot_layout_state(obs, arm_layout=layout)
+    joyra_state = build_agibot_layout_joyra_state(obs, arm_layout=layout)
     metadata: dict[str, Any] = {"openpi_layout": "dual_wrist"}
     if joyra_state is not None:
         metadata["joyra_state"] = np.asarray(joyra_state, dtype=np.float32)
@@ -47,10 +49,10 @@ def build_agibot_policy_inputs(
     observations: Sequence[dict[str, Any]],
     prompt: str,
     *,
-    state_slice: slice | None = None,
+    arm_layout: str = ARM_LAYOUT_DUAL,
 ) -> tuple[PolicyInput, ...]:
     return tuple(
-        build_agibot_policy_input(obs=obs, prompt=prompt, state_slice=state_slice)
+        build_agibot_policy_input(obs=obs, prompt=prompt, arm_layout=arm_layout)
         for obs in observations
     )
 

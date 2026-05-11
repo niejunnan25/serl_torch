@@ -22,7 +22,9 @@ def _build_common_kwargs(
         return {
             "task_name": str(cfg.task.name),
             "prompt": str(cfg.task.prompt),
+            "arm_layout": str(cfg.env.arm_layout),
             "action_dim": int(cfg.env.action_dim),
+            "robot_action_dim": int(cfg.env.robot_action_dim),
             "control_mode": str(cfg.task.control_mode),
             "hz": float(cfg.task.hz),
             "use_smooth_trajectory": bool(cfg.task.use_smooth_trajectory),
@@ -39,11 +41,14 @@ def _build_common_kwargs(
 
     task_cfg = cfg.get("task", {})
     robot_cfg = cfg.get("robot", {})
+    env_cfg = cfg.get("env", {})
     controller_cfg = cfg.get("controller", {})
     return {
         "task_name": str(task_cfg.get("name", "agibot_real_task")),
         "prompt": str(task_cfg.get("prompt", task_cfg.get("name", "agibot_real_task"))),
-        "action_dim": int(cfg.get("env", {}).get("action_dim", 14)),
+        "arm_layout": str(env_cfg.get("arm_layout", "dual_arm")),
+        "action_dim": int(env_cfg.get("action_dim", 14)),
+        "robot_action_dim": int(env_cfg.get("robot_action_dim", 14)),
         "control_mode": str(task_cfg.get("control_mode", "camera_position")),
         "hz": float(task_cfg.get("hz", 20.0)),
         "use_smooth_trajectory": bool(task_cfg.get("use_smooth_trajectory", False)),

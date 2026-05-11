@@ -15,7 +15,7 @@ from serl_launcher.rollout.async_transition_assembly import (
 from serl_torch.examples.agibot_real.env.base_policy import (
     build_agibot_base_policy,
 )
-from serl_torch.examples.agibot_real.env.observation import build_agibot_state
+from serl_torch.examples.agibot_real.env.observation import build_agibot_layout_state
 from serl_torch.examples.agibot_real.env.observation import extract_agibot_residual_images
 
 
@@ -132,11 +132,12 @@ def infer_chunk_residual_obs(
     base_policy: Any,
     image_keys: tuple[str, ...],
     residual_alpha: float,
+    arm_layout: str,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     base_actions, _infer_info = base_policy.infer(obs, prompt=task_prompt)
     base_actions = np.asarray(base_actions, dtype=np.float32)
     residual_obs = build_chunk_residual_obs(
-        robot_state=build_agibot_state(obs),
+        robot_state=build_agibot_layout_state(obs, arm_layout=arm_layout),
         images=extract_agibot_residual_images(
             obs,
             image_keys=image_keys,
@@ -166,6 +167,7 @@ class AgiBotTransitionAssembler:
         self.base_policy = base_policy
         self.image_keys = tuple(cfg.obs.image_keys)
         self.residual_alpha = float(cfg.residual.alpha)
+        self.arm_layout = str(cfg.env.arm_layout)
         self._logger = logger
         self._prefetched: PrefetchedDecisionObs | None = None
         self._last_submitted_chunk_seq: int | None = None
@@ -220,6 +222,7 @@ class AgiBotTransitionAssembler:
             base_policy=self.base_policy,
             image_keys=self.image_keys,
             residual_alpha=self.residual_alpha,
+            arm_layout=self.arm_layout,
         )
         return PrefetchedDecisionObs(
             base_actions=base_actions,
@@ -245,6 +248,7 @@ class AgiBotTransitionAssembler:
             base_policy=self.base_policy,
             image_keys=self.image_keys,
             residual_alpha=self.residual_alpha,
+            arm_layout=self.arm_layout,
         )
 
     def process_chunk(
@@ -331,6 +335,7 @@ class AgiBotTransitionAssembler:
                 base_policy=base_policy,
                 image_keys=self.image_keys,
                 residual_alpha=self.residual_alpha,
+                arm_layout=self.arm_layout,
             )
         )
         return next_residual_observations
@@ -401,6 +406,7 @@ def backfill_post_step_residual_obs(
     base_policy: Any,
     image_keys: tuple[str, ...],
     residual_alpha: float,
+    arm_layout: str,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
     if not observations:
         return [], []
@@ -411,7 +417,10 @@ def backfill_post_step_residual_obs(
         )
         residual_observations = [
             build_chunk_residual_obs(
-                robot_state=build_agibot_state(post_step_obs),
+                robot_state=build_agibot_layout_state(
+                    post_step_obs,
+                    arm_layout=arm_layout,
+                ),
                 images=extract_agibot_residual_images(
                     post_step_obs,
                     image_keys=image_keys,
@@ -436,6 +445,7 @@ def backfill_post_step_residual_obs(
             base_policy=base_policy,
             image_keys=image_keys,
             residual_alpha=residual_alpha,
+            arm_layout=arm_layout,
         )
         base_action_chunks.append(next_base_actions)
         residual_observations.append(next_residual_obs)

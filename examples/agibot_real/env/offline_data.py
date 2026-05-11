@@ -51,7 +51,9 @@ from serl_launcher.utils.path_utils import resolve_original_cwd
 from serl_launcher.utils.path_utils import resolve_path
 from serl_launcher.utils.serialization import to_jsonable
 
-from .observation import build_agibot_state
+from .arm_layout import project_chunk_to_layout
+from .arm_layout import project_vector_to_layout
+from .observation import build_agibot_layout_state
 from .observation import extract_agibot_residual_images
 
 if TYPE_CHECKING:
@@ -70,8 +72,6 @@ LEROBOT_DATA_FILE_GLOB = "data/chunk-*/episode_*.parquet"
 LEROBOT_STATE_COLUMN = "observation.state"
 LEROBOT_JOYRA_ACTION_COLUMN = "action"
 LEROBOT_OPENPI_ACTION_COLUMN = "actions"
-LEROBOT_TARGET_STATE_ACTION_DIM = 14
-LEROBOT_RIGHT_ARM_STATE_ACTION_DIM = 7
 OFFLINE_BASE_POLICY_INFER_BATCH_SIZE = 15
 LEROBOT_IMAGE_KEY_MAP = {
     "observation.images.head_color": "image/head",
@@ -246,6 +246,8 @@ def prepare_fingerprint(
         vector_obs_keys=cfg.obs.vector_obs_keys,
         raw_dataset_path=task_spec.dataset_path,
         extra_fields={
+            "arm_layout": str(cfg.env.arm_layout),
+            "robot_action_dim": int(cfg.env.robot_action_dim),
             "raw_source_format": resolve_reference_source_format(
                 task_spec.dataset_path,
             )
@@ -254,7 +256,7 @@ def prepare_fingerprint(
 
 
 def training_compatibility_signature(cfg: AgiBotTrainConfig) -> dict[str, Any]:
-    return build_residual_training_signature(
+    signature = build_residual_training_signature(
         task_key=str(cfg.task.task_key),
         policy_backend_type=resolve_policy_backend_type(cfg),
         policy_backend_id=resolve_policy_backend_id(cfg),
@@ -272,6 +274,13 @@ def training_compatibility_signature(cfg: AgiBotTrainConfig) -> dict[str, Any]:
         image_keys=cfg.obs.image_keys,
         vector_obs_keys=cfg.obs.vector_obs_keys,
     )
+    signature.update(
+        {
+            "arm_layout": str(cfg.env.arm_layout),
+            "robot_action_dim": int(cfg.env.robot_action_dim),
+        }
+    )
+    return signature
 
 
 def prepared_dir_for_cfg(
@@ -291,7 +300,14 @@ def prepared_dir_for_cfg(
 def _manifest_signature(
     manifest: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    return extract_residual_manifest_signature(manifest)
+    signature = extract_residual_manifest_signature(manifest)
+    if signature is None or manifest is None:
+        return signature
+    fingerprint = manifest.get("fingerprint", None)
+    if isinstance(fingerprint, dict):
+        signature["arm_layout"] = fingerprint.get("arm_layout", None)
+        signature["robot_action_dim"] = fingerprint.get("robot_action_dim", None)
+    return signature
 
 
 def resolve_configured_prepared_paths(cfg: AgiBotTrainConfig) -> tuple[Path, ...]:
@@ -576,21 +592,21 @@ def _coerce_lerobot_state_action_vector(
     *,
     column: str,
     source_path: Path,
+    arm_layout: str,
 ) -> np.ndarray:
     vector = np.asarray(value, dtype=np.float32).reshape(-1)
-    if int(vector.shape[0]) == LEROBOT_TARGET_STATE_ACTION_DIM:
-        return vector
-    if int(vector.shape[0]) == LEROBOT_RIGHT_ARM_STATE_ACTION_DIM:
-        full_vector = np.zeros((LEROBOT_TARGET_STATE_ACTION_DIM,), dtype=np.float32)
-        full_vector[-LEROBOT_RIGHT_ARM_STATE_ACTION_DIM:] = vector
-        return full_vector
-    if int(vector.shape[0]) == 30:
-        return np.asarray(vector[-LEROBOT_TARGET_STATE_ACTION_DIM:], dtype=np.float32)
-    raise ValueError(
-        f"LeRobot {column} in {source_path} must be 7D right-arm OpenPI data, "
-        "14D canonical OpenPI data, or 30D JoyRA data, "
-        f"got {vector.shape}"
-    )
+    try:
+        return project_vector_to_layout(
+            vector,
+            arm_layout,
+            source_name=f"LeRobot {column} in {source_path}",
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"LeRobot {column} in {source_path} must be 7D single-arm data, "
+            "14D canonical data, or 30D JoyRA data compatible with "
+            f"env.arm_layout={arm_layout!r}; got {vector.shape}"
+        ) from exc
 
 
 def _lerobot_action_column(info: dict[str, Any], *, source_path: Path) -> str:
@@ -707,7 +723,11 @@ def _lerobot_episode_tasks(dataset_root: Path) -> dict[int, str]:
     return episode_tasks
 
 
-def load_lerobot_episode_steps(parquet_path: Path) -> list[dict[str, Any]]:
+def load_lerobot_episode_steps(
+    parquet_path: Path,
+    *,
+    arm_layout: str,
+) -> list[dict[str, Any]]:
     dataset_root = _find_lerobot_dataset_root(parquet_path)
     if dataset_root is None:
         raise ValueError(
@@ -768,6 +788,7 @@ def load_lerobot_episode_steps(parquet_path: Path) -> list[dict[str, Any]]:
                 state_values[step_idx],
                 column=LEROBOT_STATE_COLUMN,
                 source_path=parquet_path,
+                arm_layout=arm_layout,
             ),
         }
         for agibot_key, values in image_values.items():
@@ -781,6 +802,7 @@ def load_lerobot_episode_steps(parquet_path: Path) -> list[dict[str, Any]]:
                     action_values[step_idx],
                     column=action_column,
                     source_path=parquet_path,
+                    arm_layout=arm_layout,
                 ),
                 "reward": 1.0 if is_last else 0.0,
                 "done": is_last,
@@ -798,13 +820,17 @@ def load_lerobot_episode_steps(parquet_path: Path) -> list[dict[str, Any]]:
     return steps
 
 
-def load_reference_raw_episode_steps(source_path: Path) -> list[dict[str, Any]]:
+def load_reference_raw_episode_steps(
+    source_path: Path,
+    *,
+    arm_layout: str,
+) -> list[dict[str, Any]]:
     if source_path.suffix == ".pkl":
         with open(source_path, "rb") as fp:
             raw_payload = pickle.load(fp)
         return normalize_episode_steps(raw_payload, source_path=source_path)
     if source_path.suffix == ".parquet":
-        return load_lerobot_episode_steps(source_path)
+        return load_lerobot_episode_steps(source_path, arm_layout=arm_layout)
     raise ValueError(
         f"Unsupported AgiBot raw offline episode file: {source_path}. "
         "Expected .pkl or LeRobot .parquet."
@@ -831,15 +857,25 @@ def _raw_next_obs_from_step(step: dict[str, Any]) -> dict[str, Any] | None:
     return _coerce_obs_tree(next_obs)
 
 
-def _expert_action_from_step(step: dict[str, Any], *, action_dim: int) -> np.ndarray:
+def _expert_action_from_step(
+    step: dict[str, Any],
+    *,
+    action_dim: int,
+    arm_layout: str,
+) -> np.ndarray:
     for key in ("expert_action", "action", "actions"):
         value = step.get(key, None)
         if value is None:
             continue
-        action = np.asarray(value, dtype=np.float32).reshape(-1)
+        action = project_vector_to_layout(
+            value,
+            arm_layout,
+            source_name=f"raw offline {key}",
+        )
         if int(action.shape[0]) != int(action_dim):
             raise ValueError(
-                f"Raw offline action must be {int(action_dim)}D, got {action.shape}"
+                f"Raw offline action after arm-layout projection must be "
+                f"{int(action_dim)}D, got {action.shape}"
             )
         return action
     raise ValueError("Raw offline step missing expert action")
@@ -866,16 +902,29 @@ def _base_chunk_from_step(
     step: dict[str, Any],
     *,
     chunk_horizon: int,
+    action_dim: int,
+    arm_layout: str,
 ) -> np.ndarray | None:
     for key in ("base_chunk", "base_action_chunk"):
         value = step.get(key, None)
         if value is None:
             continue
-        return prepare_base_actions_chunk(
+        prepared = prepare_base_actions_chunk(
             base_actions=np.asarray(value, dtype=np.float32),
             chunk_horizon=chunk_horizon,
             source=f"raw offline {key}",
         )
+        projected = project_chunk_to_layout(
+            prepared,
+            arm_layout,
+            source_name=f"raw offline {key}",
+        )
+        if int(projected.shape[1]) != int(action_dim):
+            raise ValueError(
+                f"Raw offline {key} after arm-layout projection must have "
+                f"action_dim={int(action_dim)}, got {projected.shape}"
+            )
+        return projected
     return None
 
 
@@ -886,6 +935,7 @@ def _precompute_base_chunks_for_steps(
     base_policy: Any,
     chunk_horizon: int,
     action_dim: int,
+    arm_layout: str,
     source_path: Path,
 ) -> np.ndarray:
     precomputed_chunks: list[np.ndarray] = []
@@ -895,6 +945,8 @@ def _precompute_base_chunks_for_steps(
         maybe_base_chunk = _base_chunk_from_step(
             step,
             chunk_horizon=int(chunk_horizon),
+            action_dim=int(action_dim),
+            arm_layout=arm_layout,
         )
         if maybe_base_chunk is None:
             missing_indices.append(int(step_idx))
@@ -982,6 +1034,7 @@ def prepare_reference_episode_transitions(
     clip_residual_to_unit: bool,
     filter_unrepresentable_steps: bool,
     source_path: Path,
+    arm_layout: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     num_steps = int(len(raw_steps))
     if num_steps <= 0:
@@ -993,6 +1046,7 @@ def prepare_reference_episode_transitions(
         base_policy=base_policy,
         chunk_horizon=int(action_spec.chunk_horizon),
         action_dim=int(action_spec.full_action_dim),
+        arm_layout=arm_layout,
         source_path=source_path,
     )
     if base_chunks_per_step.shape[:2] != (
@@ -1015,7 +1069,7 @@ def prepare_reference_episode_transitions(
         obs_raw = _raw_obs_from_step(raw_step, source_path=source_path)
         base_chunk = np.asarray(base_chunks_per_step[step_idx], dtype=np.float32)
         residual_obs = build_chunk_residual_obs(
-            robot_state=build_agibot_state(obs_raw),
+            robot_state=build_agibot_layout_state(obs_raw, arm_layout=arm_layout),
             images=extract_agibot_residual_images(
                 obs_raw,
                 image_keys=image_keys,
@@ -1029,6 +1083,7 @@ def prepare_reference_episode_transitions(
             expert_action=_expert_action_from_step(
                 raw_step,
                 action_dim=int(action_spec.full_action_dim),
+                arm_layout=arm_layout,
             ),
             base_action=base_chunk[0],
             action_spec=action_spec,
@@ -1062,7 +1117,10 @@ def prepare_reference_episode_transitions(
                 )
             next_base_chunk = np.asarray(base_chunks_per_step[step_idx + 1], dtype=np.float32)
             next_residual_obs = build_chunk_residual_obs(
-                robot_state=build_agibot_state(next_obs_raw),
+                robot_state=build_agibot_layout_state(
+                    next_obs_raw,
+                    arm_layout=arm_layout,
+                ),
                 images=extract_agibot_residual_images(
                     next_obs_raw,
                     image_keys=image_keys,
@@ -1123,6 +1181,11 @@ def write_manifest(
             "type": resolve_policy_backend_type(cfg),
             "id": resolve_policy_backend_id(cfg),
             "backend": describe_policy_backend(cfg),
+        },
+        "env": {
+            "arm_layout": str(cfg.env.arm_layout),
+            "action_dim": int(cfg.env.action_dim),
+            "robot_action_dim": int(cfg.env.robot_action_dim),
         },
         "residual": {
             "alpha": float(cfg.residual.alpha),

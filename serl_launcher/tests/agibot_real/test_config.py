@@ -39,6 +39,9 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertEqual(parsed.offline.ratio, 0.5)
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
         self.assertFalse(parsed.action_filter.enabled)
+        self.assertEqual(parsed.env.arm_layout, "dual_arm")
+        self.assertEqual(parsed.env.action_dim, 14)
+        self.assertEqual(parsed.env.robot_action_dim, 14)
         self.assertEqual(parsed.action_filter.alpha, 0.25)
         self.assertIsNone(parsed.action_filter.max_delta)
         self.assertEqual(parsed.action_filter.warmup_steps, 0)
@@ -113,7 +116,7 @@ class AgiBotConfigTest(unittest.TestCase):
 
         self.assertEqual(parsed.wandb.entity, "robotics")
 
-    def test_parse_train_cfg_accepts_right_arm_policy_action_layout(self) -> None:
+    def test_parse_train_cfg_accepts_right_arm_layout(self) -> None:
         cfg = OmegaConf.load(
             Path(__file__).resolve().parents[3]
             / "examples"
@@ -123,10 +126,44 @@ class AgiBotConfigTest(unittest.TestCase):
         )
         cfg.policy.type = "openpi"
         cfg.policy.action_layout = "right_arm"
+        cfg.env.arm_layout = "right_arm"
+        cfg.env.action_dim = 7
+        cfg.residual.action_mask = [True] * 7
+        cfg.residual.action_limits = [1.0] * 7
 
         parsed = parse_train_cfg(cfg)
 
+        self.assertEqual(parsed.env.arm_layout, "right_arm")
+        self.assertEqual(parsed.env.action_dim, 7)
         self.assertEqual(parsed.policy.action_layout, "right_arm")
+
+    def test_parse_train_cfg_rejects_policy_env_layout_conflict(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.policy.action_layout = "right_arm"
+        cfg.env.arm_layout = "dual_arm"
+
+        with self.assertRaisesRegex(ValueError, "policy.action_layout must match"):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_rejects_single_arm_14d_action_dim(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.policy.action_layout = "right_arm"
+        cfg.env.arm_layout = "right_arm"
+
+        with self.assertRaisesRegex(ValueError, "requires env.action_dim=7"):
+            parse_train_cfg(cfg)
 
     def test_parse_train_cfg_debug_disables_wandb_mode(self) -> None:
         cfg = OmegaConf.load(

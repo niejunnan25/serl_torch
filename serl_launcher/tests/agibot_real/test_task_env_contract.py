@@ -45,6 +45,9 @@ def _make_env(*, terminal_signal: str | None = None) -> AgiBotTaskEnv:
     env._controller_cfg = {"poll_interval_sec": 0.05}
     env._last_obs = {"dummy": 1}
     env._success_hook_spec = "fake:success_hook"
+    env._arm_layout = "dual_arm"
+    env._action_dim = 14
+    env._robot_action_dim = 14
     return env
 
 
@@ -107,6 +110,23 @@ class AgiBotTaskEnvContractTest(unittest.TestCase):
         self.assertFalse(result["done"])
         self.assertFalse(result["truncated"])
         self.assertFalse(result["success"])
+
+    def test_right_arm_logical_action_embeds_with_current_left_state(self) -> None:
+        env = _make_env(terminal_signal=None)
+        env._arm_layout = "right_arm"
+        env._action_dim = 7
+        env._robot_action_dim = 14
+        current_pose = list(range(14))
+        env._get_obs = lambda: {"state/pose": current_pose}  # type: ignore[method-assign]
+
+        robot_action = env._logical_action_to_robot_action(
+            [70, 71, 72, 73, 74, 75, 76]
+        )
+
+        self.assertEqual(
+            robot_action.tolist(),
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 70.0, 71.0, 72.0, 73.0, 74.0, 75.0, 76.0],
+        )
 
     def test_late_terminal_override_keeps_controller_terminal_signal(self) -> None:
         env = _make_env(terminal_signal=None)

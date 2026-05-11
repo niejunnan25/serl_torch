@@ -17,6 +17,7 @@ WORKSPACE_PACKAGES = [
     "serl_torch.examples.agibot_real",
     "serl_torch.examples.agibot_real.env",
     "serl_torch.examples.agibot_real.robot",
+    "serl_torch.examples.agibot_real.runtime",
 ]
 
 

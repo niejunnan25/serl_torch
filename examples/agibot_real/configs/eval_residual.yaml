@@ -17,7 +17,7 @@ policy:
   host: 127.0.0.1
   port: 30001
   id: pi05_agibot
-  action_layout: full
+  action_layout: dual_arm
 
 robot:
   assets_root: null
@@ -38,7 +38,9 @@ controller:
     help: h
 
 env:
+  arm_layout: dual_arm
   action_dim: 14
+  robot_action_dim: 14
   backend: local
 
 obs:

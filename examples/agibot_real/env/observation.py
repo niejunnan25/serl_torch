@@ -6,10 +6,15 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from .arm_layout import AGIBOT_ARM_ACTION_DIM
+from .arm_layout import AGIBOT_ROBOT_ACTION_DIM
+from .arm_layout import ARM_LAYOUT_LEFT
+from .arm_layout import ARM_LAYOUT_RIGHT
+from .arm_layout import project_vector_to_layout
 from .schema import resolve_agibot_image_keys
 
-AGIBOT_STATE_DIM = 14
-AGIBOT_ARM_STATE_DIM = 7
+AGIBOT_STATE_DIM = AGIBOT_ROBOT_ACTION_DIM
+AGIBOT_ARM_STATE_DIM = AGIBOT_ARM_ACTION_DIM
 AGIBOT_LEFT_ARM_STATE_SLICE = slice(0, 7)
 AGIBOT_RIGHT_ARM_STATE_SLICE = slice(7, 14)
 AGIBOT_JOYRA_STATE_DIM = 18
@@ -82,6 +87,18 @@ def build_agibot_right_arm_state(obs: dict[str, Any]) -> np.ndarray:
     )
 
 
+def build_agibot_layout_state(obs: dict[str, Any], *, arm_layout: str) -> np.ndarray:
+    pose = np.asarray(
+        _find_first_key(obs, ("state/pose", "observation/state", "pose")),
+        dtype=np.float32,
+    ).reshape(-1)
+    return project_vector_to_layout(
+        pose,
+        arm_layout,
+        source_name="AgiBot camera-position state",
+    )
+
+
 def build_agibot_joyra_state(obs: dict[str, Any]) -> np.ndarray | None:
     head = _maybe_find_first_key(obs, ("state/head", "head_state", "head"))
     waist = _maybe_find_first_key(obs, ("state/waist", "waist_state", "waist"))
@@ -104,6 +121,21 @@ def build_agibot_joyra_state(obs: dict[str, Any]) -> np.ndarray | None:
             f"AgiBot JoyRA state must be {AGIBOT_JOYRA_STATE_DIM}D, got {joyra_state.shape}"
         )
     return np.asarray(joyra_state, dtype=np.float32)
+
+
+def build_agibot_layout_joyra_state(
+    obs: dict[str, Any],
+    *,
+    arm_layout: str,
+) -> np.ndarray | None:
+    if arm_layout in {ARM_LAYOUT_LEFT, ARM_LAYOUT_RIGHT}:
+        pose = np.asarray(
+            _find_first_key(obs, ("state/pose", "observation/state", "pose")),
+            dtype=np.float32,
+        ).reshape(-1)
+        if int(pose.shape[0]) != AGIBOT_STATE_DIM:
+            return None
+    return build_agibot_joyra_state(obs)
 
 
 def extract_agibot_policy_images(obs: dict[str, Any]) -> dict[str, np.ndarray]:
@@ -160,6 +192,8 @@ __all__ = [
     "RESIDUAL_IMAGE_HEIGHT",
     "RESIDUAL_IMAGE_WIDTH",
     "build_agibot_joyra_state",
+    "build_agibot_layout_joyra_state",
+    "build_agibot_layout_state",
     "build_agibot_right_arm_state",
     "build_agibot_state",
     "extract_agibot_policy_images",

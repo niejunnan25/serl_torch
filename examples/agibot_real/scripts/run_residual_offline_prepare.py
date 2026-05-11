@@ -123,7 +123,10 @@ def prepare_offline_data(
             leave=True,
         )
         for episode_index, episode_source_path in episode_iter:
-            raw_steps = load_reference_raw_episode_steps(episode_source_path)
+            raw_steps = load_reference_raw_episode_steps(
+                episode_source_path,
+                arm_layout=cfg.env.arm_layout,
+            )
             transitions, episode_stats = prepare_reference_episode_transitions(
                 raw_steps=raw_steps,
                 episode_id=int(episode_index),
@@ -137,6 +140,7 @@ def prepare_offline_data(
                     cfg.offline.prepare.filter_unrepresentable_steps
                 ),
                 source_path=episode_source_path,
+                arm_layout=cfg.env.arm_layout,
             )
             prepare_stats["episodes_total"] = int(prepare_stats["episodes_total"]) + 1
             prepare_stats["steps_total"] = int(prepare_stats["steps_total"]) + int(

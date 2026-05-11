@@ -40,7 +40,7 @@ policy:
   host: 127.0.0.1
   port: 9001
   id: joyra_office_setting
-  action_layout: full
+  action_layout: dual_arm
 
 backfill_policy:
   enabled: true
@@ -68,7 +68,9 @@ controller:
     help: h
 
 env:
+  arm_layout: dual_arm
   action_dim: 14
+  robot_action_dim: 14
   backend: local
 
 obs:

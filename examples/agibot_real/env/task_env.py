@@ -14,6 +14,12 @@ from typing import Tuple
 
 import numpy as np
 
+from .arm_layout import AGIBOT_ROBOT_ACTION_DIM
+from .arm_layout import ARM_LAYOUT_DUAL
+from .arm_layout import embed_logical_action
+from .arm_layout import get_arm_layout_spec
+from .arm_layout import normalize_arm_layout
+from .arm_layout import validate_arm_layout_dims
 from .controller import ExecutedTransition
 from .controller import ManualEpisodeController
 from .controller import STATE_RUNNING
@@ -57,7 +63,9 @@ class AgiBotTaskEnv:
         *,
         task_name: str,
         prompt: str,
+        arm_layout: str = ARM_LAYOUT_DUAL,
         action_dim: int = 14,
+        robot_action_dim: int = AGIBOT_ROBOT_ACTION_DIM,
         control_mode: str = "camera_position",
         hz: float = 20.0,
         use_smooth_trajectory: bool = False,
@@ -83,15 +91,18 @@ class AgiBotTaskEnv:
             if trajectory_time is not None
             else (1.0 / self.hz) * 2.0
         )
+        self._arm_layout = normalize_arm_layout(arm_layout)
         self._action_dim = int(action_dim)
+        self._robot_action_dim = int(robot_action_dim)
         if self.control_mode != "camera_position":
             raise ValueError(
                 f"AgiBot residual RL currently supports only camera_position mode, got {control_mode!r}"
             )
-        if self._action_dim != 14:
-            raise ValueError(
-                f"AgiBot camera_position mode expects env.action_dim=14, got {self._action_dim}"
-            )
+        validate_arm_layout_dims(
+            arm_layout=self._arm_layout,
+            action_dim=self._action_dim,
+            robot_action_dim=self._robot_action_dim,
+        )
         retargeter_urdf_path = _resolve_robot_asset_path(
             retargeter_urdf_path,
             assets_root=assets_root,
@@ -178,6 +189,14 @@ class AgiBotTaskEnv:
         return int(self._action_dim)
 
     @property
+    def robot_action_dim(self) -> int:
+        return int(self._robot_action_dim)
+
+    @property
+    def arm_layout(self) -> str:
+        return str(self._arm_layout)
+
+    @property
     def controller_enabled(self) -> bool:
         return bool(self._controller_enabled)
 
@@ -242,9 +261,9 @@ class AgiBotTaskEnv:
 
     def _step_cartesian(self, action: np.ndarray) -> None:
         action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
-        if action_arr.shape[0] != 14:
+        if action_arr.shape[0] != self._robot_action_dim:
             raise ValueError(
-                f"camera_position action must be 14D, got {action_arr.shape}"
+                f"camera_position action must be {self._robot_action_dim}D, got {action_arr.shape}"
             )
         hand_left, hand_right = float(action_arr[6]), float(action_arr[13])
         head_states = np.asarray(
@@ -297,6 +316,38 @@ class AgiBotTaskEnv:
             hand_action,
             trajectory_reference_time=self.trajectory_time,
         )
+
+    def _logical_action_to_robot_action(self, action: np.ndarray) -> np.ndarray:
+        logical_action = np.asarray(action, dtype=np.float32).reshape(-1)
+        spec = get_arm_layout_spec(self._arm_layout)
+        if int(logical_action.shape[0]) != int(spec.action_dim):
+            raise ValueError(
+                f"Logical action for env.arm_layout={self._arm_layout!r} must be "
+                f"{spec.action_dim}D, got {logical_action.shape}"
+            )
+        if self._arm_layout == ARM_LAYOUT_DUAL:
+            return np.asarray(logical_action, dtype=np.float32)
+        return embed_logical_action(
+            logical_action,
+            self._get_current_pose_state(),
+            self._arm_layout,
+        )
+
+    def _get_current_pose_state(self) -> np.ndarray:
+        try:
+            joint_state = self.robot_node.get_joint_state()
+            if joint_state is not None:
+                return np.asarray(
+                    self._compute_pose_state(np.asarray(joint_state, dtype=np.float32))[
+                        "state/pose"
+                    ],
+                    dtype=np.float32,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        if self._last_obs is not None and "state/pose" in self._last_obs:
+            return np.asarray(self._last_obs["state/pose"], dtype=np.float32)
+        return np.asarray(self._get_obs()["state/pose"], dtype=np.float32)
 
     def _controller_error_obs(self) -> Dict[str, Any]:
         obs = self._controller_cached_obs()
@@ -362,7 +413,9 @@ class AgiBotTaskEnv:
             queued = self._controller.pop_next_action()
             if queued is not None:
                 try:
-                    self._step_cartesian(queued.action)
+                    self._step_cartesian(
+                        self._logical_action_to_robot_action(queued.action)
+                    )
                     self._take_action_cnt += 1
                     obs = self._get_obs()
                     step_result = self._resolve_step_result(
@@ -753,7 +806,7 @@ class AgiBotTaskEnv:
                 bool(payload["truncated"]),
                 dict(payload["info"]),
             )
-        self._step_cartesian(action)
+        self._step_cartesian(self._logical_action_to_robot_action(action))
         self._take_action_cnt += 1
         obs = self._get_obs()
         step_result = self._resolve_step_result(

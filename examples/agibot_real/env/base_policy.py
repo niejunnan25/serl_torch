@@ -11,22 +11,27 @@ from serl_launcher.policy.base import PolicyInferInfo
 from serl_launcher.policy.typed_factory import describe_policy_backend
 from serl_launcher.policy.typed_factory import resolve_policy_backend_type
 
-from .observation import AGIBOT_ARM_STATE_DIM
-from .observation import AGIBOT_RIGHT_ARM_STATE_SLICE
-from .observation import AGIBOT_STATE_DIM
-from .observation import build_agibot_state
+from .arm_layout import AGIBOT_ROBOT_ACTION_DIM
+from .arm_layout import ARM_LAYOUT_DUAL
+from .arm_layout import ARM_LAYOUT_LEFT
+from .arm_layout import ARM_LAYOUT_RIGHT
+from .arm_layout import get_arm_layout_spec
+from .arm_layout import normalize_arm_layout
+from .arm_layout import project_chunk_to_layout
 from .policy_input import build_agibot_policy_input
 
 JOYRA_RAW_ACTION_DIM = 18
-POLICY_ACTION_LAYOUT_FULL = "full"
-POLICY_ACTION_LAYOUT_RIGHT_ARM = "right_arm"
+POLICY_ACTION_LAYOUT_DUAL = ARM_LAYOUT_DUAL
+POLICY_ACTION_LAYOUT_FULL = ARM_LAYOUT_DUAL
+POLICY_ACTION_LAYOUT_LEFT_ARM = ARM_LAYOUT_LEFT
+POLICY_ACTION_LAYOUT_RIGHT_ARM = ARM_LAYOUT_RIGHT
 
 
 def _canonicalize_action_chunk(
     *,
     raw_actions: np.ndarray,
     backend_type: str,
-    action_dim: int,
+    arm_layout: str,
     chunk_horizon: int,
 ) -> np.ndarray:
     raw_actions_array = np.asarray(raw_actions, dtype=np.float32)
@@ -40,48 +45,35 @@ def _canonicalize_action_chunk(
             f"{backend_type} policy returned only {int(raw_actions_array.shape[0])} actions, "
             f"expected at least chunk_horizon={int(chunk_horizon)}"
         )
-    if int(raw_actions_array.shape[1]) < int(action_dim):
+    if (
+        backend_type == "joyra"
+        and int(raw_actions_array.shape[1]) < AGIBOT_ROBOT_ACTION_DIM
+    ):
         raise ValueError(
-            f"{backend_type} policy returned action_dim={int(raw_actions_array.shape[1])}, "
-            f"smaller than canonical action_dim={int(action_dim)}"
-        )
-    if backend_type == "joyra" and int(raw_actions_array.shape[1]) < JOYRA_RAW_ACTION_DIM:
-        raise ValueError(
-            "JoyRA policy must expose its raw 18D action chunk before AgiBot canonicalization, "
+            "JoyRA policy must expose at least a canonical 14D action chunk, "
             f"got shape {raw_actions_array.shape}"
         )
+    if backend_type == "joyra":
+        canonical_chunk = raw_actions_array[
+            : int(chunk_horizon),
+            :AGIBOT_ROBOT_ACTION_DIM,
+        ]
+        return project_chunk_to_layout(
+            canonical_chunk,
+            arm_layout,
+            source_name="JoyRA canonical action chunk",
+        )
+
+    spec = get_arm_layout_spec(arm_layout)
+    if int(raw_actions_array.shape[1]) < int(spec.action_dim):
+        raise ValueError(
+            f"{backend_type} policy returned action_dim={int(raw_actions_array.shape[1])}, "
+            f"smaller than logical action_dim={int(spec.action_dim)}"
+        )
     return np.asarray(
-        raw_actions_array[: int(chunk_horizon), : int(action_dim)],
+        raw_actions_array[: int(chunk_horizon), : int(spec.action_dim)],
         dtype=np.float32,
     )
-
-
-def _normalize_action_layout(action_layout: Any) -> str:
-    layout = str(action_layout or POLICY_ACTION_LAYOUT_FULL).strip().lower()
-    if layout in {"", POLICY_ACTION_LAYOUT_FULL, "dual_arm", "bimanual"}:
-        return POLICY_ACTION_LAYOUT_FULL
-    if layout in {
-        POLICY_ACTION_LAYOUT_RIGHT_ARM,
-        "right",
-        "right_hand",
-        "right_arm_camera_position",
-        "right_hand_camera_position",
-    }:
-        return POLICY_ACTION_LAYOUT_RIGHT_ARM
-    raise ValueError(
-        "policy.action_layout must be one of "
-        f"'{POLICY_ACTION_LAYOUT_FULL}' or '{POLICY_ACTION_LAYOUT_RIGHT_ARM}', "
-        f"got {action_layout!r}"
-    )
-
-
-def _infer_action_layout_from_policy_id(policy_id: Any) -> str | None:
-    if policy_id is None:
-        return None
-    token = str(policy_id).strip().lower()
-    if "right" in token and ("hand" in token or "arm" in token):
-        return POLICY_ACTION_LAYOUT_RIGHT_ARM
-    return None
 
 
 def _resolve_prompts(prompt: str | Sequence[str], count: int) -> list[str]:
@@ -93,40 +85,11 @@ def _resolve_prompts(prompt: str | Sequence[str], count: int) -> list[str]:
     return prompts
 
 
-def _canonicalize_right_arm_action_chunk(
-    *,
-    raw_actions: np.ndarray,
-    obs: dict[str, Any],
-    backend_type: str,
-    action_dim: int,
-    chunk_horizon: int,
-) -> np.ndarray:
-    if int(action_dim) != AGIBOT_STATE_DIM:
-        raise ValueError(
-            "Right-arm OpenPI adaptation expects canonical AgiBot action_dim="
-            f"{AGIBOT_STATE_DIM}, got {int(action_dim)}"
-        )
-    right_actions = _canonicalize_action_chunk(
-        raw_actions=raw_actions,
-        backend_type=backend_type,
-        action_dim=AGIBOT_ARM_STATE_DIM,
-        chunk_horizon=chunk_horizon,
-    )
-    current_state = build_agibot_state(obs)
-    full_actions = np.repeat(
-        current_state.reshape(1, AGIBOT_STATE_DIM),
-        repeats=int(chunk_horizon),
-        axis=0,
-    ).astype(np.float32, copy=False)
-    full_actions[:, AGIBOT_RIGHT_ARM_STATE_SLICE] = right_actions
-    return np.asarray(full_actions, dtype=np.float32)
-
-
 def canonicalize_agibot_action_chunks(
     *,
     raw_actions: Sequence[np.ndarray] | np.ndarray,
     backend_type: str,
-    action_dim: int,
+    arm_layout: str,
     chunk_horizon: int,
 ) -> list[np.ndarray]:
     raw_actions_array = np.asarray(raw_actions, dtype=np.float32)
@@ -135,7 +98,7 @@ def canonicalize_agibot_action_chunks(
             _canonicalize_action_chunk(
                 raw_actions=raw_actions_array,
                 backend_type=backend_type,
-                action_dim=action_dim,
+                arm_layout=arm_layout,
                 chunk_horizon=chunk_horizon,
             )
         ]
@@ -147,7 +110,7 @@ def canonicalize_agibot_action_chunks(
         _canonicalize_action_chunk(
             raw_actions=raw_actions_array[idx],
             backend_type=backend_type,
-            action_dim=action_dim,
+            arm_layout=arm_layout,
             chunk_horizon=chunk_horizon,
         )
         for idx in range(int(raw_actions_array.shape[0]))
@@ -156,12 +119,12 @@ def canonicalize_agibot_action_chunks(
 
 @dataclass(slots=True)
 class AgiBotBasePolicy:
-    """Backend adapter that always exposes canonical AgiBot 14D action chunks.
+    """Backend adapter that exposes layout-specific logical action chunks.
 
     当前这层逻辑仍然保留在 example 内部，而不是迁到 shared policy factory。
-    原因是 AgiBot 真实机器人目前需要在这里把 OpenPI/JoyRA 的输入输出
-    统一到同一个 canonical 14D dual-arm action chunk 约定，属于 example-
-    local 语义，不适合在第一轮对齐里直接抽成共享基础设施。
+    原因是 AgiBot 真实机器人目前需要在这里把 OpenPI/JoyRA 的输入输出按
+    arm layout 统一成 residual 训练使用的逻辑动作维度，属于 example-local
+    语义。
     """
 
     _client: Any
@@ -191,29 +154,17 @@ class AgiBotBasePolicy:
     def action_layout(self) -> str:
         return str(self._action_layout)
 
-    def _policy_state_slice(self) -> slice | None:
-        if self._action_layout == POLICY_ACTION_LAYOUT_RIGHT_ARM:
-            return AGIBOT_RIGHT_ARM_STATE_SLICE
-        return None
-
     def _canonicalize_client_actions(
         self,
         raw_actions: np.ndarray,
         *,
-        obs: dict[str, Any],
+        obs: dict[str, Any] | None = None,
     ) -> np.ndarray:
-        if self._action_layout == POLICY_ACTION_LAYOUT_RIGHT_ARM:
-            return _canonicalize_right_arm_action_chunk(
-                raw_actions=raw_actions,
-                obs=obs,
-                backend_type=self._backend_type,
-                action_dim=self._action_dim,
-                chunk_horizon=self._chunk_horizon,
-            )
+        del obs
         return _canonicalize_action_chunk(
             raw_actions=raw_actions,
             backend_type=self._backend_type,
-            action_dim=self._action_dim,
+            arm_layout=self._action_layout,
             chunk_horizon=self._chunk_horizon,
         )
 
@@ -226,7 +177,7 @@ class AgiBotBasePolicy:
         policy_input = build_agibot_policy_input(
             obs,
             prompt,
-            state_slice=self._policy_state_slice(),
+            arm_layout=self._action_layout,
         )
         raw_actions, infer_info = self._client.infer(policy_input)
         canonical_actions = self._canonicalize_client_actions(raw_actions, obs=obs)
@@ -236,7 +187,7 @@ class AgiBotBasePolicy:
                 "backend_type": self._backend_type,
                 "backend": self._description,
                 "action_layout": self._action_layout,
-                "canonical_action_dim": int(self._action_dim),
+                "logical_action_dim": int(self._action_dim),
                 "canonical_chunk_horizon": int(self._chunk_horizon),
                 "raw_action_dim": int(np.asarray(raw_actions).shape[-1]),
             }
@@ -269,7 +220,7 @@ class AgiBotBasePolicy:
                 "backend_type": self._backend_type,
                 "backend": self._description,
                 "action_layout": self._action_layout,
-                "canonical_action_dim": int(self._action_dim),
+                "logical_action_dim": int(self._action_dim),
                 "canonical_chunk_horizon": int(self._chunk_horizon),
                 "batch_size": len(chunks),
                 "fallback_serial": True,
@@ -279,7 +230,7 @@ class AgiBotBasePolicy:
             build_agibot_policy_input(
                 obs,
                 item_prompt,
-                state_slice=self._policy_state_slice(),
+                arm_layout=self._action_layout,
             )
             for obs, item_prompt in zip(observations_list, prompts, strict=True)
         ]
@@ -309,7 +260,7 @@ class AgiBotBasePolicy:
                 "backend_type": self._backend_type,
                 "backend": self._description,
                 "action_layout": self._action_layout,
-                "canonical_action_dim": int(self._action_dim),
+                "logical_action_dim": int(self._action_dim),
                 "canonical_chunk_horizon": int(self._chunk_horizon),
                 "raw_action_dim": int(np.asarray(raw_chunks_list[0]).shape[-1]),
                 "batch_size": len(canonical_chunks),
@@ -339,17 +290,22 @@ def build_agibot_base_policy(
     port = int(cfg.policy.port) if port is None else int(port)
     action_dim = int(cfg.env.action_dim)
     chunk_horizon = int(cfg.residual.chunk_horizon)
-    configured_layout = getattr(cfg.policy, "action_layout", POLICY_ACTION_LAYOUT_FULL)
-    action_layout = _normalize_action_layout(configured_layout)
-    if action_layout == POLICY_ACTION_LAYOUT_FULL:
-        inferred_layout = _infer_action_layout_from_policy_id(
-            getattr(cfg.policy, "id", None)
-        )
-        if backend_type == "openpi" and inferred_layout is not None:
-            action_layout = inferred_layout
-    if backend_type != "openpi" and action_layout != POLICY_ACTION_LAYOUT_FULL:
+    action_layout = normalize_arm_layout(
+        getattr(cfg.env, "arm_layout", getattr(cfg.policy, "action_layout", ARM_LAYOUT_DUAL))
+    )
+    configured_policy_layout = normalize_arm_layout(
+        getattr(cfg.policy, "action_layout", action_layout)
+    )
+    if configured_policy_layout != action_layout:
         raise ValueError(
-            f"policy.action_layout={action_layout!r} is only supported for OpenPI"
+            "policy.action_layout must match env.arm_layout: "
+            f"{configured_policy_layout!r} != {action_layout!r}"
+        )
+    spec = get_arm_layout_spec(action_layout)
+    if action_dim != int(spec.action_dim):
+        raise ValueError(
+            f"env.arm_layout={action_layout!r} requires env.action_dim={spec.action_dim}, "
+            f"got {action_dim}"
         )
 
     if backend_type == "openpi":
@@ -358,11 +314,7 @@ def build_agibot_base_policy(
         client = OpenPIPolicyClient(
             host=host,
             port=port,
-            action_dim=(
-                AGIBOT_ARM_STATE_DIM
-                if action_layout == POLICY_ACTION_LAYOUT_RIGHT_ARM
-                else action_dim
-            ),
+            action_dim=int(spec.action_dim),
             logger=logger,
         )
     elif backend_type == "joyra":
@@ -389,7 +341,9 @@ def build_agibot_base_policy(
 
 __all__ = [
     "AgiBotBasePolicy",
+    "POLICY_ACTION_LAYOUT_DUAL",
     "POLICY_ACTION_LAYOUT_FULL",
+    "POLICY_ACTION_LAYOUT_LEFT_ARM",
     "POLICY_ACTION_LAYOUT_RIGHT_ARM",
     "build_agibot_base_policy",
     "canonicalize_agibot_action_chunks",

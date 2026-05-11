@@ -58,6 +58,7 @@ def _fake_agibot_cfg(*, async_enabled: bool) -> SimpleNamespace:
             image_keys=("image_rgb_0", "image_rgb_1", "image_rgb_2"),
         ),
         residual=SimpleNamespace(alpha=0.2),
+        env=SimpleNamespace(arm_layout="dual_arm"),
         backfill_policy=SimpleNamespace(
             enabled=bool(async_enabled),
             mode="thread",

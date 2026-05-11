@@ -14,8 +14,8 @@ if str(SERL_LAUNCHER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 from serl_torch.examples.agibot_real.env.base_policy import AgiBotBasePolicy
+from serl_torch.examples.agibot_real.env.base_policy import POLICY_ACTION_LAYOUT_DUAL
 from serl_torch.examples.agibot_real.env.base_policy import POLICY_ACTION_LAYOUT_RIGHT_ARM
-from serl_torch.examples.agibot_real.env.observation import AGIBOT_RIGHT_ARM_STATE_SLICE
 from serl_torch.examples.agibot_real.env.policy_input import build_agibot_policy_input
 
 
@@ -47,11 +47,11 @@ class _FakeRightArmClient:
 
 
 class AgiBotBasePolicyTest(unittest.TestCase):
-    def test_build_policy_input_can_slice_right_arm_state(self) -> None:
+    def test_build_policy_input_can_project_right_arm_state(self) -> None:
         policy_input = build_agibot_policy_input(
             _make_raw_obs(),
             "pick",
-            state_slice=AGIBOT_RIGHT_ARM_STATE_SLICE,
+            arm_layout=POLICY_ACTION_LAYOUT_RIGHT_ARM,
         )
 
         np.testing.assert_array_equal(
@@ -59,7 +59,7 @@ class AgiBotBasePolicyTest(unittest.TestCase):
             np.asarray([7, 8, 9, 10, 11, 12, 13], dtype=np.float32),
         )
 
-    def test_right_arm_openpi_actions_are_embedded_in_canonical_14d_chunk(self) -> None:
+    def test_right_arm_openpi_actions_remain_logical_7d_chunk(self) -> None:
         raw_right_actions = np.asarray(
             [
                 [70, 71, 72, 73, 74, 75, 76],
@@ -72,30 +72,23 @@ class AgiBotBasePolicyTest(unittest.TestCase):
             _client=client,
             _backend_type="openpi",
             _description="openpi:right-arm",
-            _action_dim=14,
+            _action_dim=7,
             _chunk_horizon=2,
             _action_layout=POLICY_ACTION_LAYOUT_RIGHT_ARM,
         )
 
         chunk, info = policy.infer(_make_raw_obs(), prompt="pick")
 
-        expected = np.asarray(
-            [
-                [0, 1, 2, 3, 4, 5, 6, 70, 71, 72, 73, 74, 75, 76],
-                [0, 1, 2, 3, 4, 5, 6, 80, 81, 82, 83, 84, 85, 86],
-            ],
-            dtype=np.float32,
-        )
-        np.testing.assert_array_equal(chunk, expected)
+        np.testing.assert_array_equal(chunk, raw_right_actions)
         np.testing.assert_array_equal(
             client.seen_state,
             np.asarray([7, 8, 9, 10, 11, 12, 13], dtype=np.float32),
         )
         self.assertEqual(info["action_layout"], POLICY_ACTION_LAYOUT_RIGHT_ARM)
-        self.assertEqual(info["canonical_action_dim"], 14)
+        self.assertEqual(info["logical_action_dim"], 7)
         self.assertEqual(info["raw_action_dim"], 7)
 
-    def test_right_arm_openpi_infer_many_embeds_each_chunk(self) -> None:
+    def test_right_arm_openpi_infer_many_returns_logical_chunks(self) -> None:
         raw_right_actions = np.asarray(
             [
                 [70, 71, 72, 73, 74, 75, 76],
@@ -108,7 +101,7 @@ class AgiBotBasePolicyTest(unittest.TestCase):
             _client=client,
             _backend_type="openpi",
             _description="openpi:right-arm",
-            _action_dim=14,
+            _action_dim=7,
             _chunk_horizon=2,
             _action_layout=POLICY_ACTION_LAYOUT_RIGHT_ARM,
         )
@@ -118,16 +111,9 @@ class AgiBotBasePolicyTest(unittest.TestCase):
             prompt=["pick", "place"],
         )
 
-        expected = np.asarray(
-            [
-                [0, 1, 2, 3, 4, 5, 6, 70, 71, 72, 73, 74, 75, 76],
-                [0, 1, 2, 3, 4, 5, 6, 80, 81, 82, 83, 84, 85, 86],
-            ],
-            dtype=np.float32,
-        )
         self.assertEqual(len(chunks), 2)
-        np.testing.assert_array_equal(chunks[0], expected)
-        np.testing.assert_array_equal(chunks[1], expected)
+        np.testing.assert_array_equal(chunks[0], raw_right_actions)
+        np.testing.assert_array_equal(chunks[1], raw_right_actions)
         self.assertEqual(len(client.seen_states), 2)
         for seen_state in client.seen_states:
             np.testing.assert_array_equal(
@@ -136,6 +122,74 @@ class AgiBotBasePolicyTest(unittest.TestCase):
             )
         self.assertEqual(info["action_layout"], POLICY_ACTION_LAYOUT_RIGHT_ARM)
         self.assertEqual(info["batch_size"], 2)
+
+    def test_joyra_dual_arm_uses_first_14_raw_dimensions(self) -> None:
+        raw_actions = np.asarray(
+            [
+                list(range(18)),
+                list(range(20, 38)),
+            ],
+            dtype=np.float32,
+        )
+        client = _FakeRightArmClient(raw_actions)
+        policy = AgiBotBasePolicy(
+            _client=client,
+            _backend_type="joyra",
+            _description="joyra",
+            _action_dim=14,
+            _chunk_horizon=2,
+            _action_layout=POLICY_ACTION_LAYOUT_DUAL,
+        )
+
+        chunk, info = policy.infer(_make_raw_obs(), prompt="pick")
+
+        np.testing.assert_array_equal(chunk, raw_actions[:, :14])
+        self.assertEqual(info["logical_action_dim"], 14)
+
+    def test_joyra_right_arm_slices_canonical_output_to_logical_7d(self) -> None:
+        raw_actions = np.asarray(
+            [
+                list(range(18)),
+                list(range(20, 38)),
+            ],
+            dtype=np.float32,
+        )
+        client = _FakeRightArmClient(raw_actions)
+        policy = AgiBotBasePolicy(
+            _client=client,
+            _backend_type="joyra",
+            _description="joyra",
+            _action_dim=7,
+            _chunk_horizon=2,
+            _action_layout=POLICY_ACTION_LAYOUT_RIGHT_ARM,
+        )
+
+        chunk, info = policy.infer(_make_raw_obs(), prompt="pick")
+
+        np.testing.assert_array_equal(chunk, raw_actions[:, 7:14])
+        self.assertEqual(info["logical_action_dim"], 7)
+
+    def test_joyra_14d_canonical_output_can_be_projected(self) -> None:
+        raw_actions = np.asarray(
+            [
+                list(range(14)),
+                list(range(20, 34)),
+            ],
+            dtype=np.float32,
+        )
+        client = _FakeRightArmClient(raw_actions)
+        policy = AgiBotBasePolicy(
+            _client=client,
+            _backend_type="joyra",
+            _description="joyra",
+            _action_dim=7,
+            _chunk_horizon=2,
+            _action_layout=POLICY_ACTION_LAYOUT_RIGHT_ARM,
+        )
+
+        chunk, _info = policy.infer(_make_raw_obs(), prompt="pick")
+
+        np.testing.assert_array_equal(chunk, raw_actions[:, 7:14])
 
 
 if __name__ == "__main__":

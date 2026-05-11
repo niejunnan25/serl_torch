@@ -28,8 +28,7 @@ from serl_torch.examples.agibot_real.config import AgiBotEvalConfig
 from serl_torch.examples.agibot_real.config import cfg_to_log_payload
 from serl_torch.examples.agibot_real.env.base_policy import build_agibot_base_policy
 from serl_torch.examples.agibot_real.env.factory import create_env
-from serl_torch.examples.agibot_real.env.observation import AGIBOT_STATE_DIM
-from serl_torch.examples.agibot_real.env.observation import build_agibot_state
+from serl_torch.examples.agibot_real.env.observation import build_agibot_layout_state
 from serl_torch.examples.agibot_real.env.observation import extract_agibot_residual_images
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.agibot_real.env.observation import RESIDUAL_IMAGE_WIDTH
@@ -135,7 +134,7 @@ def run_eval(
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
 
     sample_obs = build_chunk_residual_sample_obs(
-        state_dim=AGIBOT_STATE_DIM,
+        state_dim=action_dim,
         action_dim=action_dim,
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
@@ -235,7 +234,10 @@ def run_eval(
                             prompt=task_prompt,
                         )
                         residual_obs = build_chunk_residual_obs(
-                            robot_state=build_agibot_state(obs),
+                            robot_state=build_agibot_layout_state(
+                                obs,
+                                arm_layout=cfg.env.arm_layout,
+                            ),
                             images=extract_agibot_residual_images(
                                 obs,
                                 image_keys=image_keys,
@@ -301,7 +303,10 @@ def run_eval(
                             prompt=task_prompt,
                         )
                         next_residual_obs = build_chunk_residual_obs(
-                            robot_state=build_agibot_state(next_obs),
+                            robot_state=build_agibot_layout_state(
+                                next_obs,
+                                arm_layout=cfg.env.arm_layout,
+                            ),
                             images=extract_agibot_residual_images(
                                 next_obs,
                                 image_keys=image_keys,
