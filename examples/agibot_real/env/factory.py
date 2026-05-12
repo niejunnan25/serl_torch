@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 from ..config import AgiBotEvalConfig
 from ..config import AgiBotRunConfig
 from ..config import AgiBotTrainConfig
+from .fake_task_env import AgiBotFakeTaskEnv
 from .task_env import AgiBotTaskEnv
 
 
@@ -75,16 +76,24 @@ def _resolve_controller_enabled(cfg: DictConfig | AgiBotRunConfig) -> bool:
 
 def create_env(cfg: DictConfig | AgiBotRunConfig, logger: logging.Logger):
     env_backend = _resolve_env_backend(cfg)
-    if env_backend != "local":
+    if env_backend not in {"local", "fake"}:
         raise ValueError(
-            "AgiBot real env is local-only; remote support has been removed, "
-            f"got env.backend={env_backend!r}"
+            "Unsupported env.backend; use local (real robot) or fake (dry-run). "
+            f"Got env.backend={env_backend!r}"
         )
     if not _resolve_controller_enabled(cfg):
         raise ValueError(
             "AgiBot canonical train/eval flow requires controller.enabled=true"
         )
-    return AgiBotTaskEnv(**_build_common_kwargs(cfg, logger))
+    common = _build_common_kwargs(cfg, logger)
+    if env_backend == "fake":
+        if common.get("reset_hook") is not None:
+            logger.warning(
+                "env.backend=fake: ignoring task.reset_hook so no real-robot reset runs"
+            )
+        common["reset_hook"] = None
+        return AgiBotFakeTaskEnv(**common)
+    return AgiBotTaskEnv(**common)
 
 
 def _create_env(cfg: DictConfig | AgiBotRunConfig, logger: logging.Logger):

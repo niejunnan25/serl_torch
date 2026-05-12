@@ -81,8 +81,10 @@ bash tools/start_robot_service.sh
 cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
+RUN_GROUP=office_setting_2026-05-13_001
 python examples/agibot_real/scripts/run_residual_training_copy.py \
-  runtime.role=learner
+  runtime.role=learner \
+  launch.run_group=${RUN_GROUP}
 ```
 
 ## 终端 5: actor
@@ -100,14 +102,36 @@ source robot/service/env.sh
 cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
+RUN_GROUP=office_setting_2026-05-13_001
 python examples/agibot_real/scripts/run_residual_training_copy.py \
   runtime.role=actor \
-  backfill_policy.port=9011
+  backfill_policy.port=9011 \
+  launch.run_group=${RUN_GROUP}
 ```
 
 这里的 `backfill_policy.port=9011` 很关键。默认 yaml 里 backfill 还是跟主 policy 共用 `9001`，如果你想吃到 dedicated backfill server 的收益，就要显式改到 `9011`。
 
 如果你只有一张 GPU，也可以把两个 server 都起起来，但那样只是进程和端口解耦，不是最理想的硬件并行。
+
+## 输出目录组织
+
+`run_residual_training_copy.py` 的 actor 和 learner 是两个独立 Hydra 进程。
+如果不显式传同一个 `launch.run_group`，它们会各自按启动时刻生成目录。
+
+当前配置推荐使用：
+
+```text
+outputs/agibot_real_copy/train_residual_copy/<run_group>/learner
+outputs/agibot_real_copy/train_residual_copy/<run_group>/actor
+```
+
+这样做有两个好处：
+
+- `learner/` 下保留 checkpoint、learner summary 和 learner 日志
+- `actor/` 下保留 rollout 视频、episode log、actor summary 和 actor 日志
+
+不要把 actor 和 learner 直接指到完全相同的 `hydra.run.dir`。
+那样会让 `.hydra/`、`summary.json` 和主日志文件互相覆盖。
 
 ## 最小可运行版本
 
@@ -132,8 +156,10 @@ python deployment/real_infer/server.py \
 cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
+RUN_GROUP=office_setting_2026-05-13_001
 python examples/agibot_real/scripts/run_residual_training_copy.py \
-  runtime.role=learner
+  runtime.role=learner \
+  launch.run_group=${RUN_GROUP}
 ```
 
 ### actor
@@ -144,8 +170,10 @@ source robot/service/env.sh
 cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
+RUN_GROUP=office_setting_2026-05-13_001
 python examples/agibot_real/scripts/run_residual_training_copy.py \
-  runtime.role=actor
+  runtime.role=actor \
+  launch.run_group=${RUN_GROUP}
 ```
 
 这个最小版本会直接使用 `train_residual_copy.yaml` 里的默认值：

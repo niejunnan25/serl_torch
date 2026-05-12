@@ -14,7 +14,7 @@ sudo docker exec -it docker--agibot /bin/bash
 conda activate robot
 cd /home/hello/codebase/serl_torch
 export PYTHONPATH=/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 python examples/agibot_real/scripts/run_residual_training_copy.py   runtime.role=learner   policy.port=8001   backfill_policy.port=8001
 
 终端3:
@@ -24,8 +24,15 @@ cd /home/hello/codebase/tangyili/code/serl_torch/examples/agibot_real
 source robot/service/env.sh
 cd /home/hello/codebase/tangyili/code/serl_torch
 export PYTHONPATH=/home/hello/codebase/tangyili/code/serl_torch/serl_launcher:$PYTHONPATH
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 python examples/agibot_real/scripts/run_residual_training_copy.py   runtime.role=actor   policy.port=8001   backfill_policy.port=8001
+
+终端3（假数据调试，无机器人/Docker；reset 后会自动进入 RUNNING，可不按 g；仍可用 p/s/f/r）:
+conda activate rl_T
+cd /home/hello/codebase/tangyili/code/serl_torch
+export PYTHONPATH=/home/hello/codebase/tangyili/code:/home/hello/codebase/tangyili/code/serl_torch/serl_launcher:$PYTHONPATH
+export CUDA_VISIBLE_DEVICES=1
+python examples/agibot_real/scripts/run_residual_training_copy.py runtime.role=actor env.backend=fake policy.port=8001 backfill_policy.port=8001
 
 
 

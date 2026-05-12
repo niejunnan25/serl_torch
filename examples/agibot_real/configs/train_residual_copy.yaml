@@ -32,7 +32,7 @@ wandb:
   project: agibot_real
   exp_name: ${task.name}_residual_copy
   group: residual_copy
-  debug: true
+  debug: false
 
 policy:
   type: joyra
@@ -199,7 +199,10 @@ video:
 
 launch:
   output_root: outputs/agibot_real_copy
+  # Pass the same launch.run_group to learner and actor when they belong to
+  # one experiment. Each role still gets its own child directory below.
+  run_group: ${now:%Y-%m-%d_%H-%M-%S}
 
 hydra:
   run:
-    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${launch.output_root}/${hydra:job.config_name}/${launch.run_group}/${runtime.role}

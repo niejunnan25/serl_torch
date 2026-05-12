@@ -32,6 +32,11 @@ from serl_torch.examples.agibot_real.residual_observation import (
     build_chunk_residual_sample_obs,
 )
 from serl_torch.examples.agibot_real.torch_compile import maybe_enable_torch_compile
+from serl_torch.examples.agibot_real.transition_assembly import (
+    count_executed_steps_from_infos,
+)
+from serl_torch.examples.agibot_real.video_recorder import AsyncImageVideoRecorder
+from serl_torch.examples.agibot_real.video_recorder import AsyncVideoRecorderConfig
 
 
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
@@ -127,11 +132,50 @@ def run_eval(
     env = create_env(cfg, logger)
     base_policy = build_agibot_base_policy(cfg, logger=logger)
     logger.info("Chunk policy backend: %s", base_policy.describe())
+    video_output_dir = run_dir / str(cfg.video.output_dir)
+    video_recorder: AsyncImageVideoRecorder | None = None
+    if bool(cfg.video.enabled):
+        video_recorder = AsyncImageVideoRecorder(
+            config=AsyncVideoRecorderConfig(
+                camera_key=str(cfg.video.camera_key),
+                fps=float(cfg.video.fps),
+                output_dir=video_output_dir,
+                max_pending_frames=int(cfg.video.max_pending_frames),
+                drop_frames_when_busy=bool(cfg.video.drop_frames_when_busy),
+            ),
+            logger=logger,
+        )
+        logger.info(
+            "Eval video recording enabled: camera_key=%s fps=%.3f output_dir=%s "
+            "max_pending_frames=%s drop_frames_when_busy=%s",
+            str(cfg.video.camera_key),
+            float(cfg.video.fps),
+            video_output_dir,
+            int(cfg.video.max_pending_frames),
+            bool(cfg.video.drop_frames_when_busy),
+        )
 
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
     image_keys = cfg.obs.image_keys
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
+    filter_enabled = bool(cfg.action_filter.enabled)
+    filter_alpha = float(cfg.action_filter.alpha)
+    filter_max_delta = cfg.action_filter.max_delta
+    filter_warmup_steps = int(cfg.action_filter.warmup_steps)
+    filter_reset_each_episode = bool(cfg.action_filter.reset_each_episode)
+    filtered_residual_delta_prev: np.ndarray | None = None
+    filtered_action_total_steps = 0
+
+    if filter_enabled:
+        logger.info(
+            "Residual-delta filter enabled during eval: alpha=%.4f max_delta=%s "
+            "warmup_steps=%s reset_each_episode=%s",
+            float(filter_alpha),
+            None if filter_max_delta is None else float(filter_max_delta),
+            int(filter_warmup_steps),
+            bool(filter_reset_each_episode),
+        )
 
     sample_obs = build_chunk_residual_sample_obs(
         action_dim=action_dim,
@@ -197,6 +241,21 @@ def run_eval(
         "base_policy_backend": base_policy.describe(),
         "episode_log_path": str(run_dir / episode_log_file),
         "max_env_steps_per_episode": max_env_steps_per_episode,
+        "video": {
+            "enabled": bool(cfg.video.enabled),
+            "camera_key": str(cfg.video.camera_key),
+            "fps": float(cfg.video.fps),
+            "output_dir": str(video_output_dir),
+            "max_pending_frames": int(cfg.video.max_pending_frames),
+            "drop_frames_when_busy": bool(cfg.video.drop_frames_when_busy),
+        },
+        "action_filter": {
+            "enabled": bool(filter_enabled),
+            "alpha": float(filter_alpha),
+            "max_delta": None if filter_max_delta is None else float(filter_max_delta),
+            "warmup_steps": int(filter_warmup_steps),
+            "reset_each_episode": bool(filter_reset_each_episode),
+        },
         "task": {
             "task_name": str(cfg.task.name),
             "task_key": str(cfg.task.task_key),
@@ -204,11 +263,60 @@ def run_eval(
         },
     }
 
+    def _filter_residual_delta_chunk(residual_delta_chunk: np.ndarray) -> np.ndarray:
+        nonlocal filtered_residual_delta_prev
+        nonlocal filtered_action_total_steps
+        if not filter_enabled:
+            return residual_delta_chunk
+
+        filtered = np.array(residual_delta_chunk, dtype=np.float32, copy=True)
+        if filtered.ndim != 2:
+            return filtered
+
+        for i in range(filtered.shape[0]):
+            current_delta = filtered[i]
+
+            if filtered_residual_delta_prev is None:
+                filtered_residual_delta_prev = np.array(
+                    current_delta,
+                    dtype=np.float32,
+                    copy=True,
+                )
+            elif filtered_action_total_steps >= filter_warmup_steps:
+                smoothed = (
+                    float(filter_alpha) * current_delta
+                    + (1.0 - float(filter_alpha)) * filtered_residual_delta_prev
+                )
+                if filter_max_delta is not None:
+                    max_delta = float(filter_max_delta)
+                    delta = smoothed - filtered_residual_delta_prev
+                    smoothed = filtered_residual_delta_prev + np.clip(
+                        delta,
+                        -max_delta,
+                        max_delta,
+                    )
+                filtered_residual_delta_prev = np.asarray(smoothed, dtype=np.float32)
+            else:
+                filtered_residual_delta_prev = np.array(
+                    current_delta,
+                    dtype=np.float32,
+                    copy=True,
+                )
+
+            filtered[i] = filtered_residual_delta_prev
+            filtered_action_total_steps += 1
+
+        return filtered
+
     try:
         for episode_id in range(episodes):
+            if filter_reset_each_episode:
+                filtered_residual_delta_prev = None
             obs = env.reset()
             task_prompt = str(env.task_description)
-            prefetched = None
+            if video_recorder is not None:
+                video_recorder.start_episode(int(episode_id))
+                video_recorder.add_obs_frame(obs)
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
@@ -226,21 +334,16 @@ def run_eval(
 
                 timer.tick("total")
                 with timer.context("sample_actions"):
-                    if prefetched is None:
-                        base_actions, _ = base_policy.infer(
-                            obs,
-                            prompt=task_prompt,
-                        )
-                        residual_obs = build_chunk_residual_obs(
-                            obs=obs,
-                            base_actions=base_actions,
-                            image_keys=image_keys,
-                            residual_alpha=residual_action_spec.alpha,
-                        )
-                    else:
-                        base_actions = prefetched["base_actions"]
-                        residual_obs = prefetched["residual_obs"]
-                        prefetched = None
+                    base_actions, _ = base_policy.infer(
+                        obs,
+                        prompt=task_prompt,
+                    )
+                    residual_obs = build_chunk_residual_obs(
+                        obs=obs,
+                        base_actions=base_actions,
+                        image_keys=image_keys,
+                        residual_alpha=residual_action_spec.alpha,
+                    )
 
                     residual_actions = agent.sample_action(
                         residual_obs,
@@ -266,53 +369,61 @@ def run_eval(
                     else min(int(chunk_horizon), int(remaining_episode_budget))
                 )
 
-                for action in np.asarray(final_actions[:execute_horizon], dtype=np.float32):
-                    with timer.context("step_env"):
-                        next_obs, reward, done, truncated, info = env.step(action)
-
-                    done_flag = bool(done or truncated)
-                    action_executed = bool(info.get("controller_action_executed", True))
-                    last_info = dict(info)
-
-                    if not action_executed:
-                        if not done_flag:
-                            raise RuntimeError(
-                                "controller reported an unexecuted action without a terminal outcome"
-                            )
-                        episode_return += float(reward)
-                        episode_success = bool(
-                            episode_success or info.get("success", False)
+                final_action_array = np.asarray(final_actions, dtype=np.float32)
+                action_chunk = final_action_array[:execute_horizon]
+                base_action_chunk = np.asarray(base_actions, dtype=np.float32)
+                if base_action_chunk.shape != final_action_array.shape:
+                    if int(base_action_chunk.size) != int(final_action_array.size):
+                        raise ValueError(
+                            "base and final action chunk shape mismatch: "
+                            f"base={base_action_chunk.shape} "
+                            f"final={final_action_array.shape}"
                         )
-                        obs = dict(next_obs)
-                        prefetched = None
-                        env_episode_done = True
-                        break
+                    base_action_chunk = base_action_chunk.reshape(
+                        final_action_array.shape
+                    )
+                base_action_chunk = base_action_chunk[:execute_horizon]
 
-                    with timer.context("build_decision_obs"):
-                        next_base_actions, _ = base_policy.infer(
-                            next_obs,
-                            prompt=task_prompt,
+                residual_delta_chunk = action_chunk - base_action_chunk
+                residual_delta_chunk = _filter_residual_delta_chunk(
+                    residual_delta_chunk
+                )
+                action_chunk = base_action_chunk + residual_delta_chunk
+
+                with timer.context("step_env"):
+                    chunk_result = env.step_chunk(action_chunk)
+                if video_recorder is not None:
+                    for post_step_obs in chunk_result.get("observations", ()):
+                        if isinstance(post_step_obs, dict):
+                            video_recorder.add_obs_frame(post_step_obs)
+
+                chunk_infos = [dict(v) for v in chunk_result["infos"]]
+                executed_steps = count_executed_steps_from_infos(chunk_infos)
+                last_info = dict(chunk_result["info"])
+                obs = dict(chunk_result["obs"])
+                episode_return += float(chunk_result["reward_sum"])
+                episode_success = bool(
+                    episode_success
+                    or last_info.get("success", False)
+                    or any(bool(info.get("success", False)) for info in chunk_infos)
+                )
+
+                if executed_steps <= 0:
+                    done_flag = bool(chunk_result["done"] or chunk_result["truncated"])
+                    if not done_flag:
+                        raise RuntimeError(
+                            "step_chunk returned no executed actions without a "
+                            "terminal outcome"
                         )
-                        next_residual_obs = build_chunk_residual_obs(
-                            obs=next_obs,
-                            base_actions=next_base_actions,
-                            image_keys=image_keys,
-                            residual_alpha=residual_action_spec.alpha,
-                        )
+                    env_episode_done = True
+                    timer.tock("total")
+                    break
 
-                    episode_steps += 1
-                    total_env_steps += 1
-                    episode_return += float(reward)
-                    episode_success = bool(episode_success or info.get("success", False))
-                    obs = dict(next_obs)
-                    prefetched = {
-                        "base_actions": next_base_actions,
-                        "residual_obs": next_residual_obs,
-                    }
+                episode_steps += int(executed_steps)
+                total_env_steps += int(executed_steps)
 
-                    if done_flag:
-                        env_episode_done = True
-                        break
+                if bool(chunk_result["done"] or chunk_result["truncated"]):
+                    env_episode_done = True
 
                 timer.tock("total")
 
@@ -335,7 +446,21 @@ def run_eval(
                 "checkpoint_step": checkpoint_step,
                 "final_info": to_jsonable(last_info),
             }
+            if bool(cfg.video.enabled):
+                episode_record["video_path"] = str(
+                    video_output_dir
+                    / (
+                        f"episode_{int(episode_id):05d}_"
+                        f"{str(cfg.video.camera_key).replace('/', '_')}.mp4"
+                    )
+                )
             episode_logger.write(to_jsonable(episode_record))
+            if video_recorder is not None:
+                video_recorder.end_episode(
+                    episode_id=int(episode_id),
+                    success=bool(episode_success),
+                    episode_steps=int(episode_steps),
+                )
 
             logger.info(
                 "eval episode=%s success=%s steps=%s return=%.3f",
@@ -381,6 +506,11 @@ def run_eval(
             pass
         try:
             base_policy.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if video_recorder is not None:
+                video_recorder.close()
         except Exception:  # noqa: BLE001
             pass
 
