@@ -195,7 +195,7 @@ video:
   drop_frames_when_busy: true
 
 launch:
-  output_root: output
+  output_root: outputs
 
 hydra:
   run:

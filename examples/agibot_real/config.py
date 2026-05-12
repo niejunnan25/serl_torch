@@ -25,7 +25,7 @@ from .env.schema import build_agibot_task_key
 from .env.schema import resolve_agibot_image_keys
 
 RuntimeRole = Literal["actor", "learner"]
-EnvBackend = Literal["local"]
+EnvBackend = Literal["local", "fake"]
 PolicyBackend = Literal["openpi", "joyra"]
 OptimizerType = Literal["adam", "adamw"]
 
@@ -329,6 +329,7 @@ class AgiBotEvalConfig:
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    action_filter: ActionFilterConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -819,7 +820,7 @@ def _parse_env_cfg(cfg: DictConfig) -> EnvConfig:
     backend = _parse_choice(
         env_cfg.get("backend", "local"),
         "env.backend",
-        allowed=("local",),
+        allowed=("local", "fake"),
     )
     arm_layout = normalize_arm_layout(env_cfg.get("arm_layout", ARM_LAYOUT_DUAL))
     spec = get_arm_layout_spec(arm_layout)
@@ -1370,6 +1371,7 @@ def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
     _validate_canonical_controller_cfg(controller, context="eval")
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    action_filter = _parse_action_filter_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
@@ -1386,6 +1388,7 @@ def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
         env=env,
         obs=obs,
         residual=residual,
+        action_filter=action_filter,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),

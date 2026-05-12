@@ -30,7 +30,7 @@ offline:
   prepared_path: null
   prepare:
     raw_dataset_path: /home/hello/codebase/niejunnan/datasets/task_3463_3540_mouse_only_right_hand_camera_position_15hz
-    output_root: /home/hello/codebase/serl_torch/examples/agibot_real/output/offline_data
+    output_root: /home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data
     max_episodes: 50
     filter_unrepresentable_steps: true
 

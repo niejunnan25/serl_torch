@@ -60,6 +60,50 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertEqual(parsed.eval.episodes, 10)
         self.assertTrue(parsed.eval.deterministic)
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
+        self.assertFalse(parsed.action_filter.enabled)
+        self.assertEqual(parsed.action_filter.alpha, 0.25)
+        self.assertTrue(parsed.action_filter.reset_each_episode)
+        self.assertTrue(parsed.video.enabled)
+        self.assertEqual(parsed.video.camera_key, "image/head")
+
+    def test_parse_train_cfg_accepts_fake_backend(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.env.backend = "fake"
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.env.backend, "fake")
+
+    def test_parse_train_cfg_accepts_fake_right_arm_backend(self) -> None:
+        base_cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        override_cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual_openpi_right_arm.yaml"
+        )
+        override_cfg.pop("defaults", None)
+        cfg = OmegaConf.merge(base_cfg, override_cfg)
+        cfg.env.backend = "fake"
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.env.backend, "fake")
+        self.assertEqual(parsed.env.arm_layout, "right_arm")
+        self.assertEqual(parsed.env.action_dim, 7)
 
     def test_parse_train_cfg_keeps_defaults_without_offline_block(self) -> None:
         cfg = OmegaConf.create(

@@ -55,6 +55,13 @@ residual:
   clip_gripper: true
   chunk_horizon: 15
 
+action_filter:
+  enabled: false
+  alpha: 0.25
+  max_delta: null
+  warmup_steps: 0
+  reset_each_episode: true
+
 encoder:
   type: resnet
   shared: true
@@ -122,8 +129,16 @@ logging:
   summary_file: summary.json
   episode_log_file: episode_logs.jsonl
 
+video:
+  enabled: true
+  camera_key: image/head
+  fps: ${task.hz}
+  output_dir: videos
+  max_pending_frames: 128
+  drop_frames_when_busy: true
+
 launch:
-  output_root: output
+  output_root: outputs
 
 hydra:
   run:
