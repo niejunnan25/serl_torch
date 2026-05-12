@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Prepare temporary AgiBot residual offline data artifacts."""
 
-from dataclasses import replace
 import json
 import logging
 import pickle
@@ -243,15 +242,6 @@ def main(cfg: DictConfig) -> None:
 
     if not typed_cfg.offline.enabled:
         raise ValueError("run_residual_offline_prepare.py requires offline.enabled=true")
-    if typed_cfg.offline.prepared_path is not None:
-        logger.info(
-            "ignoring offline.prepared_path during prepare: %s",
-            typed_cfg.offline.prepared_path,
-        )
-        typed_cfg = replace(
-            typed_cfg,
-            offline=replace(typed_cfg.offline, prepared_path=None),
-        )
 
     set_global_seeds(typed_cfg.global_seed)
     offline_inputs = prepare_offline_data(typed_cfg, logger=logger)
@@ -280,9 +270,10 @@ def main(cfg: DictConfig) -> None:
         prepared_path = str(offline_inputs.prepared_paths[0])
         logger.info(
             "next learner command: python examples/agibot_real/scripts/run_residual_training.py "
-            "runtime.role=learner offline.enabled=true "
-            "offline.pretrain_steps=1000 offline.ratio=0.5 "
-            "offline.prepared_path=%s",
+            "runtime.role=learner"
+        )
+        logger.info(
+            "prepared replay path configured in train_residual.yaml: %s",
             prepared_path,
         )
 

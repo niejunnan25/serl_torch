@@ -34,9 +34,20 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertEqual(parsed.wandb.project, "agibot_real")
         self.assertEqual(parsed.wandb.mode, "online")
         self.assertFalse(parsed.wandb.debug)
-        self.assertFalse(parsed.offline.enabled)
-        self.assertEqual(parsed.offline.prepared_path, None)
+        self.assertTrue(parsed.offline.enabled)
+        self.assertEqual(
+            parsed.offline.prepared_path,
+            "/home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data/office_setting/joyra_joyra_office_setting_chunk30_alpha0p005",
+        )
         self.assertEqual(parsed.offline.ratio, 0.5)
+        self.assertEqual(
+            parsed.offline.prepare.raw_dataset_path,
+            "/home/hello/codebase/datasets/task_3463_mouse",
+        )
+        self.assertEqual(
+            parsed.offline.prepare.output_root,
+            "/home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data",
+        )
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
         self.assertFalse(parsed.action_filter.enabled)
         self.assertEqual(parsed.env.arm_layout, "dual_arm")

@@ -2,7 +2,7 @@ global_seed: 0
 
 task:
   name: office_setting
-  task_key: null
+  task_key: office_setting
   prompt: The right arm picks up the white mouse from the desk and places the mouse on the black mouse pad
   control_mode: camera_position
   hz: 30.0
@@ -141,8 +141,8 @@ replay:
   batch_size: 128
 
 offline:
-  enabled: false
-  prepared_path: null
+  enabled: true
+  prepared_path: /home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data/office_setting/joyra_joyra_office_setting_chunk30_alpha0p005
   ratio: 0.5
   capacity: 50000
   load_max_episodes: null
@@ -150,8 +150,8 @@ offline:
   pretrain_steps: 0
 
   prepare:
-    raw_dataset_path: null
-    output_root: data/residual/offline_data
+    raw_dataset_path: /home/hello/codebase/datasets/task_3463_mouse
+    output_root: /home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
     filter_unrepresentable_steps: false
