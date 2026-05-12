@@ -17,6 +17,7 @@ from serl_torch.examples.agibot_real.env.base_policy import AgiBotBasePolicy
 from serl_torch.examples.agibot_real.env.base_policy import POLICY_ACTION_LAYOUT_DUAL
 from serl_torch.examples.agibot_real.env.base_policy import POLICY_ACTION_LAYOUT_RIGHT_ARM
 from serl_torch.examples.agibot_real.env.policy_input import build_agibot_policy_input
+from serl_launcher.policy.joyra.request_builder import build_joyra_request
 
 
 def _make_raw_obs() -> dict[str, object]:
@@ -26,6 +27,13 @@ def _make_raw_obs() -> dict[str, object]:
         "image/left_wrist": [[[1, 1, 1]] * 8 for _ in range(8)],
         "image/right_wrist": [[[2, 2, 2]] * 8 for _ in range(8)],
     }
+
+
+def _make_raw_obs_with_head_waist() -> dict[str, object]:
+    obs = _make_raw_obs()
+    obs["state/head"] = [100.0, 101.0]
+    obs["state/waist"] = [200.0, 201.0]
+    return obs
 
 
 class _FakeRightArmClient:
@@ -57,6 +65,22 @@ class AgiBotBasePolicyTest(unittest.TestCase):
         np.testing.assert_array_equal(
             np.asarray(policy_input.state),
             np.asarray([7, 8, 9, 10, 11, 12, 13], dtype=np.float32),
+        )
+
+    def test_joyra_request_uses_full_state_with_head_waist(self) -> None:
+        policy_input = build_agibot_policy_input(
+            _make_raw_obs_with_head_waist(),
+            "pick",
+            arm_layout=POLICY_ACTION_LAYOUT_RIGHT_ARM,
+        )
+        request = build_joyra_request(policy_input)
+
+        np.testing.assert_array_equal(
+            np.asarray(request["observation/state"], dtype=np.float32),
+            np.asarray(
+                list(range(14)) + [100.0, 101.0, 200.0, 201.0],
+                dtype=np.float32,
+            ),
         )
 
     def test_right_arm_openpi_actions_remain_logical_7d_chunk(self) -> None:

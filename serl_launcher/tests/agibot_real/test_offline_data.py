@@ -39,6 +39,12 @@ except ModuleNotFoundError:  # pragma: no cover - environment-dependent
 from serl_torch.examples.agibot_real.env.offline_data import (
     _coerce_lerobot_state_action_vector,
 )
+from serl_torch.examples.agibot_real.env.offline_data import (
+    _coerce_lerobot_state_vector,
+)
+from serl_torch.examples.agibot_real.env.offline_data import (
+    _extract_lerobot_original_head_waist,
+)
 
 
 class _FakeReplayBuffer:
@@ -120,6 +126,25 @@ class AgiBotLeRobotRawDataTest(unittest.TestCase):
             arm_layout="right_arm",
         )
         self.assertEqual(result.tolist(), [float(value) for value in range(23, 30)])
+
+    def test_joyra_30d_state_keeps_canonical_pose_for_policy_input(self) -> None:
+        vector = list(range(30))
+        result = _coerce_lerobot_state_vector(
+            vector,
+            column="observation.state",
+            source_path=Path("/tmp/episode.parquet"),
+            arm_layout="right_arm",
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in range(16, 30)])
+
+    def test_joyra_original_state_extracts_head_and_waist(self) -> None:
+        original_state = np.arange(53, dtype=np.float32)
+        head, waist = _extract_lerobot_original_head_waist(
+            original_state,
+            source_path=Path("/tmp/episode.parquet"),
+        )
+        np.testing.assert_array_equal(head, np.asarray([26, 27], dtype=np.float32))
+        np.testing.assert_array_equal(waist, np.asarray([51, 52], dtype=np.float32))
 
     def test_rejects_7d_vector_for_dual_arm(self) -> None:
         with self.assertRaisesRegex(ValueError, "dual_arm"):

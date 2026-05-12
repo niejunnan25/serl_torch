@@ -72,6 +72,9 @@ LEROBOT_DATA_FILE_GLOB = "data/chunk-*/episode_*.parquet"
 LEROBOT_STATE_COLUMN = "observation.state"
 LEROBOT_JOYRA_ACTION_COLUMN = "action"
 LEROBOT_OPENPI_ACTION_COLUMN = "actions"
+LEROBOT_ORIGINAL_STATE_COLUMN = "original_state"
+LEROBOT_ORIGINAL_HEAD_SLICE = slice(26, 28)
+LEROBOT_ORIGINAL_WAIST_SLICE = slice(51, 53)
 OFFLINE_BASE_POLICY_INFER_BATCH_SIZE = 15
 LEROBOT_IMAGE_KEY_MAP = {
     "observation.images.head_color": "image/head",
@@ -609,6 +612,55 @@ def _coerce_lerobot_state_action_vector(
         ) from exc
 
 
+def _coerce_lerobot_state_vector(
+    value: Any,
+    *,
+    column: str,
+    source_path: Path,
+    arm_layout: str,
+) -> np.ndarray:
+    vector = np.asarray(value, dtype=np.float32).reshape(-1)
+    if int(vector.shape[0]) == 30:
+        return np.asarray(vector[-14:], dtype=np.float32)
+    if int(vector.shape[0]) == 18:
+        return np.asarray(vector[:14], dtype=np.float32)
+    if int(vector.shape[0]) == 14:
+        return np.asarray(vector, dtype=np.float32)
+    if int(vector.shape[0]) == 7:
+        return project_vector_to_layout(
+            vector,
+            arm_layout,
+            source_name=f"LeRobot {column} in {source_path}",
+        )
+    raise ValueError(
+        f"LeRobot {column} in {source_path} must be 7D single-arm state, "
+        "14D canonical state, 18D JoyRA state, or 30D JoyRA state compatible "
+        f"with env.arm_layout={arm_layout!r}; got {vector.shape}"
+    )
+
+
+def _extract_lerobot_original_head_waist(
+    value: Any,
+    *,
+    source_path: Path,
+) -> tuple[np.ndarray, np.ndarray]:
+    original_state = np.asarray(value, dtype=np.float32).reshape(-1)
+    if int(original_state.shape[0]) < int(LEROBOT_ORIGINAL_WAIST_SLICE.stop):
+        raise ValueError(
+            f"LeRobot {LEROBOT_ORIGINAL_STATE_COLUMN} in {source_path} must have "
+            f"at least {LEROBOT_ORIGINAL_WAIST_SLICE.stop} values to recover "
+            f"head/waist, got {original_state.shape}"
+        )
+    head = np.asarray(original_state[LEROBOT_ORIGINAL_HEAD_SLICE], dtype=np.float32)
+    waist = np.asarray(original_state[LEROBOT_ORIGINAL_WAIST_SLICE], dtype=np.float32)
+    if int(head.shape[0]) != 2 or int(waist.shape[0]) != 2:
+        raise ValueError(
+            f"LeRobot {LEROBOT_ORIGINAL_STATE_COLUMN} in {source_path} has invalid "
+            f"head/waist slices: head={head.shape}, waist={waist.shape}"
+        )
+    return head.copy(), waist.copy()
+
+
 def _lerobot_action_column(info: dict[str, Any], *, source_path: Path) -> str:
     features = info.get("features", {})
     if not isinstance(features, dict):
@@ -745,6 +797,15 @@ def load_lerobot_episode_steps(
 
     state_values = _read_parquet_column_values(parquet_path, LEROBOT_STATE_COLUMN)
     action_values = _read_parquet_column_values(parquet_path, action_column)
+    features = info.get("features", {})
+    if not isinstance(features, dict):
+        raise ValueError(f"LeRobot info.json has invalid features: {parquet_path}")
+    original_state_values: list[Any] | None = None
+    if LEROBOT_ORIGINAL_STATE_COLUMN in features:
+        original_state_values = _read_parquet_column_values(
+            parquet_path,
+            LEROBOT_ORIGINAL_STATE_COLUMN,
+        )
     frame_values = _read_parquet_column_values(parquet_path, "frame_index")
     task_values: list[Any] | None
     try:
@@ -761,6 +822,14 @@ def load_lerobot_episode_steps(
         raise ValueError(
             f"LeRobot frame/state length mismatch in {parquet_path}: "
             f"{len(frame_values)} vs {len(state_values)}"
+        )
+    if (
+        original_state_values is not None
+        and len(original_state_values) != len(state_values)
+    ):
+        raise ValueError(
+            f"LeRobot original_state/state length mismatch in {parquet_path}: "
+            f"{len(original_state_values)} vs {len(state_values)}"
         )
 
     frame_indices = [int(value) for value in frame_values]
@@ -784,13 +853,20 @@ def load_lerobot_episode_steps(
             task_prompt = task_prompts.get(int(task_values[step_idx]), task_prompt)
 
         observations: dict[str, Any] = {
-            "state/pose": _coerce_lerobot_state_action_vector(
+            "state/pose": _coerce_lerobot_state_vector(
                 state_values[step_idx],
                 column=LEROBOT_STATE_COLUMN,
                 source_path=parquet_path,
                 arm_layout=arm_layout,
             ),
         }
+        if original_state_values is not None:
+            head, waist = _extract_lerobot_original_head_waist(
+                original_state_values[step_idx],
+                source_path=parquet_path,
+            )
+            observations["state/head"] = head
+            observations["state/waist"] = waist
         for agibot_key, values in image_values.items():
             observations[agibot_key] = values[step_idx]
 
