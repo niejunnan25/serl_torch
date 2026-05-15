@@ -27,6 +27,8 @@ for path in (REPO_PARENT, REPO_ROOT, SERL_LAUNCHER_ROOT):
 from serl_launcher.agents.continuous.drq_typed_config import (  # noqa: E402
     create_drq_agent_from_typed_cfg,
 )
+from serl_launcher.common.agent_acceleration import apply_torch_compile  # noqa: E402
+from serl_launcher.residual.chunk_window_replay import BatchPrefetcher  # noqa: E402
 from serl_launcher.residual.chunk_window_replay import (  # noqa: E402
     create_chunk_replay_buffer,
 )
@@ -83,7 +85,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config-name",
-        default="spatial_4_0514/spatial4_scripts_2_alpha0p2_unfiltered_offline_noent_std5p0",
+        default="spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5_ports53500",
     )
     parser.add_argument("--updates", type=int, default=300)
     parser.add_argument("--warmup", type=int, default=10)
@@ -91,9 +93,21 @@ def main() -> None:
     parser.add_argument("--offline-capacity", type=int, default=10000)
     parser.add_argument(
         "--mode",
-        choices=("all", "stage1", "stage2"),
+        choices=("all", "stage1", "stage2", "stage2_prefetch"),
         default="all",
         help="Limit benchmark to one sampling/update mode.",
+    )
+    parser.add_argument(
+        "--torch-compile",
+        choices=("config", "off"),
+        default="config",
+        help="Use the config's torch.compile setting, or force it off.",
+    )
+    parser.add_argument(
+        "--fuse-views",
+        choices=("config", "auto", "true", "false"),
+        default="config",
+        help="Override encoder.fuse_views for ablation.",
     )
     parser.add_argument("--json-output", type=Path, default=None)
     args = parser.parse_args()
@@ -107,7 +121,6 @@ def main() -> None:
             overrides=[
                 "runtime.role=learner",
                 "wandb.mode=disabled",
-                "training.torch_compile.enabled=false",
                 "training.async_eval.enabled=false",
                 f"replay.capacity={int(args.capacity)}",
                 f"offline.capacity={int(args.offline_capacity)}",
@@ -115,6 +128,10 @@ def main() -> None:
                 "offline.load_max_episodes=null",
             ],
         )
+    if str(args.torch_compile) == "off":
+        cfg.training.torch_compile.enabled = False
+    if str(args.fuse_views) != "config":
+        cfg.encoder.fuse_views = str(args.fuse_views)
 
     typed_cfg = parse_train_cfg(cfg)
     image_keys = tuple(typed_cfg.obs.image_keys)
@@ -164,13 +181,17 @@ def main() -> None:
     )
 
     def make_agent():
-        return create_drq_agent_from_typed_cfg(
+        agent = create_drq_agent_from_typed_cfg(
             typed_cfg,
             sample_obs=sample_obs,
             action_dim=residual_action_spec.chunk_policy_action_dim,
             image_keys=image_keys,
             critic_action_dim=residual_action_spec.chunk_critic_action_dim,
             action_transform=residual_action_spec.build_chunk_action_transform(),
+        )
+        return apply_torch_compile(
+            agent,
+            compile_cfg=typed_cfg.training.torch_compile,
         )
 
     def run_mode(
@@ -259,6 +280,102 @@ def main() -> None:
             "sample_profile": summarize_profiles(profile_records),
         }
 
+    def run_prefetch_mode(
+        name: str,
+        *,
+        pack_obs_and_next_obs: bool,
+        prefer_device_concat: bool,
+    ) -> dict[str, Any]:
+        agent = make_agent()
+        metrics: dict[str, list[float]] = defaultdict(list)
+        profile_records: list[dict[str, float]] = []
+        start_all = time.perf_counter()
+        total_updates = int(args.updates) + int(args.warmup)
+
+        def sample_once():
+            sample_profile: dict[str, float] = {}
+            batch, batch_mix = sample_mixed_training_batch(
+                online_replay_buffer=online_replay,
+                offline_replay_buffer=offline_replay,
+                batch_size=int(typed_cfg.replay.batch_size),
+                offline_ratio=float(typed_cfg.offline.ratio),
+                profile=sample_profile,
+                pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+                device=agent.device,
+                prefer_device_concat=bool(prefer_device_concat),
+            )
+            return batch, batch_mix, sample_profile
+
+        prefetcher = BatchPrefetcher(
+            sample_once,
+            thread_name_prefix="libero-real-benchmark-prefetch",
+        )
+        prefetcher.start()
+        try:
+            for update_index in range(total_updates):
+                measured = update_index >= int(args.warmup)
+                iter_start = time.perf_counter()
+                merged_profile: dict[str, float] = defaultdict(float)
+
+                sync_cuda()
+                section_start = time.perf_counter()
+                batch, _batch_mix, sample_profile = prefetcher.get()
+                sync_cuda()
+                wait_critic_sample_sec = time.perf_counter() - section_start
+                for key, value in sample_profile.items():
+                    if isinstance(value, (int, float)):
+                        merged_profile[f"critic_sample_{key}"] += float(value)
+
+                sync_cuda()
+                section_start = time.perf_counter()
+                agent, _ = agent.update_critics(batch)
+                sync_cuda()
+                train_critics_sec = time.perf_counter() - section_start
+
+                sync_cuda()
+                section_start = time.perf_counter()
+                batch, _batch_mix, sample_profile = prefetcher.get()
+                sync_cuda()
+                wait_train_sample_sec = time.perf_counter() - section_start
+                for key, value in sample_profile.items():
+                    if isinstance(value, (int, float)):
+                        merged_profile[f"train_sample_{key}"] += float(value)
+
+                sync_cuda()
+                section_start = time.perf_counter()
+                agent, _ = agent.update_high_utd(
+                    batch,
+                    utd_ratio=int(typed_cfg.sac.utd_ratio),
+                )
+                sync_cuda()
+                train_sec = time.perf_counter() - section_start
+
+                iter_sec = time.perf_counter() - iter_start
+                if measured:
+                    metrics["sample_replay_buffer"].append(
+                        wait_critic_sample_sec + wait_train_sample_sec
+                    )
+                    metrics["train_critics"].append(train_critics_sec)
+                    metrics["train"].append(train_sec)
+                    metrics["update_total"].append(iter_sec)
+                    profile_records.append(dict(merged_profile))
+        finally:
+            prefetcher.close()
+
+        measured_total = max(sum(metrics["update_total"]), 1e-9)
+        return {
+            "name": name,
+            "updates": int(args.updates),
+            "warmup": int(args.warmup),
+            "pack_obs_and_next_obs": bool(pack_obs_and_next_obs),
+            "prefer_device_concat": bool(prefer_device_concat),
+            "prefetch": True,
+            "updates_per_sec": float(int(args.updates) / measured_total),
+            "wall_elapsed_sec_including_warmup": float(time.perf_counter() - start_all),
+            "timers": {key: summarize(value) for key, value in metrics.items()},
+            "sample_profile": summarize_profiles(profile_records),
+        }
+
     modes = []
     if args.mode in ("all", "stage1"):
         modes.append(
@@ -272,6 +389,14 @@ def main() -> None:
         modes.append(
             run_mode(
                 "stage2_packed_device_concat",
+                pack_obs_and_next_obs=True,
+                prefer_device_concat=True,
+            )
+        )
+    if args.mode in ("all", "stage2_prefetch"):
+        modes.append(
+            run_prefetch_mode(
+                "stage2_packed_device_concat_prefetch",
                 pack_obs_and_next_obs=True,
                 prefer_device_concat=True,
             )
@@ -295,6 +420,13 @@ def main() -> None:
             "load_sec": float(load_sec),
             "online_load": online_load,
             "offline_load": offline_load,
+            "torch_compile_enabled": bool(typed_cfg.training.torch_compile.enabled),
+            "torch_compile_target": str(typed_cfg.training.torch_compile.target),
+            "torch_compile_backend": str(typed_cfg.training.torch_compile.backend),
+            "torch_compile_mode": str(typed_cfg.training.torch_compile.mode),
+            "torch_compile_fullgraph": bool(typed_cfg.training.torch_compile.fullgraph),
+            "torch_compile_dynamic": bool(typed_cfg.training.torch_compile.dynamic),
+            "encoder_fuse_views": str(getattr(typed_cfg.encoder, "fuse_views", "auto")),
         },
         "modes": modes,
     }
