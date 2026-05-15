@@ -10,6 +10,7 @@ except ModuleNotFoundError:
     import gymnasium as gym
 
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
+from serl_launcher.residual.chunk_window_replay import BatchPrefetcher
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
 from serl_launcher.residual.chunk_window_replay import reshape_chunk_batch_for_training
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
@@ -34,6 +35,30 @@ class _FakeReplayBuffer:
 
 
 class ChunkReplayTest(unittest.TestCase):
+    def test_batch_prefetcher_returns_ordered_results(self) -> None:
+        calls: list[int] = []
+
+        def _sample() -> int:
+            calls.append(len(calls) + 1)
+            return calls[-1]
+
+        prefetcher = BatchPrefetcher(_sample)
+        try:
+            self.assertEqual(prefetcher.get(), 1)
+            self.assertEqual(prefetcher.get(), 2)
+        finally:
+            prefetcher.close()
+
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_batch_prefetcher_propagates_sample_errors(self) -> None:
+        def _sample() -> int:
+            raise RuntimeError("sample failed")
+
+        prefetcher = BatchPrefetcher(_sample)
+        with self.assertRaisesRegex(RuntimeError, "sample failed"):
+            prefetcher.get()
+
     def test_create_chunk_replay_buffer_smoke(self) -> None:
         observation_space = gym.spaces.Dict(
             {

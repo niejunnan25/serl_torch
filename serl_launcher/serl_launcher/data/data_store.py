@@ -1,4 +1,5 @@
 from threading import Lock
+import time
 from typing import Iterable, Optional, TypeVar
 
 import gym
@@ -39,6 +40,16 @@ def _normalize_batch_data(batch_data):
     raise TypeError(
         "batch_insert expects a list[transition] or a packed nested batch dict"
     )
+
+
+def _profile_add(profile: Optional[dict], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+def _profile_set(profile: Optional[dict], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(value)
 
 
 def _batch_storage_view(packed_batch, keys: Iterable[str]):
@@ -166,8 +177,20 @@ class ReplayBufferDataStore(ReplayBuffer, DataStoreBase):
                 )
 
     def sample(self, *args, **kwargs):
-        with self._lock:
+        profile = kwargs.pop("profile", None)
+        lock_wait_start = time.perf_counter()
+        self._lock.acquire()
+        _profile_add(profile, "lock_wait_sec", time.perf_counter() - lock_wait_start)
+        lock_hold_start = time.perf_counter()
+        try:
             return super().sample(*args, **kwargs)
+        finally:
+            _profile_add(
+                profile,
+                "lock_hold_sec",
+                time.perf_counter() - lock_hold_start,
+            )
+            self._lock.release()
 
     def latest_data_id(self):
         return self._insert_index
@@ -226,8 +249,20 @@ class MemoryEfficientReplayBufferDataStore(MemoryEfficientReplayBuffer, DataStor
                 )
 
     def sample(self, *args, **kwargs):
-        with self._lock:
+        profile = kwargs.pop("profile", None)
+        lock_wait_start = time.perf_counter()
+        self._lock.acquire()
+        _profile_add(profile, "lock_wait_sec", time.perf_counter() - lock_wait_start)
+        lock_hold_start = time.perf_counter()
+        try:
             return super().sample(*args, **kwargs)
+        finally:
+            _profile_add(
+                profile,
+                "lock_hold_sec",
+                time.perf_counter() - lock_hold_start,
+            )
+            self._lock.release()
 
     def latest_data_id(self):
         return self._insert_index
@@ -354,8 +389,20 @@ class StepWindowReplayBufferDataStore(StepWindowReplayBuffer, DataStoreBase):
                 )
 
     def sample(self, *args, **kwargs):
-        with self._lock:
+        profile = kwargs.get("profile")
+        lock_wait_start = time.perf_counter()
+        self._lock.acquire()
+        _profile_add(profile, "lock_wait_sec", time.perf_counter() - lock_wait_start)
+        lock_hold_start = time.perf_counter()
+        try:
             return super().sample(*args, **kwargs)
+        finally:
+            _profile_add(
+                profile,
+                "lock_hold_sec",
+                time.perf_counter() - lock_hold_start,
+            )
+            self._lock.release()
 
     def latest_data_id(self):
         return self._insert_count
@@ -530,8 +577,116 @@ class MemoryEfficientStepWindowReplayBufferDataStore(
                 )
 
     def sample(self, *args, **kwargs):
-        with self._lock:
-            return super().sample(*args, **kwargs)
+        if len(args) > 3:
+            raise TypeError(
+                "sample accepts at most batch_size, keys, and indx as positional args"
+            )
+        batch_size = args[0] if len(args) >= 1 else kwargs.pop("batch_size")
+        keys = args[1] if len(args) >= 2 else kwargs.pop("keys", None)
+        indx = args[2] if len(args) >= 3 else kwargs.pop("indx", None)
+        profile = kwargs.pop("profile", None)
+        pack_obs_and_next_obs = bool(kwargs.pop("pack_obs_and_next_obs", False))
+        max_retries = int(kwargs.pop("max_retries", 1))
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"unexpected sample keyword argument(s): {unexpected}")
+
+        sample_start = time.perf_counter()
+        last_error: Exception | None = None
+        for retry_count in range(max(0, max_retries) + 1):
+            lock_wait_start = time.perf_counter()
+            self._lock.acquire()
+            _profile_add(profile, "lock_wait_sec", time.perf_counter() - lock_wait_start)
+            lock_hold_start = time.perf_counter()
+            try:
+                metadata = self._sample_window_metadata(
+                    batch_size=int(batch_size),
+                    indx=indx,
+                    profile=profile,
+                )
+            finally:
+                _profile_add(
+                    profile,
+                    "lock_hold_sec",
+                    time.perf_counter() - lock_hold_start,
+                )
+                self._lock.release()
+
+            transition_build_start = time.perf_counter()
+            try:
+                batch = self._build_transition_batch_from_metadata(
+                    metadata,
+                    pack_obs_and_next_obs=pack_obs_and_next_obs,
+                )
+            except RuntimeError as exc:
+                last_error = exc
+                _profile_add(
+                    profile,
+                    "transition_build_sec",
+                    time.perf_counter() - transition_build_start,
+                )
+                continue
+            _profile_add(
+                profile,
+                "transition_build_sec",
+                time.perf_counter() - transition_build_start,
+            )
+
+            validate_wait_start = time.perf_counter()
+            self._lock.acquire()
+            _profile_add(
+                profile,
+                "lock_validate_wait_sec",
+                time.perf_counter() - validate_wait_start,
+            )
+            validate_hold_start = time.perf_counter()
+            try:
+                is_valid = self._validate_window_metadata(metadata)
+            finally:
+                _profile_add(
+                    profile,
+                    "lock_validate_hold_sec",
+                    time.perf_counter() - validate_hold_start,
+                )
+                self._lock.release()
+
+            if not is_valid:
+                continue
+
+            _profile_set(profile, "retry_count", float(retry_count))
+            _profile_set(profile, "batch_size", int(batch_size))
+            _profile_add(profile, "stack_sec", 0.0)
+            if keys is not None:
+                select_start = time.perf_counter()
+                batch = {key: batch[key] for key in list(keys)}
+                _profile_add(profile, "select_keys_sec", time.perf_counter() - select_start)
+            _profile_add(profile, "sample_total_sec", time.perf_counter() - sample_start)
+            return batch
+
+        lock_wait_start = time.perf_counter()
+        self._lock.acquire()
+        _profile_add(profile, "lock_wait_sec", time.perf_counter() - lock_wait_start)
+        lock_hold_start = time.perf_counter()
+        try:
+            batch = MemoryEfficientStepWindowReplayBuffer.sample(
+                self,
+                int(batch_size),
+                keys=keys,
+                indx=indx,
+                profile=profile,
+                pack_obs_and_next_obs=pack_obs_and_next_obs,
+            )
+        finally:
+            _profile_add(
+                profile,
+                "lock_hold_sec",
+                time.perf_counter() - lock_hold_start,
+            )
+            self._lock.release()
+        _profile_set(profile, "retry_count", float(max_retries + 1))
+        if last_error is not None:
+            _profile_set(profile, "retry_fallback_after_error", 1.0)
+        return batch
 
     def latest_data_id(self):
         return self._insert_count

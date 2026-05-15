@@ -10,6 +10,7 @@ from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.data.data_store import ReplayBufferDataStore
 from serl_launcher.data.data_store import StepWindowReplayBufferDataStore
+from serl_launcher.utils.train_utils import _unpack
 
 
 def _assert_nested_equal(lhs, rhs) -> None:
@@ -41,7 +42,7 @@ def _simple_observation_space():
     )
 
 
-def _pixel_observation_space():
+def _pixel_observation_space(stack_size: int = 2):
     return gym.spaces.Dict(
         {
             "state": gym.spaces.Box(
@@ -53,7 +54,7 @@ def _pixel_observation_space():
             "pixels": gym.spaces.Box(
                 low=0,
                 high=255,
-                shape=(2, 4, 4, 3),
+                shape=(int(stack_size), 4, 4, 3),
                 dtype=np.uint8,
             ),
         }
@@ -94,18 +95,23 @@ def _make_step_window_transition(
     return transition
 
 
-def _make_memory_transition(step: int, *, done: bool = False) -> dict:
+def _make_memory_transition(
+    step: int,
+    *,
+    done: bool = False,
+    stack_size: int = 2,
+) -> dict:
     observations_pixels = np.stack(
         [
             np.full((4, 4, 3), fill_value=step + offset, dtype=np.uint8)
-            for offset in range(2)
+            for offset in range(int(stack_size))
         ],
         axis=0,
     )
     next_observations_pixels = np.stack(
         [
             np.full((4, 4, 3), fill_value=step + offset + 1, dtype=np.uint8)
-            for offset in range(2)
+            for offset in range(int(stack_size))
         ],
         axis=0,
     )
@@ -120,8 +126,9 @@ def _make_memory_step_window_transition(
     *,
     episode_id: int = 0,
     done: bool = False,
+    stack_size: int = 2,
 ) -> dict:
-    transition = _make_memory_transition(step, done=done)
+    transition = _make_memory_transition(step, done=done, stack_size=stack_size)
     transition["episode_id"] = np.int64(episode_id)
     transition["episode_step"] = np.int32(step)
     return transition
@@ -266,3 +273,45 @@ def test_memory_efficient_step_window_batch_insert_matches_single_insert() -> No
     window_single = single._build_transition(0)
     window_batched = batched._build_transition(0)
     _assert_nested_equal(window_single, window_batched)
+
+
+def test_memory_efficient_step_window_packed_pixels_unpack_to_unpacked_batch() -> None:
+    observation_space = _pixel_observation_space(stack_size=1)
+    action_space = _action_space()
+    buffer = MemoryEfficientStepWindowReplayBufferDataStore(
+        observation_space,
+        action_space,
+        capacity=16,
+        window_size=3,
+        discount=0.99,
+        image_keys=("pixels",),
+    )
+    transitions = []
+    for step in range(8):
+        transitions.append(
+            _make_memory_step_window_transition(
+                step,
+                episode_id=0 if step < 4 else 1,
+                done=(step == 3 or step == 7),
+                stack_size=1,
+            )
+        )
+    buffer.batch_insert(pack_transition_batch(copy.deepcopy(transitions)))
+
+    sample_ids = np.asarray([0, 2, 3, 4], dtype=np.int64)
+    unpacked = buffer.sample(
+        int(sample_ids.shape[0]),
+        indx=sample_ids,
+        pack_obs_and_next_obs=False,
+    )
+    packed = buffer.sample(
+        int(sample_ids.shape[0]),
+        indx=sample_ids,
+        pack_obs_and_next_obs=True,
+    )
+
+    assert "pixels" not in packed["next_observations"]
+    assert packed["observations"]["pixels"].shape[1] == (
+        unpacked["observations"]["pixels"].shape[1] + 1
+    )
+    _assert_nested_equal(unpacked, _unpack(packed))

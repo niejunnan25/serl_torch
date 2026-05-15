@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import copy
+import time
 from typing import Iterable, Optional
 
 import gym
@@ -11,6 +12,16 @@ from serl_launcher.data.dataset import Dataset, DatasetDict
 from serl_launcher.data.replay_buffer import _init_replay_dict
 from serl_launcher.data.replay_buffer import _insert_recursively
 from serl_launcher.data.replay_buffer import _to_torch
+
+
+def _profile_add(profile: Optional[dict], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+def _profile_set(profile: Optional[dict], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(value)
 
 
 def _copy_at(dataset_dict, index: int):
@@ -26,6 +37,107 @@ def _stack_nested(items):
     if isinstance(first, dict):
         return {k: _stack_nested([item[k] for item in items]) for k in first}
     return np.stack(items, axis=0)
+
+
+def _take_at(dataset_dict, indices: np.ndarray):
+    if isinstance(dataset_dict, np.ndarray):
+        return np.array(dataset_dict[indices], copy=True)
+    if isinstance(dataset_dict, dict):
+        return {k: _take_at(v, indices) for k, v in dataset_dict.items()}
+    raise TypeError("Unsupported dataset type")
+
+
+def _pack_obs_and_next_pixels(
+    obs_pixels: np.ndarray,
+    next_pixels: np.ndarray,
+) -> np.ndarray:
+    obs_pixels = np.asarray(obs_pixels)
+    next_pixels = np.asarray(next_pixels)
+    if (
+        obs_pixels.ndim >= 5
+        and next_pixels.ndim == obs_pixels.ndim
+        and obs_pixels.shape[0] == next_pixels.shape[0]
+        and obs_pixels.shape[2:] == next_pixels.shape[2:]
+    ):
+        if int(obs_pixels.shape[1]) != 1:
+            raise ValueError(
+                "pack_obs_and_next_obs for step-window pixels requires a single "
+                "pixel frame per observation so _unpack can recover the terminal "
+                "next observation without extra metadata"
+            )
+        return np.concatenate([obs_pixels, next_pixels[:, -1:, ...]], axis=1)
+    return np.stack([obs_pixels, next_pixels], axis=1)
+
+
+class _CandidateStartStepIds:
+    """Append-only candidate ids with cheap stale-prefix cleanup and sampling."""
+
+    def __init__(self):
+        self._values: list[int] = []
+        self._head = 0
+
+    def __bool__(self) -> bool:
+        return len(self) > 0
+
+    def __len__(self) -> int:
+        return int(len(self._values) - self._head)
+
+    def __iter__(self):
+        return iter(self._values[self._head :])
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            start, stop, step = index.indices(len(self))
+            return [
+                self._values[self._head + offset]
+                for offset in range(start, stop, step)
+            ]
+        if int(index) < 0:
+            index = len(self) + int(index)
+        if int(index) < 0 or int(index) >= len(self):
+            raise IndexError(index)
+        return self._values[self._head + int(index)]
+
+    def __array__(self, dtype=None):
+        return np.asarray(list(self), dtype=dtype)
+
+    def append(self, value: int) -> None:
+        self._values.append(int(value))
+
+    def extend(self, values) -> None:
+        self._values.extend(int(value) for value in values)
+
+    def clear(self) -> None:
+        self._values.clear()
+        self._head = 0
+
+    def popleft(self) -> int:
+        if not self:
+            raise IndexError("pop from an empty candidate list")
+        value = int(self._values[self._head])
+        self._head += 1
+        self._compact_if_needed()
+        return value
+
+    def sample(self, np_random, batch_size: int) -> np.ndarray:
+        count = len(self)
+        if count <= 0:
+            raise RuntimeError("Cannot sample from an empty candidate list")
+        if hasattr(np_random, "integers"):
+            offsets = np_random.integers(count, size=int(batch_size))
+        else:
+            offsets = np_random.randint(count, size=int(batch_size))
+        return np.fromiter(
+            (self._values[self._head + int(offset)] for offset in offsets),
+            dtype=np.int64,
+            count=int(batch_size),
+        )
+
+    def _compact_if_needed(self) -> None:
+        if self._head <= 4096 or self._head * 2 <= len(self._values):
+            return
+        del self._values[: self._head]
+        self._head = 0
 
 
 class StepWindowReplayBuffer(Dataset):
@@ -85,7 +197,7 @@ class StepWindowReplayBuffer(Dataset):
         self._size = 0
         self._insert_index = 0
         self._insert_count = 0
-        self._candidate_start_step_ids = collections.deque()
+        self._candidate_start_step_ids = _CandidateStartStepIds()
         self._candidate_start_step_set: set[int] = set()
 
     def __len__(self) -> int:
@@ -240,13 +352,66 @@ class StepWindowReplayBuffer(Dataset):
             "window_steps": np.int32(window_steps),
         }
 
-    def sample(
+    def _batch_window_indices(
         self,
+        sampled_start_ids: np.ndarray,
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
+        sampled_start_ids = np.asarray(sampled_start_ids, dtype=np.int64).reshape(-1)
+        offsets = np.arange(int(self.window_size), dtype=np.int64)
+        step_ids = sampled_start_ids[:, None] + offsets[None, :]
+        indices = np.mod(step_ids, int(self._capacity)).astype(np.int64, copy=False)
+
+        start_indices = np.mod(sampled_start_ids, int(self._capacity)).astype(
+            np.int64,
+            copy=False,
+        )
+        start_episode_ids = self._episode_ids[start_indices]
+        start_episode_steps = self._episode_steps[start_indices]
+
+        min_active = int(self._min_active_step_id())
+        valid = (step_ids >= min_active) & (step_ids < int(self._insert_count))
+        valid &= self._step_ids[indices] == step_ids
+        valid &= self._episode_ids[indices] == start_episode_ids[:, None]
+        valid &= self._episode_steps[indices] == (
+            start_episode_steps[:, None] + offsets[None, :]
+        )
+
+        done_flags = valid & self.dataset_dict["dones"][indices]
+        has_boundary = np.any(done_flags, axis=1)
+        first_done_offsets = np.argmax(done_flags, axis=1)
+        before_or_at_boundary = offsets[None, :] <= first_done_offsets[:, None]
+        valid &= ~has_boundary[:, None] | before_or_at_boundary
+
+        window_steps = np.sum(valid, axis=1).astype(np.int32)
+        if np.any(window_steps <= 0):
+            bad_index = int(np.nonzero(window_steps <= 0)[0][0])
+            bad_id = int(sampled_start_ids[bad_index])
+            raise RuntimeError(f"No window transition available for start_step_id={bad_id}")
+
+        last_step_ids = sampled_start_ids + window_steps.astype(np.int64) - 1
+        last_indices = np.mod(last_step_ids, int(self._capacity)).astype(
+            np.int64,
+            copy=False,
+        )
+        return step_ids, indices, valid, window_steps, last_step_ids, last_indices
+
+    def _sample_window_metadata(
+        self,
+        *,
         batch_size: int,
-        keys: Optional[Iterable[str]] = None,
         indx: Optional[np.ndarray] = None,
-    ) -> DatasetDict:
+        profile: Optional[dict] = None,
+    ) -> dict[str, np.ndarray]:
+        cleanup_start = time.perf_counter()
         self._cleanup_stale_candidates()
+        _profile_add(profile, "cleanup_sec", time.perf_counter() - cleanup_start)
         if indx is None:
             if not self._candidate_start_step_ids:
                 raise RuntimeError(
@@ -254,30 +419,210 @@ class StepWindowReplayBuffer(Dataset):
                     f"(num_steps={self.num_steps}, num_windows={self.num_windows}, "
                     f"sample_stride={self.sample_stride})"
                 )
-            sampled_start_ids = self.np_random.choice(
-                np.asarray(self._candidate_start_step_ids, dtype=np.int64),
-                size=int(batch_size),
-                replace=True,
+            candidate_choice_start = time.perf_counter()
+            sampled_start_ids = self._candidate_start_step_ids.sample(
+                self.np_random,
+                int(batch_size),
             )
+            _profile_add(
+                profile,
+                "candidate_choice_sec",
+                time.perf_counter() - candidate_choice_start,
+            )
+            _profile_set(profile, "candidate_count", int(len(self._candidate_start_step_ids)))
         else:
+            candidate_choice_start = time.perf_counter()
             sampled_start_ids = np.asarray(indx, dtype=np.int64).reshape(-1)
             if int(sampled_start_ids.shape[0]) != int(batch_size):
                 raise ValueError(
                     "indx length must equal batch_size, got "
                     f"{sampled_start_ids.shape[0]} != {batch_size}"
                 )
+            _profile_add(
+                profile,
+                "candidate_choice_sec",
+                time.perf_counter() - candidate_choice_start,
+            )
+            _profile_set(profile, "candidate_count", int(self.num_windows))
 
-        transitions = [
-            self._build_transition(int(step_id)) for step_id in sampled_start_ids
-        ]
-        batch = {
-            key: _stack_nested([transition[key] for transition in transitions])
-            for key in transitions[0]
+        metadata_start = time.perf_counter()
+        start_indices = np.mod(sampled_start_ids, int(self._capacity)).astype(
+            np.int64,
+            copy=False,
+        )
+        (
+            step_ids,
+            window_indices,
+            valid,
+            window_steps,
+            last_step_ids,
+            last_indices,
+        ) = self._batch_window_indices(sampled_start_ids)
+        _profile_add(profile, "window_metadata_sec", time.perf_counter() - metadata_start)
+        return {
+            "sampled_start_ids": sampled_start_ids,
+            "start_indices": start_indices,
+            "step_ids": step_ids,
+            "window_indices": window_indices,
+            "valid": valid,
+            "window_steps": window_steps,
+            "last_step_ids": last_step_ids,
+            "last_indices": last_indices,
         }
+
+    def _validate_window_metadata(self, metadata: dict[str, np.ndarray]) -> bool:
+        window_indices = metadata["window_indices"]
+        step_ids = metadata["step_ids"]
+        valid = metadata["valid"]
+        if np.any(self._step_ids[window_indices[valid]] != step_ids[valid]):
+            return False
+
+        start_indices = metadata["start_indices"]
+        sampled_start_ids = metadata["sampled_start_ids"]
+        if np.any(self._step_ids[start_indices] != sampled_start_ids):
+            return False
+
+        last_indices = metadata["last_indices"]
+        last_step_ids = metadata["last_step_ids"]
+        if np.any(self._step_ids[last_indices] != last_step_ids):
+            return False
+        return True
+
+    def _copy_observations_batch(
+        self,
+        *,
+        start_indices: np.ndarray,
+        last_step_ids: np.ndarray,
+        last_indices: np.ndarray,
+        pack_obs_and_next_obs: bool,
+    ) -> DatasetDict:
+        del last_step_ids, last_indices, pack_obs_and_next_obs
+        return _take_at(self.dataset_dict["observations"], start_indices)
+
+    def _copy_next_observations_batch(
+        self,
+        *,
+        last_step_ids: np.ndarray,
+        last_indices: np.ndarray,
+        pack_obs_and_next_obs: bool = False,
+    ) -> DatasetDict:
+        del last_step_ids, pack_obs_and_next_obs
+        return _take_at(self.dataset_dict["next_observations"], last_indices)
+
+    def _build_transition_batch_from_metadata(
+        self,
+        metadata: dict[str, np.ndarray],
+        *,
+        pack_obs_and_next_obs: bool = False,
+    ) -> DatasetDict:
+        start_indices = metadata["start_indices"]
+        window_indices = metadata["window_indices"]
+        valid = metadata["valid"]
+        window_steps = metadata["window_steps"]
+        last_step_ids = metadata["last_step_ids"]
+        last_indices = metadata["last_indices"]
+
+        valid_action_shape = valid.shape + (1,) * len(self._step_action_shape)
+        valid_actions = valid.reshape(valid_action_shape)
+        sampled_actions = self.dataset_dict["actions"][window_indices]
+        action_window = np.array(
+            np.where(
+                valid_actions,
+                sampled_actions,
+                np.zeros((), dtype=sampled_actions.dtype),
+            ),
+            copy=True,
+        )
+        action_mask = np.broadcast_to(
+            valid_actions,
+            valid.shape + self._step_action_shape,
+        ).astype(np.float32, copy=True)
+
+        offsets = np.arange(int(self.window_size), dtype=np.float32)
+        discounts = np.power(np.float32(self.discount), offsets)
+        rewards = self.dataset_dict["rewards"][window_indices]
+        discounted_rewards = np.sum(
+            rewards * valid.astype(np.float32) * discounts[None, :],
+            axis=1,
+        ).astype(np.float32)
+        terminal_discounts = np.power(
+            np.float32(self.discount),
+            np.maximum(window_steps.astype(np.int64) - 1, 0).astype(np.float32),
+        )
+        masks = (
+            terminal_discounts * self.dataset_dict["masks"][last_indices].astype(np.float32)
+        ).astype(np.float32)
+
+        return {
+            "observations": self._copy_observations_batch(
+                start_indices=start_indices,
+                last_step_ids=last_step_ids,
+                last_indices=last_indices,
+                pack_obs_and_next_obs=pack_obs_and_next_obs,
+            ),
+            "actions": action_window,
+            "action_mask": action_mask,
+            "next_observations": self._copy_next_observations_batch(
+                last_step_ids=last_step_ids,
+                last_indices=last_indices,
+                pack_obs_and_next_obs=pack_obs_and_next_obs,
+            ),
+            "rewards": discounted_rewards,
+            "masks": masks,
+            "dones": np.any(valid & self.dataset_dict["dones"][window_indices], axis=1),
+            "window_steps": window_steps,
+        }
+
+    def _build_transition_batch(
+        self,
+        sampled_start_ids: np.ndarray,
+        *,
+        pack_obs_and_next_obs: bool = False,
+    ) -> DatasetDict:
+        sampled_start_ids = np.asarray(sampled_start_ids, dtype=np.int64).reshape(-1)
+        metadata = self._sample_window_metadata(
+            batch_size=int(sampled_start_ids.shape[0]),
+            indx=sampled_start_ids,
+        )
+        return self._build_transition_batch_from_metadata(
+            metadata,
+            pack_obs_and_next_obs=pack_obs_and_next_obs,
+        )
+
+    def sample(
+        self,
+        batch_size: int,
+        keys: Optional[Iterable[str]] = None,
+        indx: Optional[np.ndarray] = None,
+        profile: Optional[dict] = None,
+        pack_obs_and_next_obs: bool = False,
+    ) -> DatasetDict:
+        sample_start = time.perf_counter()
+        metadata = self._sample_window_metadata(
+            batch_size=int(batch_size),
+            indx=indx,
+            profile=profile,
+        )
+        transition_build_start = time.perf_counter()
+        batch = self._build_transition_batch_from_metadata(
+            metadata,
+            pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+        )
+        _profile_add(
+            profile,
+            "transition_build_sec",
+            time.perf_counter() - transition_build_start,
+        )
+        _profile_add(profile, "stack_sec", 0.0)
+        _profile_set(profile, "batch_size", int(batch_size))
+        _profile_add(profile, "sample_total_sec", time.perf_counter() - sample_start)
         if keys is None:
             return batch
+        select_start = time.perf_counter()
         selected_keys = list(keys)
-        return {key: batch[key] for key in selected_keys}
+        selected = {key: batch[key] for key in selected_keys}
+        _profile_add(profile, "select_keys_sec", time.perf_counter() - select_start)
+        return selected
 
     def get_iterator(self, queue_size: int = 2, sample_args: dict = None, device=None):
         sample_args = sample_args or {}
@@ -445,6 +790,93 @@ class MemoryEfficientStepWindowReplayBuffer(StepWindowReplayBuffer):
         for pixel_key in self.pixel_keys:
             next_obs[pixel_key] = self._copy_next_pixel(
                 last_step_id,
+                pixel_key=pixel_key,
+            )
+        return next_obs
+
+    def _copy_next_pixel_batch(
+        self,
+        last_step_ids: np.ndarray,
+        last_indices: np.ndarray,
+        *,
+        pixel_key: str,
+    ) -> np.ndarray:
+        explicit = self._has_explicit_next_pixels[last_indices]
+        pixels = np.empty(
+            (int(last_indices.shape[0]), *self._pixel_spaces[pixel_key].shape),
+            dtype=self._pixel_spaces[pixel_key].dtype,
+        )
+
+        if np.any(explicit):
+            explicit_indices = last_indices[explicit]
+            pixels[explicit] = self._explicit_next_pixels[pixel_key][explicit_indices]
+
+        implicit = ~explicit
+        if np.any(implicit):
+            implicit_last_step_ids = last_step_ids[implicit]
+            implicit_last_indices = last_indices[implicit]
+            next_step_ids = implicit_last_step_ids + 1
+            next_indices = np.mod(next_step_ids, int(self._capacity)).astype(
+                np.int64,
+                copy=False,
+            )
+            valid_next = self._step_ids[next_indices] == next_step_ids
+            valid_next &= self._episode_ids[next_indices] == self._episode_ids[
+                implicit_last_indices
+            ]
+            valid_next &= self._episode_steps[next_indices] == (
+                self._episode_steps[implicit_last_indices] + 1
+            )
+            if not np.all(valid_next):
+                bad_index = int(np.nonzero(~valid_next)[0][0])
+                bad_step_id = int(implicit_last_step_ids[bad_index])
+                raise RuntimeError(
+                    "Cannot reconstruct next-observation pixels without an active "
+                    f"contiguous next step for step_id={bad_step_id}"
+                )
+            pixels[implicit] = self.dataset_dict["observations"][pixel_key][
+                next_indices
+            ]
+
+        return pixels
+
+    def _copy_observations_batch(
+        self,
+        *,
+        start_indices: np.ndarray,
+        last_step_ids: np.ndarray,
+        last_indices: np.ndarray,
+        pack_obs_and_next_obs: bool,
+    ) -> DatasetDict:
+        observations = _take_at(self.dataset_dict["observations"], start_indices)
+        if not pack_obs_and_next_obs:
+            return observations
+
+        for pixel_key in self.pixel_keys:
+            observations[pixel_key] = _pack_obs_and_next_pixels(
+                observations[pixel_key],
+                self._copy_next_pixel_batch(
+                    last_step_ids,
+                    last_indices,
+                    pixel_key=pixel_key,
+                ),
+            )
+        return observations
+
+    def _copy_next_observations_batch(
+        self,
+        *,
+        last_step_ids: np.ndarray,
+        last_indices: np.ndarray,
+        pack_obs_and_next_obs: bool = False,
+    ) -> DatasetDict:
+        next_obs = _take_at(self.dataset_dict["next_observations"], last_indices)
+        if pack_obs_and_next_obs:
+            return next_obs
+        for pixel_key in self.pixel_keys:
+            next_obs[pixel_key] = self._copy_next_pixel_batch(
+                last_step_ids,
+                last_indices,
                 pixel_key=pixel_key,
             )
         return next_obs

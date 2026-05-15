@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Reference-style LIBERO residual DRQ training script."""
 
-from collections import deque
+from collections import defaultdict, deque
 import json
 import logging
 import sys
@@ -43,6 +43,7 @@ from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.policy.typed_factory import build_policy_client
 from serl_launcher.policy.typed_factory import describe_policy_backend
+from serl_launcher.residual.chunk_window_replay import BatchPrefetcher
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
 from serl_launcher.residual.observation import build_chunk_residual_obs
@@ -811,10 +812,87 @@ def learner(
     replay_warmup_poll_interval_sec = 1.0
     idle_poll_interval_sec = 1.0
     timer = Timer()
+    sample_profile_totals = defaultdict(float)
     last_log_time = time.time()
     last_log_update_steps = int(update_steps)
     offline_pretrain_steps_done = 0
     initial_network_published = False
+    batch_prefetcher: BatchPrefetcher | None = None
+    batch_prefetcher_offline_ratio: float | None = None
+    logger.info("learner replay batch prefetch enabled: depth=1")
+
+    def _record_sample_profile(profile: dict) -> None:
+        for key, value in profile.items():
+            if isinstance(value, (int, float)):
+                sample_profile_totals[str(key)] += float(value)
+
+    def _drain_sample_profile() -> dict:
+        if not sample_profile_totals:
+            return {}
+        totals = dict(sample_profile_totals)
+        sample_profile_totals.clear()
+        mixed_calls = max(float(totals.get("mixed_sample_calls", 0.0)), 1.0)
+        online_calls = max(float(totals.get("online_sample_calls", 0.0)), 1.0)
+        offline_calls = max(float(totals.get("offline_sample_calls", 0.0)), 1.0)
+        result = {}
+        for key, total in sorted(totals.items()):
+            if key.endswith("_calls"):
+                result[key] = int(total)
+                continue
+            if key.startswith("online_"):
+                denom = online_calls
+            elif key.startswith("offline_"):
+                denom = offline_calls
+            else:
+                denom = mixed_calls
+            result[key] = float(total) / float(denom)
+        return result
+
+    def _sample_training_batch(
+        *,
+        offline_ratio: float,
+    ) -> tuple[dict[str, Any], dict[str, int], dict[str, float]]:
+        sample_profile: dict[str, float] = {}
+        batch, batch_mix = sample_mixed_training_batch(
+            online_replay_buffer=replay_buffer,
+            offline_replay_buffer=offline_replay_buffer,
+            batch_size=int(cfg.replay.batch_size),
+            offline_ratio=float(offline_ratio),
+            profile=sample_profile,
+            pack_obs_and_next_obs=True,
+            device=agent.device,
+            prefer_device_concat=True,
+        )
+        return batch, batch_mix, sample_profile
+
+    def _get_batch_prefetcher(*, offline_ratio: float) -> BatchPrefetcher:
+        nonlocal batch_prefetcher
+        nonlocal batch_prefetcher_offline_ratio
+        resolved_ratio = float(offline_ratio)
+        if (
+            batch_prefetcher is None
+            or batch_prefetcher_offline_ratio is None
+            or float(batch_prefetcher_offline_ratio) != float(resolved_ratio)
+        ):
+            if batch_prefetcher is not None:
+                batch_prefetcher.close()
+            batch_prefetcher = BatchPrefetcher(
+                lambda: _sample_training_batch(offline_ratio=resolved_ratio),
+                thread_name_prefix="libero-learner-prefetch",
+            )
+            batch_prefetcher_offline_ratio = float(resolved_ratio)
+            batch_prefetcher.start()
+        return batch_prefetcher
+
+    def _next_training_batch(
+        *,
+        offline_ratio: float,
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        prefetcher = _get_batch_prefetcher(offline_ratio=float(offline_ratio))
+        with timer.context("sample_replay_buffer"):
+            batch, batch_mix, sample_profile = prefetcher.get()
+        _record_sample_profile(sample_profile)
+        return batch, batch_mix
 
     def _run_training_update(
         *,
@@ -826,23 +904,14 @@ def learner(
             "offline_batch_size": 0,
         }
         for _ in range(max(0, critic_actor_ratio - 1)):
-            with timer.context("sample_replay_buffer"):
-                batch, _ = sample_mixed_training_batch(
-                    online_replay_buffer=replay_buffer,
-                    offline_replay_buffer=offline_replay_buffer,
-                    batch_size=int(cfg.replay.batch_size),
-                    offline_ratio=float(offline_ratio),
-                )
+            batch, _ = _next_training_batch(offline_ratio=float(offline_ratio))
             with timer.context("train_critics"):
                 agent, _critics_info = agent.update_critics(batch)
 
+        batch, train_batch_mix = _next_training_batch(
+            offline_ratio=float(offline_ratio)
+        )
         with timer.context("train"):
-            batch, train_batch_mix = sample_mixed_training_batch(
-                online_replay_buffer=replay_buffer,
-                offline_replay_buffer=offline_replay_buffer,
-                batch_size=int(cfg.replay.batch_size),
-                offline_ratio=float(offline_ratio),
-            )
             agent, update_info = agent.update_high_utd(
                 batch,
                 utd_ratio=cfg.sac.utd_ratio,
@@ -1060,6 +1129,7 @@ def learner(
                 last_log_time = now
                 last_log_update_steps = int(update_steps)
                 timer_metrics = to_jsonable(timer.get_average_times())
+                sample_profile_metrics = to_jsonable(_drain_sample_profile())
                 learner_metrics = extract_learner_wandb_metrics(update_metrics)
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
@@ -1072,6 +1142,7 @@ def learner(
                         "replay_size": int(len(replay_buffer)),
                         "updates_per_sec": float(updates_per_sec),
                         "timer": timer_metrics,
+                        "sample_profile": sample_profile_metrics,
                         "transport": _transport_status(),
                     },
                 )
@@ -1122,6 +1193,8 @@ def learner(
         logger.info("learner interrupted; shutting down gracefully")
 
     finally:
+        if batch_prefetcher is not None:
+            batch_prefetcher.close()
         _maybe_queue_async_eval()
         async_eval_return_code = None
         if async_eval.enabled:

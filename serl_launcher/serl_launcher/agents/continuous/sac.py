@@ -297,13 +297,43 @@ def _to_torch(data, device: torch.device):
     return tensor
 
 
+def _detach_metric(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach()
+    return value
+
+
+def _metric_mean(value):
+    if isinstance(value, torch.Tensor):
+        return value.mean().detach()
+    return value
+
+
+def _metric_active_dims(mask, fallback: int):
+    if mask is None:
+        return float(fallback)
+    return mask.to(dtype=torch.float32).sum(dim=-1).mean().detach()
+
+
 def _tree_mean(values):
     out = {}
     for key in values[0].keys():
         valid = [v[key] for v in values if key in v]
         if not valid:
             continue
-        out[key] = float(np.mean(valid))
+        if any(isinstance(value, torch.Tensor) for value in valid):
+            metric_device = next(
+                value.device for value in valid if isinstance(value, torch.Tensor)
+            )
+            tensors = []
+            for value in valid:
+                if isinstance(value, torch.Tensor):
+                    tensors.append(value.detach())
+                else:
+                    tensors.append(torch.as_tensor(value, device=metric_device))
+            out[key] = torch.stack(tensors).mean()
+        else:
+            out[key] = float(np.mean(valid))
     return out
 
 
@@ -805,15 +835,15 @@ class SACAgent:
             critic_loss = td_critic_loss + calql_alpha * cql_penalty
 
         info = {
-            "critic_loss": float(critic_loss.detach().cpu()),
-            "critic_td_loss": float(td_critic_loss.detach().cpu()),
-            "critic_cql_penalty": float(cql_penalty.detach().cpu()),
-            "predicted_qs": float(predicted_qs.mean().detach().cpu()),
-            "target_qs": float(target_qs.mean().detach().cpu()),
-            "predicted_q_min": float(predicted_q_min.mean().detach().cpu()),
-            "predicted_q_max": float(predicted_q_max.mean().detach().cpu()),
-            "predicted_q_std": float(predicted_q_std.mean().detach().cpu()),
-            "predicted_q_gap": float(predicted_q_gap.mean().detach().cpu()),
+            "critic_loss": _detach_metric(critic_loss),
+            "critic_td_loss": _detach_metric(td_critic_loss),
+            "critic_cql_penalty": _detach_metric(cql_penalty),
+            "predicted_qs": _metric_mean(predicted_qs),
+            "target_qs": _metric_mean(target_qs),
+            "predicted_q_min": _metric_mean(predicted_q_min),
+            "predicted_q_max": _metric_mean(predicted_q_max),
+            "predicted_q_std": _metric_mean(predicted_q_std),
+            "predicted_q_gap": _metric_mean(predicted_q_gap),
             "batch_size": int(batch_size),
             "otf_num_samples": int(self.config.get("otf_num_samples", 1)),
             "calql_alpha": float(calql_alpha),
@@ -858,22 +888,17 @@ class SACAgent:
         actor_loss = -torch.mean(actor_objective)
 
         info = {
-            "actor_loss": float(actor_loss.detach().cpu()),
-            "temperature": float(temperature.detach().cpu()),
-            "entropy": float((-log_probs.mean()).detach().cpu()),
-            "log_prob": float(log_probs.mean().detach().cpu()),
-            "policy_active_dims": float(
-                policy_action_mask.to(dtype=torch.float32)
-                .sum(dim=-1)
-                .mean()
-                .detach()
-                .cpu()
-            )
-            if policy_action_mask is not None
-            else float(policy_actions.shape[-1]),
-            "actor_predicted_q": float(predicted_q.mean().detach().cpu()),
-            "actor_predicted_q_min": float(predicted_q_min.mean().detach().cpu()),
-            "actor_predicted_q_std": float(predicted_q_std.mean().detach().cpu()),
+            "actor_loss": _detach_metric(actor_loss),
+            "temperature": _detach_metric(temperature),
+            "entropy": _detach_metric(-log_probs.mean()),
+            "log_prob": _metric_mean(log_probs),
+            "policy_active_dims": _metric_active_dims(
+                policy_action_mask,
+                fallback=int(policy_actions.shape[-1]),
+            ),
+            "actor_predicted_q": _metric_mean(predicted_q),
+            "actor_predicted_q_min": _metric_mean(predicted_q_min),
+            "actor_predicted_q_std": _metric_mean(predicted_q_std),
         }
 
         return actor_loss, info
@@ -908,23 +933,16 @@ class SACAgent:
         penalty = self.temperature_lagrange_penalty(entropy)
         temperature_loss = penalty.mean() if penalty.ndim > 0 else penalty
         return temperature_loss, {
-            "temperature_loss": float(temperature_loss.detach().cpu()),
-            "temperature_entropy": float(entropy.detach().cpu()),
-            "target_entropy": float(target_entropy.detach().cpu()),
-            "target_entropy_abs": float(target_entropy_abs.detach().cpu()),
-            "target_entropy_gap": float((entropy - target_entropy_abs).detach().cpu()),
-            "temperature_constraint_gap": float(
-                (entropy - target_entropy).detach().cpu()
+            "temperature_loss": _detach_metric(temperature_loss),
+            "temperature_entropy": _detach_metric(entropy),
+            "target_entropy": _detach_metric(target_entropy),
+            "target_entropy_abs": _detach_metric(target_entropy_abs),
+            "target_entropy_gap": _detach_metric(entropy - target_entropy_abs),
+            "temperature_constraint_gap": _detach_metric(entropy - target_entropy),
+            "temperature_policy_active_dims": _metric_active_dims(
+                policy_action_mask,
+                fallback=int(policy_actions.shape[-1]),
             ),
-            "temperature_policy_active_dims": float(
-                policy_action_mask.to(dtype=torch.float32)
-                .sum(dim=-1)
-                .mean()
-                .detach()
-                .cpu()
-            )
-            if policy_action_mask is not None
-            else float(policy_actions.shape[-1]),
         }
 
     def update(
