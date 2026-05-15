@@ -1,9 +1,16 @@
+import logging
 from typing import Dict, Iterable, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+
+from serl_launcher.vision.resnet_v1 import ResNetEncoder
+
+
+_LOGGER = logging.getLogger(__name__)
+_FUSE_VIEW_POLICIES = frozenset({"auto", "true", "false"})
 
 
 def _flatten_history_image(image: torch.Tensor) -> torch.Tensor:
@@ -34,6 +41,18 @@ def _maybe_call_encoder(module: nn.Module, image: torch.Tensor, train: bool, enc
             return module(image)
 
 
+def _normalize_fuse_views_policy(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    resolved = str(value if value is not None else "auto").strip().lower()
+    if resolved not in _FUSE_VIEW_POLICIES:
+        raise ValueError(
+            "encoder.fuse_views must be one of {'auto', true, false}, "
+            f"got {value!r}"
+        )
+    return resolved
+
+
 class EncodingWrapper(nn.Module):
     """PyTorch version of SERL observation encoder wrapper."""
 
@@ -45,6 +64,7 @@ class EncodingWrapper(nn.Module):
         enable_stacking: bool = False,
         image_keys: Iterable[str] = ("image",),
         vector_obs_keys: Optional[Iterable[str]] = None,
+        fuse_views: str | bool = "auto",
     ):
         super().__init__()
         self.use_proprio = use_proprio
@@ -65,21 +85,79 @@ class EncodingWrapper(nn.Module):
             raise TypeError(f"Unsupported encoder type: {type(encoder)}")
 
         self.proprio_proj = nn.LazyLinear(self.proprio_latent_dim)
+        self.fuse_views = _normalize_fuse_views_policy(fuse_views)
+        self._fuse_static_reason = self._validate_fuse_views_static()
+        if self.fuse_views == "true" and self._fuse_static_reason is not None:
+            raise ValueError(
+                "encoder.fuse_views=true but fused view encoding is unavailable: "
+                f"{self._fuse_static_reason}"
+            )
+        if self.fuse_views == "auto":
+            if self._fuse_static_reason is None:
+                _LOGGER.info(
+                    "encoder.fuse_views auto enabled for image_keys=%s",
+                    self.image_keys,
+                )
+            else:
+                _LOGGER.info(
+                    "encoder.fuse_views auto disabled: %s",
+                    self._fuse_static_reason,
+                )
 
-    def forward(
+    def _validate_fuse_views_static(self) -> str | None:
+        if self.fuse_views == "false":
+            return "disabled by config"
+        if len(self.image_keys) < 2:
+            return "fewer than two image keys"
+
+        encoders = []
+        for image_key in self.image_keys:
+            if image_key not in self.encoder:
+                return f"missing encoder for image key {image_key!r}"
+            module = self.encoder[image_key]
+            if not isinstance(module, ResNetEncoder):
+                return (
+                    f"encoder for image key {image_key!r} is "
+                    f"{type(module).__name__}, not ResNetEncoder"
+                )
+            if not bool(module.freeze_backbone):
+                return f"encoder for image key {image_key!r} has freeze_backbone=false"
+            encoders.append(module)
+
+        first_backbone = encoders[0].backbone
+        for image_key, module in zip(self.image_keys[1:], encoders[1:]):
+            if module.backbone is not first_backbone:
+                return f"encoder for image key {image_key!r} does not share backbone"
+
+        return None
+
+    def _prepare_image_for_encoder(
         self,
         observations: Dict[str, torch.Tensor],
-        train: bool = False,
-        stop_gradient: bool = False,
-        is_encoded: bool = False,
+        image_key: str,
+        *,
+        is_encoded: bool,
     ) -> torch.Tensor:
+        image = observations[image_key]
+        if not is_encoded and self.enable_stacking:
+            image = _flatten_history_image(image)
+        return image
+
+    def _encode_images_loop(
+        self,
+        observations: Dict[str, torch.Tensor],
+        *,
+        train: bool,
+        stop_gradient: bool,
+        is_encoded: bool,
+    ) -> list[torch.Tensor]:
         encoded = []
-
         for image_key in self.image_keys:
-            image = observations[image_key]
-            if not is_encoded and self.enable_stacking:
-                image = _flatten_history_image(image)
-
+            image = self._prepare_image_for_encoder(
+                observations,
+                image_key,
+                is_encoded=is_encoded,
+            )
             image_feature = _maybe_call_encoder(
                 self.encoder[image_key],
                 image,
@@ -91,6 +169,114 @@ class EncodingWrapper(nn.Module):
                 image_feature = image_feature.detach()
 
             encoded.append(image_feature)
+        return encoded
+
+    def _fused_view_dynamic_reason(
+        self,
+        images_bchw: list[torch.Tensor],
+        squeezed: list[bool],
+    ) -> str | None:
+        if not images_bchw:
+            return "no image tensors to fuse"
+        if any(image.ndim != 4 for image in images_bchw):
+            return "all fused images must be 4D BCHW tensors"
+        first = images_bchw[0]
+        first_squeezed = bool(squeezed[0])
+        for image_key, image, was_squeezed in zip(
+            self.image_keys[1:],
+            images_bchw[1:],
+            squeezed[1:],
+        ):
+            if image.device != first.device:
+                return f"image key {image_key!r} is on {image.device}, expected {first.device}"
+            if image.dtype != first.dtype:
+                return f"image key {image_key!r} has dtype {image.dtype}, expected {first.dtype}"
+            if bool(was_squeezed) != first_squeezed:
+                return "all fused images must consistently include or omit batch dim"
+            if tuple(image.shape) != tuple(first.shape):
+                return (
+                    f"image key {image_key!r} has shape {tuple(image.shape)}, "
+                    f"expected {tuple(first.shape)}"
+                )
+        return None
+
+    def _encode_images_fused(
+        self,
+        observations: Dict[str, torch.Tensor],
+        *,
+        train: bool,
+        stop_gradient: bool,
+        is_encoded: bool,
+    ) -> tuple[list[torch.Tensor] | None, str | None]:
+        if self._fuse_static_reason is not None:
+            return None, self._fuse_static_reason
+        if is_encoded:
+            return None, "observations are already encoded"
+
+        encoders = [self.encoder[image_key] for image_key in self.image_keys]
+        images_bchw = []
+        squeezed = []
+        for image_key, encoder in zip(self.image_keys, encoders):
+            image = self._prepare_image_for_encoder(
+                observations,
+                image_key,
+                is_encoded=False,
+            )
+            if not isinstance(image, torch.Tensor):
+                return None, f"image key {image_key!r} is not a torch.Tensor"
+            image_bchw, was_squeezed = encoder.observations_to_bchw(image)
+            images_bchw.append(image_bchw)
+            squeezed.append(bool(was_squeezed))
+
+        dynamic_reason = self._fused_view_dynamic_reason(images_bchw, squeezed)
+        if dynamic_reason is not None:
+            return None, dynamic_reason
+
+        batch_size = int(images_bchw[0].shape[0])
+        fused_images = torch.cat(images_bchw, dim=0)
+        fused_features = encoders[0].encode_backbone_bchw(fused_images)
+        features_by_view = fused_features.split(batch_size, dim=0)
+
+        encoded = []
+        squeeze_outputs = bool(squeezed[0])
+        for encoder, features in zip(encoders, features_by_view):
+            image_feature = encoder.pool_features(features, train=train)
+            if squeeze_outputs and image_feature.ndim > 1:
+                image_feature = image_feature.squeeze(0)
+            if stop_gradient:
+                image_feature = image_feature.detach()
+            encoded.append(image_feature)
+
+        return encoded, None
+
+    def forward(
+        self,
+        observations: Dict[str, torch.Tensor],
+        train: bool = False,
+        stop_gradient: bool = False,
+        is_encoded: bool = False,
+    ) -> torch.Tensor:
+        encoded = None
+        if self.fuse_views != "false":
+            encoded, reason = self._encode_images_fused(
+                observations,
+                train=train,
+                stop_gradient=stop_gradient,
+                is_encoded=is_encoded,
+            )
+            if encoded is None and self.fuse_views == "true":
+                raise ValueError(
+                    "encoder.fuse_views=true but fused view encoding is unavailable: "
+                    f"{reason}"
+                )
+
+        if encoded is None:
+            encoded = self._encode_images_loop(
+                observations,
+                train=train,
+                stop_gradient=stop_gradient,
+                is_encoded=is_encoded,
+            )
 
         encoding = torch.cat(encoded, dim=-1)
 

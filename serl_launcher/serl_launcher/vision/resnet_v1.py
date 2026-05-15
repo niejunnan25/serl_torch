@@ -154,6 +154,16 @@ class ResNetEncoder(nn.Module):
         self.bottleneck = (
             nn.LazyLinear(bottleneck_dim) if bottleneck_dim is not None else None
         )
+        self.register_buffer(
+            "_image_mean",
+            torch.tensor(self.IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_image_std",
+            torch.tensor(self.IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
 
     @staticmethod
     def create_backbone(
@@ -192,6 +202,37 @@ class ResNetEncoder(nn.Module):
         if self.freeze_backbone:
             self.backbone.eval()
         return self
+
+    def observations_to_bchw(self, observations: torch.Tensor):
+        return _to_bchw(observations)
+
+    def normalize_bchw(self, x: torch.Tensor) -> torch.Tensor:
+        return (x.float() / 255.0 - self._image_mean) / self._image_std
+
+    def encode_backbone_bchw(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.normalize_bchw(x)
+        if self.freeze_backbone:
+            with torch.no_grad():
+                out = self.backbone(pixel_values=x, return_dict=True)
+            return out.last_hidden_state.detach()
+
+        out = self.backbone(pixel_values=x, return_dict=True)
+        return out.last_hidden_state
+
+    def pool_features(
+        self,
+        features: torch.Tensor,
+        *,
+        train: bool = True,
+    ) -> torch.Tensor:
+        x = self._pool(features, train=train)
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
+            x = torch.layer_norm(x, x.shape[-1:])
+            x = torch.tanh(x)
+
+        return x
 
     def _pool(self, x: torch.Tensor, train: bool):
         if self.pooling_method == "spatial_learned_embeddings":
@@ -233,29 +274,8 @@ class ResNetEncoder(nn.Module):
         **kwargs,
     ):
         x, squeeze = _to_bchw(observations)
-
-        mean = torch.tensor(
-            self.IMAGENET_MEAN, device=x.device, dtype=torch.float32,
-        ).view(1, 3, 1, 1)
-        std = torch.tensor(
-            self.IMAGENET_STD, device=x.device, dtype=torch.float32,
-        ).view(1, 3, 1, 1)
-        x = (x.float() / 255.0 - mean) / std
-
-        if self.freeze_backbone:
-            with torch.no_grad():
-                out = self.backbone(pixel_values=x, return_dict=True)
-            x = out.last_hidden_state.detach()
-        else:
-            out = self.backbone(pixel_values=x, return_dict=True)
-            x = out.last_hidden_state
-
-        x = self._pool(x, train=train)
-
-        if self.bottleneck is not None:
-            x = self.bottleneck(x)
-            x = torch.layer_norm(x, x.shape[-1:])
-            x = torch.tanh(x)
+        x = self.encode_backbone_bchw(x)
+        x = self.pool_features(x, train=train)
 
         if squeeze and x.ndim > 1:
             x = x.squeeze(0)

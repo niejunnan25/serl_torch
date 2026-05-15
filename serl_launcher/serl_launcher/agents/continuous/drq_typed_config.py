@@ -116,6 +116,7 @@ def create_drq_agent_from_typed_cfg(
         "image_keys": tuple(image_keys),
         "vector_obs_keys": cfg.obs.vector_obs_keys,
         "proprio_latent_dim": _proprio_latent_dim(cfg),
+        "fuse_views": getattr(cfg.encoder, "fuse_views", "auto"),
         "resnet_kwargs": _resnet_kwargs(cfg),
         "critic_network_kwargs": {
             "activations": cfg.network.critic_activation,

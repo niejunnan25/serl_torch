@@ -65,6 +65,7 @@ action_filter:
 encoder:
   type: resnet
   shared: true
+  fuse_views: auto
   use_proprio: true
   proprio_latent_dim: 64
   resnet:

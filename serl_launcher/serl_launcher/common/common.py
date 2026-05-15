@@ -29,6 +29,46 @@ def _clone_state_dict(state_dict: Mapping[str, torch.Tensor]) -> Dict[str, torch
     return {k: v.detach().cpu().clone() for k, v in state_dict.items()}
 
 
+def _soft_update_parameters(
+    target: nn.Module,
+    source: nn.Module,
+    tau: float,
+    *,
+    skip_frozen: bool = False,
+):
+    grouped: dict[tuple[torch.device, torch.dtype], list[tuple[torch.Tensor, torch.Tensor]]] = {}
+    fallback_pairs: list[tuple[torch.Tensor, torch.Tensor]] = []
+
+    for target_param, source_param in zip(target.parameters(), source.parameters()):
+        if (
+            skip_frozen
+            and (not bool(target_param.requires_grad))
+            and (not bool(source_param.requires_grad))
+        ):
+            continue
+        if (
+            target_param.device == source_param.device
+            and target_param.dtype == source_param.dtype
+            and target_param.layout == torch.strided
+            and source_param.layout == torch.strided
+        ):
+            grouped.setdefault((target_param.device, target_param.dtype), []).append(
+                (target_param, source_param)
+            )
+        else:
+            fallback_pairs.append((target_param, source_param))
+
+    with torch.no_grad():
+        for pairs in grouped.values():
+            target_params = [target_param for target_param, _source_param in pairs]
+            source_params = [source_param for _target_param, source_param in pairs]
+            torch._foreach_mul_(target_params, 1.0 - tau)
+            torch._foreach_add_(target_params, source_params, alpha=tau)
+
+        for target_param, source_param in fallback_pairs:
+            target_param.mul_(1.0 - tau).add_(source_param, alpha=tau)
+
+
 class ModuleDict(nn.Module):
     """A thin compatibility wrapper mirroring the old Flax helper."""
 
@@ -109,13 +149,15 @@ class TorchRLTrainState:
                 )
 
     def target_update(self, tau: float):
-        with torch.no_grad():
-            for name, target in self.target_modules.items():
-                if name not in self.modules:
-                    continue
-                source = self.modules[name]
-                for tp, sp in zip(target.parameters(), source.parameters()):
-                    tp.data.mul_(1.0 - tau).add_(sp.data, alpha=tau)
+        for name, target in self.target_modules.items():
+            if name not in self.modules:
+                continue
+            _soft_update_parameters(
+                target,
+                self.modules[name],
+                tau,
+                skip_frozen=True,
+            )
         return self
 
     def optimizer_step(self, name: str):
@@ -147,9 +189,7 @@ def copy_module(module: nn.Module) -> nn.Module:
 
 
 def soft_update(target: nn.Module, source: nn.Module, tau: float):
-    with torch.no_grad():
-        for target_param, source_param in zip(target.parameters(), source.parameters()):
-            target_param.data.mul_(1.0 - tau).add_(source_param.data, alpha=tau)
+    _soft_update_parameters(target, source, tau, skip_frozen=False)
 
 
 def hard_update(target: nn.Module, source: nn.Module):

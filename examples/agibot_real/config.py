@@ -155,6 +155,7 @@ class ResnetConfig:
 class EncoderConfig:
     type: str
     shared: bool
+    fuse_views: str
     use_proprio: bool
     proprio_latent_dim: int
     resnet: ResnetConfig | None
@@ -959,6 +960,11 @@ def _parse_encoder_cfg(cfg: DictConfig) -> EncoderConfig:
     return EncoderConfig(
         type=_required_str(encoder_cfg.get("type", "resnet"), "encoder.type"),
         shared=bool(encoder_cfg.get("shared", True)),
+        fuse_views=_parse_choice(
+            encoder_cfg.get("fuse_views", "auto"),
+            "encoder.fuse_views",
+            allowed=("auto", "true", "false"),
+        ),
         use_proprio=bool(encoder_cfg.get("use_proprio", True)),
         proprio_latent_dim=_positive_int(
             encoder_cfg.get("proprio_latent_dim", 64),
