@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Reference-style LIBERO residual DRQ training script."""
 
-from collections import defaultdict, deque
+from collections import deque
 import json
 import logging
 import sys
@@ -43,9 +43,9 @@ from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.policy.typed_factory import build_policy_client
 from serl_launcher.policy.typed_factory import describe_policy_backend
-from serl_launcher.residual.chunk_window_replay import BatchPrefetcher
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
-from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
+from serl_launcher.residual.chunk_window_replay import PrefetchingMixedBatchSampler
+from serl_launcher.residual.chunk_window_replay import ProfileAccumulator
 from serl_launcher.residual.observation import build_chunk_residual_obs
 from serl_launcher.residual.observation import build_chunk_residual_observation_space
 from serl_launcher.residual.observation import build_chunk_residual_sample_obs
@@ -72,7 +72,9 @@ from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
 from serl_torch.examples.libero.env.offline_data import load_prepared_offline_replay
-from serl_torch.examples.libero.env.offline_data import resolve_and_validate_prepared_paths
+from serl_torch.examples.libero.env.offline_data import (
+    resolve_and_validate_prepared_paths,
+)
 from serl_torch.examples.libero.runtime.raw_rollout_recorder import RawRolloutRecorder
 from serl_torch.examples.libero.runtime.async_eval_runtime import (
     append_async_eval_request,
@@ -157,7 +159,7 @@ def actor(
     )
 
     data_store = QueuedDataStore(cfg.runtime.data_store_queue_size)
-    
+
     client = build_actor_trainer_transport(
         store_name="actor_env",
         server_ip=cfg.runtime.trainer_host,
@@ -269,6 +271,7 @@ def actor(
             int(consecutive_stats_failures),
             _transport_status(),
         )
+
     wait_for_episode_commit = bool(
         cfg.runtime.trainer_transport.wait_committed_on_episode_end
     )
@@ -342,7 +345,7 @@ def actor(
                         residual_obs,
                         deterministic=False,
                     )
-                    
+
                     final_actions = residual_action_spec.compose_chunk(
                         base_action_chunk=base_actions,
                         residual_action=residual_actions,
@@ -405,7 +408,9 @@ def actor(
                 episode_return += float(raw_chunk.reward_sum)
                 episode_success = bool(
                     episode_success
-                    or any(bool(info.get("env_done", False)) for info in raw_chunk.infos)
+                    or any(
+                        bool(info.get("env_done", False)) for info in raw_chunk.infos
+                    )
                 )
                 last_info = dict(raw_chunk.chunk_info)
                 obs = dict(raw_chunk.final_obs)
@@ -461,9 +466,7 @@ def actor(
                     episode_return=float(episode_return),
                     init_episode_idx=int(init_episode_idx),
                     success=bool(episode_success),
-                    cumulative_success_rate=float(
-                        success_count / max(1, episode_id)
-                    ),
+                    cumulative_success_rate=float(success_count / max(1, episode_id)),
                     recent_success_rate_20=float(recent_success_rate_20),
                 ),
                 env_info=last_info,
@@ -713,7 +716,9 @@ def learner(
         accepted = int(transport_status.get("accepted_update_id", -1))
         committed = int(transport_status.get("committed_update_id", -1))
         target_last_online_id = max(0, int(env_steps) - 1)
-        if accepted < int(target_last_online_id) or committed < int(target_last_online_id):
+        if accepted < int(target_last_online_id) or committed < int(
+            target_last_online_id
+        ):
             return False
         if accepted >= 0 and committed >= 0 and accepted > committed:
             return False
@@ -812,86 +817,30 @@ def learner(
     replay_warmup_poll_interval_sec = 1.0
     idle_poll_interval_sec = 1.0
     timer = Timer()
-    sample_profile_totals = defaultdict(float)
     last_log_time = time.time()
     last_log_update_steps = int(update_steps)
     offline_pretrain_steps_done = 0
     initial_network_published = False
-    batch_prefetcher: BatchPrefetcher | None = None
-    batch_prefetcher_offline_ratio: float | None = None
+    batch_sampler = PrefetchingMixedBatchSampler(
+        online_replay_buffer=replay_buffer,
+        offline_replay_buffer=offline_replay_buffer,
+        batch_size=int(cfg.replay.batch_size),
+        device=agent.device,
+        pack_obs_and_next_obs=True,
+        prefer_device_concat=True,
+        thread_name_prefix="libero-learner-prefetch",
+    )
+    update_profile_accumulator = ProfileAccumulator()
     logger.info("learner replay batch prefetch enabled: depth=1")
-
-    def _record_sample_profile(profile: dict) -> None:
-        for key, value in profile.items():
-            if isinstance(value, (int, float)):
-                sample_profile_totals[str(key)] += float(value)
-
-    def _drain_sample_profile() -> dict:
-        if not sample_profile_totals:
-            return {}
-        totals = dict(sample_profile_totals)
-        sample_profile_totals.clear()
-        mixed_calls = max(float(totals.get("mixed_sample_calls", 0.0)), 1.0)
-        online_calls = max(float(totals.get("online_sample_calls", 0.0)), 1.0)
-        offline_calls = max(float(totals.get("offline_sample_calls", 0.0)), 1.0)
-        result = {}
-        for key, total in sorted(totals.items()):
-            if key.endswith("_calls"):
-                result[key] = int(total)
-                continue
-            if key.startswith("online_"):
-                denom = online_calls
-            elif key.startswith("offline_"):
-                denom = offline_calls
-            else:
-                denom = mixed_calls
-            result[key] = float(total) / float(denom)
-        return result
-
-    def _sample_training_batch(
-        *,
-        offline_ratio: float,
-    ) -> tuple[dict[str, Any], dict[str, int], dict[str, float]]:
-        sample_profile: dict[str, float] = {}
-        batch, batch_mix = sample_mixed_training_batch(
-            online_replay_buffer=replay_buffer,
-            offline_replay_buffer=offline_replay_buffer,
-            batch_size=int(cfg.replay.batch_size),
-            offline_ratio=float(offline_ratio),
-            profile=sample_profile,
-            pack_obs_and_next_obs=True,
-            device=agent.device,
-            prefer_device_concat=True,
-        )
-        return batch, batch_mix, sample_profile
-
-    def _get_batch_prefetcher(*, offline_ratio: float) -> BatchPrefetcher:
-        nonlocal batch_prefetcher
-        nonlocal batch_prefetcher_offline_ratio
-        resolved_ratio = float(offline_ratio)
-        if (
-            batch_prefetcher is None
-            or batch_prefetcher_offline_ratio is None
-            or float(batch_prefetcher_offline_ratio) != float(resolved_ratio)
-        ):
-            if batch_prefetcher is not None:
-                batch_prefetcher.close()
-            batch_prefetcher = BatchPrefetcher(
-                lambda: _sample_training_batch(offline_ratio=resolved_ratio),
-                thread_name_prefix="libero-learner-prefetch",
-            )
-            batch_prefetcher_offline_ratio = float(resolved_ratio)
-            batch_prefetcher.start()
-        return batch_prefetcher
 
     def _next_training_batch(
         *,
         offline_ratio: float,
     ) -> tuple[dict[str, Any], dict[str, int]]:
-        prefetcher = _get_batch_prefetcher(offline_ratio=float(offline_ratio))
         with timer.context("sample_replay_buffer"):
-            batch, batch_mix, sample_profile = prefetcher.get()
-        _record_sample_profile(sample_profile)
+            batch, batch_mix = batch_sampler.next_batch(
+                offline_ratio=float(offline_ratio)
+            )
         return batch, batch_mix
 
     def _run_training_update(
@@ -903,10 +852,14 @@ def learner(
             "online_batch_size": int(cfg.replay.batch_size),
             "offline_batch_size": 0,
         }
+        update_profile: dict[str, float] = {}
         for _ in range(max(0, critic_actor_ratio - 1)):
             batch, _ = _next_training_batch(offline_ratio=float(offline_ratio))
             with timer.context("train_critics"):
-                agent, _critics_info = agent.update_critics(batch)
+                agent, _critics_info = agent.update_critics(
+                    batch,
+                    profile=update_profile,
+                )
 
         batch, train_batch_mix = _next_training_batch(
             offline_ratio=float(offline_ratio)
@@ -915,7 +868,9 @@ def learner(
             agent, update_info = agent.update_high_utd(
                 batch,
                 utd_ratio=cfg.sac.utd_ratio,
+                profile=update_profile,
             )
+        update_profile_accumulator.record(update_profile)
         return update_info, train_batch_mix
 
     def _maybe_queue_async_eval() -> None:
@@ -983,6 +938,18 @@ def learner(
                 async_eval_checkpoint_path,
             )
 
+    def _publish_actor_network(*, step: int, reason: str) -> None:
+        with timer.context("publish_snapshot"):
+            payload = snapshot_actor_network_payload(agent, step=int(step))
+        with timer.context("publish_network"):
+            server.publish_network(payload)
+        logger.info(
+            "publish network: step=%s env_steps=%s reason=%s",
+            int(step),
+            int(env_steps),
+            str(reason),
+        )
+
     if (
         offline_replay_buffer is not None
         and int(cfg.offline.pretrain_steps) > 0
@@ -1001,10 +968,9 @@ def learner(
         )
         last_pretrain_info: dict[str, Any] | None = None
         try:
-            while (
-                int(update_steps) < int(max_update_steps)
-                and int(offline_pretrain_steps_done) < int(cfg.offline.pretrain_steps)
-            ):
+            while int(update_steps) < int(max_update_steps) and int(
+                offline_pretrain_steps_done
+            ) < int(cfg.offline.pretrain_steps):
                 check_async_eval_worker(async_eval, logger=logger)
                 last_pretrain_info, _ = _run_training_update(offline_ratio=1.0)
                 update_steps += 1
@@ -1024,15 +990,11 @@ def learner(
             int(update_steps),
             0 if offline_replay_buffer is None else int(len(offline_replay_buffer)),
         )
-        server.publish_network(
-            snapshot_actor_network_payload(agent, step=int(update_steps))
+        _publish_actor_network(
+            step=int(update_steps),
+            reason="offline_pretrain_complete",
         )
         initial_network_published = True
-        logger.info(
-            "publish network: step=%s env_steps=%s reason=offline_pretrain_complete",
-            int(update_steps),
-            int(env_steps),
-        )
 
     if int(update_steps) < int(max_update_steps) and int(training_starts) > 0:
         warmup_bar = tqdm(
@@ -1069,22 +1031,19 @@ def learner(
         )
 
     if not initial_network_published:
-        server.publish_network(
-            snapshot_actor_network_payload(agent, step=int(update_steps))
-        )
-        logger.info(
-            "publish network: step=%s env_steps=%s reason=initial",
-            int(update_steps),
-            int(env_steps),
-        )
+        _publish_actor_network(step=int(update_steps), reason="initial")
 
     interrupted = False
     try:
         while update_steps < max_update_steps:
             check_async_eval_worker(async_eval, logger=logger)
             _maybe_queue_async_eval()
-            online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
-            if _should_stop_after_actor_done(online_update_steps=int(online_update_steps)):
+            online_update_steps = max(
+                0, int(update_steps - offline_pretrain_steps_done)
+            )
+            if _should_stop_after_actor_done(
+                online_update_steps=int(online_update_steps)
+            ):
                 logger.info(
                     "stopping learner after actor env limit: update_steps=%s env_steps=%s replay_size=%s transport=%s",
                     int(update_steps),
@@ -1105,14 +1064,7 @@ def learner(
             _maybe_queue_async_eval()
 
             if update_steps % steps_per_update == 0:
-                server.publish_network(
-                    snapshot_actor_network_payload(agent, step=int(update_steps))
-                )
-                logger.info(
-                    "publish network: step=%s env_steps=%s reason=periodic",
-                    int(update_steps),
-                    int(env_steps),
-                )
+                _publish_actor_network(step=int(update_steps), reason="periodic")
 
             if update_steps % log_period == 0:
                 check_async_eval_worker(async_eval, logger=logger)
@@ -1124,12 +1076,17 @@ def learner(
                 update_metrics = to_jsonable(update_info)
                 now = time.time()
                 elapsed_sec = max(now - last_log_time, 1e-6)
-                updates_since_last_log = max(1, int(update_steps - last_log_update_steps))
+                updates_since_last_log = max(
+                    1, int(update_steps - last_log_update_steps)
+                )
                 updates_per_sec = float(updates_since_last_log) / float(elapsed_sec)
                 last_log_time = now
                 last_log_update_steps = int(update_steps)
                 timer_metrics = to_jsonable(timer.get_average_times())
-                sample_profile_metrics = to_jsonable(_drain_sample_profile())
+                sample_profile_metrics = to_jsonable(
+                    batch_sampler.drain_sample_profile()
+                )
+                update_profile_metrics = to_jsonable(update_profile_accumulator.drain())
                 learner_metrics = extract_learner_wandb_metrics(update_metrics)
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
@@ -1143,6 +1100,7 @@ def learner(
                         "updates_per_sec": float(updates_per_sec),
                         "timer": timer_metrics,
                         "sample_profile": sample_profile_metrics,
+                        "update_profile": update_profile_metrics,
                         "transport": _transport_status(),
                     },
                 )
@@ -1153,9 +1111,9 @@ def learner(
                         int(batch_mix["online_batch_size"])
                         + int(batch_mix["offline_batch_size"]),
                     )
-                    offline_ratio_actual = float(batch_mix["offline_batch_size"]) / float(
-                        offline_total
-                    )
+                    offline_ratio_actual = float(
+                        batch_mix["offline_batch_size"]
+                    ) / float(offline_total)
                     offline_suffix = (
                         " "
                         f"offline_replay={int(len(offline_replay_buffer))} "
@@ -1193,8 +1151,7 @@ def learner(
         logger.info("learner interrupted; shutting down gracefully")
 
     finally:
-        if batch_prefetcher is not None:
-            batch_prefetcher.close()
+        batch_sampler.close()
         _maybe_queue_async_eval()
         async_eval_return_code = None
         if async_eval.enabled:

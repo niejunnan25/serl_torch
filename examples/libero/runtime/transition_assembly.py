@@ -85,6 +85,12 @@ class ChunkExecutionRecord:
                 "step_chunk result is shorter than executed_steps: "
                 f"executed_steps={executed_steps} short_fields={short_fields}"
             )
+        chunk_done = bool(chunk_result["done"])
+        if bool(dones[executed_steps - 1]) != bool(chunk_done):
+            raise ValueError(
+                "step_chunk result done does not match final per-step done: "
+                f"done={chunk_done} final_step_done={bool(dones[executed_steps - 1])}"
+            )
 
         return cls(
             episode_id=int(episode_id),
@@ -96,7 +102,7 @@ class ChunkExecutionRecord:
             dones=dones[:executed_steps],
             infos=infos[:executed_steps],
             final_obs=dict(chunk_result["obs"]),
-            chunk_done=bool(chunk_result["done"]),
+            chunk_done=chunk_done,
             chunk_truncated=bool(chunk_result["truncated"]),
             reward_sum=float(chunk_result["reward_sum"]),
             chunk_info=dict(chunk_result["info"]),
@@ -115,6 +121,7 @@ class AssemblyResult:
     episode_return_delta: float
     episode_success: bool
     last_info: dict[str, Any]
+
 
 def _build_policy_endpoint_cfg(
     cfg: Any,
@@ -291,6 +298,7 @@ def _build_chunk_assembly_result(
         dones=raw.dones,
         infos=raw.infos,
         next_residual_observations=list(next_residual_observations),
+        chunk_truncated=bool(raw.chunk_truncated),
     )
 
     episode_done = bool(raw.chunk_done or raw.chunk_truncated)
@@ -368,11 +376,12 @@ class LiberoTransitionAssembler:
         raw: ChunkExecutionRecord,
         task_prompt: str,
     ) -> AssemblyResult:
-        backfilled_base_actions, backfilled_residual_obs = (
-            self.backfill_post_step_residual_obs(
-                observations=raw.post_step_observations,
-                task_prompt=task_prompt,
-            )
+        (
+            backfilled_base_actions,
+            backfilled_residual_obs,
+        ) = self.backfill_post_step_residual_obs(
+            observations=raw.post_step_observations,
+            task_prompt=task_prompt,
         )
         transitions = assemble_chunk_step_transitions(
             episode_id=int(raw.episode_id),
@@ -383,6 +392,7 @@ class LiberoTransitionAssembler:
             dones=raw.dones,
             infos=raw.infos,
             next_residual_observations=backfilled_residual_obs,
+            chunk_truncated=bool(raw.chunk_truncated),
         )
 
         episode_done = bool(raw.chunk_done or raw.chunk_truncated)
@@ -401,7 +411,9 @@ class LiberoTransitionAssembler:
             env_steps_delta=int(raw.executed_steps),
             episode_steps_delta=int(raw.executed_steps),
             episode_return_delta=float(raw.reward_sum),
-            episode_success=any(bool(info.get("env_done", False)) for info in raw.infos),
+            episode_success=any(
+                bool(info.get("env_done", False)) for info in raw.infos
+            ),
             last_info=dict(raw.chunk_info),
         )
 
@@ -475,20 +487,25 @@ class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
             batched_prompts.extend([task_prompt] * int(raw.executed_steps))
 
         if batchable_specs:
-            batched_base_actions, batched_residual_obs = (
-                infer_chunk_residual_obs_many_with_prompts(
-                    observations=batched_observations,
-                    task_prompts=batched_prompts,
-                    policy_client=self.policy_client,
-                    chunk_horizon=self.chunk_horizon,
-                    image_keys=self.image_keys,
-                    residual_alpha=self.residual_alpha,
-                )
+            (
+                batched_base_actions,
+                batched_residual_obs,
+            ) = infer_chunk_residual_obs_many_with_prompts(
+                observations=batched_observations,
+                task_prompts=batched_prompts,
+                policy_client=self.policy_client,
+                chunk_horizon=self.chunk_horizon,
+                image_keys=self.image_keys,
+                residual_alpha=self.residual_alpha,
             )
             offset = 0
             for idx, observation_count in batchable_specs:
-                current_base_actions = batched_base_actions[offset : offset + observation_count]
-                current_residual_obs = batched_residual_obs[offset : offset + observation_count]
+                current_base_actions = batched_base_actions[
+                    offset : offset + observation_count
+                ]
+                current_residual_obs = batched_residual_obs[
+                    offset : offset + observation_count
+                ]
                 if len(current_residual_obs) != int(observation_count):
                     raise ValueError(
                         "combined chunk residual backfill returned an unexpected length slice: "
@@ -672,15 +689,16 @@ class LiberoActorTransitionAssembler:
         task_prompt: str,
         policy_client: Any,
     ) -> list[dict[str, np.ndarray]]:
-        _base_action_chunks, next_residual_observations = (
-            backfill_post_step_residual_obs_batch_aware(
-                observations=observations,
-                task_prompt=task_prompt,
-                policy_client=policy_client,
-                chunk_horizon=self._sync_assembler.chunk_horizon,
-                image_keys=self._sync_assembler.image_keys,
-                residual_alpha=self._sync_assembler.residual_alpha,
-            )
+        (
+            _base_action_chunks,
+            next_residual_observations,
+        ) = backfill_post_step_residual_obs_batch_aware(
+            observations=observations,
+            task_prompt=task_prompt,
+            policy_client=policy_client,
+            chunk_horizon=self._sync_assembler.chunk_horizon,
+            image_keys=self._sync_assembler.image_keys,
+            residual_alpha=self._sync_assembler.residual_alpha,
         )
         return next_residual_observations
 
@@ -698,6 +716,7 @@ class LiberoActorTransitionAssembler:
             dones=raw.dones,
             infos=raw.infos,
             next_residual_observations=next_residual_observations,
+            chunk_truncated=bool(raw.chunk_truncated),
         )
         return AssemblyResult(
             transitions=transitions,
@@ -707,7 +726,9 @@ class LiberoActorTransitionAssembler:
             env_steps_delta=int(raw.executed_steps),
             episode_steps_delta=int(raw.executed_steps),
             episode_return_delta=float(raw.reward_sum),
-            episode_success=any(bool(info.get("env_done", False)) for info in raw.infos),
+            episode_success=any(
+                bool(info.get("env_done", False)) for info in raw.infos
+            ),
             last_info=dict(raw.chunk_info),
         )
 
@@ -766,6 +787,7 @@ def assemble_chunk_step_transitions(
     dones: list[bool],
     infos: list[dict[str, Any]],
     next_residual_observations: list[dict[str, np.ndarray]],
+    chunk_truncated: bool = False,
 ) -> list[dict[str, Any]]:
     executed_actions = np.asarray(executed_actions, dtype=np.float32)
     executed_steps = int(executed_actions.shape[0])
@@ -788,6 +810,13 @@ def assemble_chunk_step_transitions(
     transitions: list[dict[str, Any]] = []
     for step_idx, next_residual_obs in enumerate(next_residual_observations):
         step_info = dict(infos[step_idx])
+        is_last_step = int(step_idx) == int(executed_steps - 1)
+        done_flag = bool(dones[step_idx]) or (
+            bool(chunk_truncated) and bool(is_last_step)
+        )
+        mask_flag = float(
+            0.0 if (done_flag or bool(step_info.get("env_done", False))) else 1.0
+        )
         transitions.append(
             {
                 "episode_id": int(episode_id),
@@ -799,8 +828,8 @@ def assemble_chunk_step_transitions(
                 ).reshape(-1),
                 "next_observations": next_residual_obs,
                 "rewards": float(rewards[step_idx]),
-                "masks": float(0.0 if step_info.get("env_done", False) else 1.0),
-                "dones": bool(dones[step_idx]),
+                "masks": mask_flag,
+                "dones": done_flag,
             }
         )
         current_residual_obs = next_residual_obs

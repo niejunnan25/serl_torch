@@ -183,7 +183,9 @@ def _fake_chunk_result(
 def _fake_libero_obs(value: float) -> dict[str, object]:
     pixel = np.full((8, 8, 3), fill_value=int(value), dtype=np.uint8)
     return {
-        "robot0_eef_pos": np.asarray([value, value + 0.1, value + 0.2], dtype=np.float32),
+        "robot0_eef_pos": np.asarray(
+            [value, value + 0.1, value + 0.2], dtype=np.float32
+        ),
         "robot0_eef_axis_angle": np.asarray([0.0, 0.0, 0.0], dtype=np.float32),
         "robot0_gripper_qpos": np.asarray([0.04, -0.04], dtype=np.float32),
         "agentview_image": pixel,
@@ -264,16 +266,12 @@ def _fake_libero_raw_chunk(
     return ChunkExecutionRecord(
         episode_id=1,
         episode_step_start=0,
-        residual_obs_before_chunk={
-            "state": np.asarray([-1.0], dtype=np.float32)
-        },
+        residual_obs_before_chunk={"state": np.asarray([-1.0], dtype=np.float32)},
         action_chunk=np.asarray(
             [[float(index) + 0.1] for index in range(executed_steps)],
             dtype=np.float32,
         ),
-        post_step_observations=[
-            {"seed": float(value)} for value in obs_seeds
-        ],
+        post_step_observations=[{"seed": float(value)} for value in obs_seeds],
         rewards=[1.0 for _ in obs_seeds],
         dones=[False for _ in obs_seeds],
         infos=[{"env_done": False} for _ in obs_seeds],
@@ -341,6 +339,26 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
                 ],
             )
 
+    def test_assemble_chunk_step_transitions_marks_truncated_final_step(self) -> None:
+        transitions = assemble_chunk_step_transitions(
+            episode_id=2,
+            episode_step_start=5,
+            residual_obs_before_chunk={"state": np.asarray([0.0], dtype=np.float32)},
+            executed_actions=np.asarray([[0.1], [0.2], [0.3]], dtype=np.float32),
+            rewards=[0.0, 0.0, 1.0],
+            dones=[False, False, False],
+            infos=[{"env_done": False}, {"env_done": False}, {"env_done": False}],
+            next_residual_observations=[
+                {"state": np.asarray([1.0], dtype=np.float32)},
+                {"state": np.asarray([2.0], dtype=np.float32)},
+                {"state": np.asarray([3.0], dtype=np.float32)},
+            ],
+            chunk_truncated=True,
+        )
+
+        self.assertEqual([t["dones"] for t in transitions], [False, False, True])
+        self.assertEqual([t["masks"] for t in transitions], [1.0, 1.0, 0.0])
+
     def test_raw_chunk_record_rejects_empty_chunk(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "no executed steps"):
             ChunkExecutionRecord.from_env_chunk_result(
@@ -397,6 +415,27 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
                     "infos": [{}, {}],
                     "obs": {"raw": 2},
                     "done": False,
+                    "truncated": False,
+                    "reward_sum": 3.0,
+                    "info": {},
+                    "num_steps": 2,
+                },
+            )
+
+    def test_raw_chunk_record_rejects_mismatched_final_done(self) -> None:
+        with self.assertRaisesRegex(ValueError, "done does not match"):
+            ChunkExecutionRecord.from_env_chunk_result(
+                episode_id=1,
+                episode_step_start=0,
+                residual_obs_before_chunk={"state": np.asarray([0.0])},
+                action_chunk=np.asarray([[0.1], [0.2]], dtype=np.float32),
+                chunk_result={
+                    "observations": [{"raw": 1}, {"raw": 2}],
+                    "rewards": [1.0, 2.0],
+                    "dones": [False, False],
+                    "infos": [{}, {}],
+                    "obs": {"raw": 2},
+                    "done": True,
                     "truncated": False,
                     "reward_sum": 3.0,
                     "info": {},
@@ -474,7 +513,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertEqual(result.transitions[0]["masks"], 0.0)
         self.assertEqual(result.transitions[0]["dones"], True)
 
-    def test_process_chunk_truncated_has_no_prefetch_but_keeps_bootstrap_mask(
+    def test_process_chunk_truncated_has_no_prefetch_and_zero_mask(
         self,
     ) -> None:
         obs0 = {"state": np.asarray([0.0], dtype=np.float32)}
@@ -503,7 +542,7 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertTrue(result.episode_done)
         self.assertFalse(result.episode_success)
         self.assertIsNone(result.prefetched)
-        self.assertEqual(result.transitions[0]["masks"], 1.0)
+        self.assertEqual(result.transitions[0]["masks"], 0.0)
         self.assertEqual(result.transitions[0]["dones"], True)
 
     def test_batch_aware_backfill_uses_infer_many_and_preserves_order(self) -> None:
@@ -514,15 +553,16 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
             _fake_libero_obs(3.0),
         ]
 
-        base_actions, residual_observations = (
-            backfill_post_step_residual_obs_batch_aware(
-                observations=observations,
-                task_prompt="pick up the block",
-                policy_client=policy_client,
-                chunk_horizon=2,
-                image_keys=("image_rgb_0", "image_rgb_1"),
-                residual_alpha=0.1,
-            )
+        (
+            base_actions,
+            residual_observations,
+        ) = backfill_post_step_residual_obs_batch_aware(
+            observations=observations,
+            task_prompt="pick up the block",
+            policy_client=policy_client,
+            chunk_horizon=2,
+            image_keys=("image_rgb_0", "image_rgb_1"),
+            residual_alpha=0.1,
         )
 
         self.assertEqual(policy_client.infer_many_calls, 1)
@@ -540,15 +580,16 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
             _fake_libero_obs(2.0),
         ]
 
-        base_actions, residual_observations = (
-            backfill_post_step_residual_obs_batch_aware(
-                observations=observations,
-                task_prompt="stack the blocks",
-                policy_client=policy_client,
-                chunk_horizon=2,
-                image_keys=("image_rgb_0", "image_rgb_1"),
-                residual_alpha=0.2,
-            )
+        (
+            base_actions,
+            residual_observations,
+        ) = backfill_post_step_residual_obs_batch_aware(
+            observations=observations,
+            task_prompt="stack the blocks",
+            policy_client=policy_client,
+            chunk_horizon=2,
+            image_keys=("image_rgb_0", "image_rgb_1"),
+            residual_alpha=0.2,
         )
 
         self.assertEqual(policy_client.infer_calls, 2)
@@ -670,8 +711,12 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
                 [10.0, 10.1, 10.2],
             )
         )
-        self.assertTrue(np.allclose(results[0].prefetched.base_actions[:, 0], [3.0, 3.5]))
-        self.assertTrue(np.allclose(results[1].prefetched.base_actions[:, 0], [6.0, 6.5]))
+        self.assertTrue(
+            np.allclose(results[0].prefetched.base_actions[:, 0], [3.0, 3.5])
+        )
+        self.assertTrue(
+            np.allclose(results[1].prefetched.base_actions[:, 0], [6.0, 6.5])
+        )
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"missing dependency: {_IMPORT_ERROR}")
@@ -710,7 +755,9 @@ class LiberoActorTransitionAssemblerTest(unittest.TestCase):
         self.assertIs(reused, prefetched_decision)
         self.assertIsNone(assembler.pop_prefetched_decision_obs())
 
-    def test_async_path_backfills_full_chunk_without_next_decision_handoff(self) -> None:
+    def test_async_path_backfills_full_chunk_without_next_decision_handoff(
+        self,
+    ) -> None:
         fake_client = types.SimpleNamespace(close=lambda: None)
         fake_typed_factory = types.ModuleType("serl_launcher.policy.typed_factory")
         fake_typed_factory.build_policy_client = lambda cfg, logger: fake_client
@@ -776,6 +823,7 @@ class LiberoActorTransitionAssemblerTest(unittest.TestCase):
         assembler._sync_assembler = _FakeActorSyncAssembler(
             decision_obses=[_fake_prefetched_decision(1.0)],
         )
+
         def _slow_backfill(*, observations, task_prompt, policy_client):
             del task_prompt, policy_client
             time.sleep(0.05)

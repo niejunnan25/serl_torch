@@ -46,7 +46,8 @@ from serl_launcher.common.wandb import WandBLogger
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.residual.action_filter import ResidualDeltaActionFilter
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
-from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
+from serl_launcher.residual.chunk_window_replay import PrefetchingMixedBatchSampler
+from serl_launcher.residual.chunk_window_replay import ProfileAccumulator
 from serl_launcher.residual.observation import build_chunk_residual_observation_space
 from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
@@ -183,7 +184,9 @@ def actor(
     success_count = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
     actor_timer_log_path = run_dir / "actor_timers.jsonl"
-    rollout_log_path = run_dir / str(cfg.logging.episode_log_file or "episode_logs.jsonl")
+    rollout_log_path = run_dir / str(
+        cfg.logging.episode_log_file or "episode_logs.jsonl"
+    )
 
     summary: dict[str, Any] = {
         "role": "actor",
@@ -522,9 +525,7 @@ def actor(
                         wait_for_episode_commit=bool(wait_for_episode_commit),
                     )
             else:
-                _commit_assembled_chunks(
-                    transition_assembler.finish_episode()
-                )
+                _commit_assembled_chunks(transition_assembler.finish_episode())
             _flush_pending_last_transition()
             _update_trainer_transport(context="episode_end")
             success_count += int(episode_success)
@@ -539,9 +540,7 @@ def actor(
                     episode_steps=int(episode_steps),
                     episode_return=float(episode_return),
                     success=bool(episode_success),
-                    cumulative_success_rate=float(
-                        success_count / max(1, episode_id)
-                    ),
+                    cumulative_success_rate=float(success_count / max(1, episode_id)),
                     recent_success_rate_20=float(recent_success_rate_20),
                 ),
                 env_info=last_info,
@@ -748,7 +747,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         accepted = int(transport_status.get("accepted_update_id", -1))
         committed = int(transport_status.get("committed_update_id", -1))
         target_last_online_id = max(0, int(env_steps) - 1)
-        if accepted < int(target_last_online_id) or committed < int(target_last_online_id):
+        if accepted < int(target_last_online_id) or committed < int(
+            target_last_online_id
+        ):
             return False
         if accepted >= 0 and committed >= 0 and accepted > committed:
             return False
@@ -848,6 +849,27 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     last_log_update_steps = int(update_steps)
     offline_pretrain_steps_done = 0
     initial_network_published = False
+    batch_sampler = PrefetchingMixedBatchSampler(
+        online_replay_buffer=replay_buffer,
+        offline_replay_buffer=offline_replay_buffer,
+        batch_size=int(cfg.replay.batch_size),
+        device=agent.device,
+        pack_obs_and_next_obs=True,
+        prefer_device_concat=True,
+        thread_name_prefix="agibot-learner-prefetch",
+    )
+    update_profile_accumulator = ProfileAccumulator()
+    logger.info("learner replay batch prefetch enabled: depth=1")
+
+    def _next_training_batch(
+        *,
+        offline_ratio: float,
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        with timer.context("sample_replay_buffer"):
+            batch, batch_mix = batch_sampler.next_batch(
+                offline_ratio=float(offline_ratio)
+            )
+        return batch, batch_mix
 
     def _run_training_update(
         *,
@@ -858,29 +880,35 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             "online_batch_size": int(cfg.replay.batch_size),
             "offline_batch_size": 0,
         }
+        update_profile: dict[str, float] = {}
         for _ in range(max(0, critic_actor_ratio - 1)):
-            with timer.context("sample_replay_buffer"):
-                batch, _ = sample_mixed_training_batch(
-                    online_replay_buffer=replay_buffer,
-                    offline_replay_buffer=offline_replay_buffer,
-                    batch_size=int(cfg.replay.batch_size),
-                    offline_ratio=float(offline_ratio),
-                )
+            batch, _ = _next_training_batch(offline_ratio=float(offline_ratio))
             with timer.context("train_critics"):
-                agent, _ = agent.update_critics(batch)
+                agent, _ = agent.update_critics(batch, profile=update_profile)
 
+        batch, train_batch_mix = _next_training_batch(
+            offline_ratio=float(offline_ratio)
+        )
         with timer.context("train"):
-            batch, train_batch_mix = sample_mixed_training_batch(
-                online_replay_buffer=replay_buffer,
-                offline_replay_buffer=offline_replay_buffer,
-                batch_size=int(cfg.replay.batch_size),
-                offline_ratio=float(offline_ratio),
-            )
             agent, update_info = agent.update_high_utd(
                 batch,
                 utd_ratio=cfg.sac.utd_ratio,
+                profile=update_profile,
             )
+        update_profile_accumulator.record(update_profile)
         return update_info, train_batch_mix
+
+    def _publish_actor_network(*, step: int, reason: str) -> None:
+        with timer.context("publish_snapshot"):
+            payload = snapshot_actor_network_payload(agent, step=int(step))
+        with timer.context("publish_network"):
+            server.publish_network(payload)
+        logger.info(
+            "publish network: step=%s env_steps=%s reason=%s",
+            int(step),
+            int(env_steps),
+            str(reason),
+        )
 
     if (
         offline_replay_buffer is not None
@@ -900,10 +928,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         )
         last_pretrain_info: dict[str, Any] | None = None
         try:
-            while (
-                int(update_steps) < int(max_update_steps)
-                and int(offline_pretrain_steps_done) < int(cfg.offline.pretrain_steps)
-            ):
+            while int(update_steps) < int(max_update_steps) and int(
+                offline_pretrain_steps_done
+            ) < int(cfg.offline.pretrain_steps):
                 last_pretrain_info, _ = _run_training_update(offline_ratio=1.0)
                 update_steps += 1
                 offline_pretrain_steps_done += 1
@@ -921,15 +948,11 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             int(update_steps),
             0 if offline_replay_buffer is None else int(len(offline_replay_buffer)),
         )
-        server.publish_network(
-            snapshot_actor_network_payload(agent, step=int(update_steps))
+        _publish_actor_network(
+            step=int(update_steps),
+            reason="offline_pretrain_complete",
         )
         initial_network_published = True
-        logger.info(
-            "publish network: step=%s env_steps=%s reason=offline_pretrain_complete",
-            int(update_steps),
-            int(env_steps),
-        )
 
     if int(update_steps) < int(max_update_steps) and int(training_starts) > 0:
         warmup_bar = tqdm(
@@ -965,20 +988,17 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         )
 
     if not initial_network_published:
-        server.publish_network(
-            snapshot_actor_network_payload(agent, step=int(update_steps))
-        )
-        logger.info(
-            "publish network: step=%s env_steps=%s reason=initial",
-            int(update_steps),
-            int(env_steps),
-        )
+        _publish_actor_network(step=int(update_steps), reason="initial")
 
     interrupted = False
     try:
         while update_steps < max_update_steps:
-            online_update_steps = max(0, int(update_steps - offline_pretrain_steps_done))
-            if _should_stop_after_actor_done(online_update_steps=int(online_update_steps)):
+            online_update_steps = max(
+                0, int(update_steps - offline_pretrain_steps_done)
+            )
+            if _should_stop_after_actor_done(
+                online_update_steps=int(online_update_steps)
+            ):
                 logger.info(
                     "stopping learner after actor env limit: update_steps=%s env_steps=%s replay_size=%s transport=%s",
                     int(update_steps),
@@ -997,24 +1017,23 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             update_steps += 1
 
             if update_steps % steps_per_update == 0:
-                server.publish_network(
-                    snapshot_actor_network_payload(agent, step=int(update_steps))
-                )
-                logger.info(
-                    "publish network: step=%s env_steps=%s reason=periodic",
-                    int(update_steps),
-                    int(env_steps),
-                )
+                _publish_actor_network(step=int(update_steps), reason="periodic")
 
             if update_steps % log_period == 0:
                 update_metrics = to_jsonable(update_info)
                 now = time.time()
                 elapsed_sec = max(now - last_log_time, 1e-6)
-                updates_since_last_log = max(1, int(update_steps - last_log_update_steps))
+                updates_since_last_log = max(
+                    1, int(update_steps - last_log_update_steps)
+                )
                 updates_per_sec = float(updates_since_last_log) / float(elapsed_sec)
                 last_log_time = now
                 last_log_update_steps = int(update_steps)
                 timer_metrics = to_jsonable(timer.get_average_times())
+                sample_profile_metrics = to_jsonable(
+                    batch_sampler.drain_sample_profile()
+                )
+                update_profile_metrics = to_jsonable(update_profile_accumulator.drain())
                 learner_metrics = extract_learner_wandb_metrics(update_metrics)
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
@@ -1027,6 +1046,8 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         "replay_size": int(len(replay_buffer)),
                         "updates_per_sec": float(updates_per_sec),
                         "timer": timer_metrics,
+                        "sample_profile": sample_profile_metrics,
+                        "update_profile": update_profile_metrics,
                         "transport": _transport_status(),
                     },
                 )
@@ -1037,9 +1058,9 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         int(batch_mix["online_batch_size"])
                         + int(batch_mix["offline_batch_size"]),
                     )
-                    offline_ratio_actual = float(batch_mix["offline_batch_size"]) / float(
-                        offline_total
-                    )
+                    offline_ratio_actual = float(
+                        batch_mix["offline_batch_size"]
+                    ) / float(offline_total)
                     offline_suffix = (
                         " "
                         f"offline_replay={int(len(offline_replay_buffer))} "
@@ -1077,6 +1098,7 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         logger.info("learner interrupted; shutting down gracefully")
 
     finally:
+        batch_sampler.close()
         with progress_state_lock:
             summary_last_completed_episode_id = int(latest_completed_episode_id)
         summary.update(

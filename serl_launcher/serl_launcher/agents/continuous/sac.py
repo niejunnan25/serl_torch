@@ -1,6 +1,7 @@
 import copy
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+import time
 from typing import Any, FrozenSet, Mapping, Optional, Tuple
 
 import numpy as np
@@ -25,6 +26,16 @@ _AUTOCAST_TORCH_DTYPES = {
 }
 
 
+def _profile_add(profile: Optional[dict[str, float]], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+def _profile_count(profile: Optional[dict[str, float]], key: str) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + 1.0
+
+
 def _clip_gripper_last_dim(actions: torch.Tensor) -> torch.Tensor:
     if actions.shape[-1] <= 0:
         return actions
@@ -39,7 +50,9 @@ def _coerce_single_action(actions: np.ndarray) -> np.ndarray:
     if action.ndim == 2 and action.shape[0] == 1:
         action = action[0]
     if action.ndim != 1:
-        raise ValueError(f"Expected single action shape (A,) or (1, A), got {action.shape}")
+        raise ValueError(
+            f"Expected single action shape (A,) or (1, A), got {action.shape}"
+        )
     return np.asarray(action, dtype=np.float32)
 
 
@@ -116,7 +129,9 @@ class _LegacyResidualCombinedActionTransform:
                     f"{action_mask.shape[-1]} != {expected_critic_dim}"
                 )
             projected = action_mask.reshape(
-                *action_mask.shape[:-1], int(self.chunk_horizon), int(self.full_action_dim)
+                *action_mask.shape[:-1],
+                int(self.chunk_horizon),
+                int(self.full_action_dim),
             )
             projected = projected.index_select(dim=-1, index=control_indices)
             projected = projected.reshape(*projected.shape[:-2], -1)
@@ -189,9 +204,8 @@ class _LegacyResidualCombinedActionTransform:
     ) -> torch.Tensor:
         if base_chunk.ndim != 3:
             raise ValueError(f"Unexpected base action chunk shape: {base_chunk.shape}")
-        if (
-            base_chunk.shape[1] != int(self.chunk_horizon)
-            or base_chunk.shape[2] != int(self.full_action_dim)
+        if base_chunk.shape[1] != int(self.chunk_horizon) or base_chunk.shape[2] != int(
+            self.full_action_dim
         ):
             raise ValueError(
                 "Unexpected base action chunk dims: "
@@ -225,7 +239,9 @@ class _LegacyResidualCombinedActionTransform:
             )
             if self.clip_gripper and final_chunk.shape[-1] > 0:
                 final_chunk = _clip_gripper_last_dim(final_chunk)
-            return final_chunk.reshape(-1, int(self.chunk_horizon * self.full_action_dim))
+            return final_chunk.reshape(
+                -1, int(self.chunk_horizon * self.full_action_dim)
+            )
 
         if clipped.ndim == 3:
             residual_chunk = clipped.reshape(
@@ -953,38 +969,87 @@ class SACAgent:
         networks_to_update: FrozenSet[str] = frozenset(
             {"actor", "critic", "temperature"}
         ),
+        profile: Optional[dict[str, float]] = None,
+        batch_is_torch: bool = False,
     ) -> Tuple["SACAgent", dict]:
         del pmap_axis
-        batch = _to_torch(batch, self.device)
+        _profile_count(profile, "sac_update_calls")
+        if not bool(batch_is_torch):
+            start = time.perf_counter()
+            batch = _to_torch(batch, self.device)
+            _profile_add(profile, "sac_to_torch_sec", time.perf_counter() - start)
         info = {}
 
         if "critic" in networks_to_update:
+            _profile_count(profile, "critic_update_calls")
+            start = time.perf_counter()
             self.state.zero_grad(["critic"])
+            _profile_add(profile, "critic_zero_grad_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             with self._autocast_context():
                 critic_loss, critic_info = self.critic_loss_fn(batch)
+            _profile_add(profile, "critic_loss_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             critic_loss.backward()
+            _profile_add(profile, "critic_backward_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             self.state.optimizer_step("critic")
+            _profile_add(
+                profile, "critic_optimizer_step_sec", time.perf_counter() - start
+            )
+            start = time.perf_counter()
             self.state.target_update(self.config["soft_target_update_rate"])
+            _profile_add(profile, "target_update_sec", time.perf_counter() - start)
             info.update(critic_info)
 
         if "actor" in networks_to_update:
+            _profile_count(profile, "actor_update_calls")
             # Actor loss needs dQ/da through the critic, but critic parameters are
             # not stepped by the actor optimizer. Freezing them avoids computing
             # unused critic parameter gradients while keeping the action gradient.
             with self._temporarily_freeze_params(self.state.modules.get("critic")):
+                start = time.perf_counter()
                 self.state.zero_grad(["actor"])
+                _profile_add(
+                    profile, "actor_zero_grad_sec", time.perf_counter() - start
+                )
+                start = time.perf_counter()
                 with self._autocast_context():
                     actor_loss, actor_info = self.policy_loss_fn(batch)
+                _profile_add(profile, "actor_loss_sec", time.perf_counter() - start)
+                start = time.perf_counter()
                 actor_loss.backward()
+                _profile_add(profile, "actor_backward_sec", time.perf_counter() - start)
+                start = time.perf_counter()
                 self.state.optimizer_step("actor")
+                _profile_add(
+                    profile, "actor_optimizer_step_sec", time.perf_counter() - start
+                )
                 info.update(actor_info)
 
         if "temperature" in networks_to_update:
+            _profile_count(profile, "temperature_update_calls")
+            start = time.perf_counter()
             self.state.zero_grad(["temperature"])
+            _profile_add(
+                profile, "temperature_zero_grad_sec", time.perf_counter() - start
+            )
+            start = time.perf_counter()
             with self._autocast_context():
                 temperature_loss, temperature_info = self.temperature_loss_fn(batch)
+            _profile_add(profile, "temperature_loss_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             temperature_loss.backward()
+            _profile_add(
+                profile, "temperature_backward_sec", time.perf_counter() - start
+            )
+            start = time.perf_counter()
             self.state.optimizer_step("temperature")
+            _profile_add(
+                profile,
+                "temperature_optimizer_step_sec",
+                time.perf_counter() - start,
+            )
             info.update(temperature_info)
 
         self.state.step += 1
@@ -1304,22 +1369,39 @@ class SACAgent:
         *,
         utd_ratio: int,
         pmap_axis: Optional[str] = None,
+        profile: Optional[dict[str, float]] = None,
+        batch_is_torch: bool = False,
     ) -> Tuple["SACAgent", dict]:
         del pmap_axis
-        batch_t = _to_torch(batch, self.device)
+        _profile_count(profile, "sac_high_utd_calls")
+        if bool(batch_is_torch):
+            batch_t = batch
+        else:
+            start = time.perf_counter()
+            batch_t = _to_torch(batch, self.device)
+            _profile_add(
+                profile, "sac_high_utd_to_torch_sec", time.perf_counter() - start
+            )
+        start = time.perf_counter()
         minibatches = _split_batch(batch_t, utd_ratio)
+        _profile_add(profile, "split_batch_sec", time.perf_counter() - start)
 
         critic_infos = []
         for i in range(utd_ratio):
             minibatch = _index_batch(minibatches, i)
             self, info = self.update(
-                minibatch, networks_to_update=frozenset({"critic"})
+                minibatch,
+                networks_to_update=frozenset({"critic"}),
+                profile=profile,
+                batch_is_torch=True,
             )
             critic_infos.append(info)
 
         _, actor_temp_info = self.update(
             batch_t,
             networks_to_update=frozenset({"actor", "temperature"}),
+            profile=profile,
+            batch_is_torch=True,
         )
 
         info = _tree_mean(critic_infos) if critic_infos else {}

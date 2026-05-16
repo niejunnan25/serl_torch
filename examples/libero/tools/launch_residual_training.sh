@@ -63,7 +63,7 @@ Usage:
 Examples:
   bash examples/libero/tools/launch_residual_training.sh \
     --script-id 5 \
-    --config-file /vla/users/niejunnan/codebase/serl_torch/examples/libero/configs/train_residual_libero_spatial_task4_scripts_5_recommended.yaml \
+    --config-name exp1/train_residual_task4_exp1_scripts_5 \
     --learner-gpu 5 \
     --env-gpu 6 \
     --policy-gpu 6 \

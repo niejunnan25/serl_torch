@@ -1,6 +1,6 @@
 # Stage-1/2 论文对齐实现说明（当前代码）
 
-本文档总结基于 `PAPER_STAGE12_ALIGNMENT_GAPS.md` 已完成的实现改动。
+本文档总结 RoboTwin Stage-1/2 论文对齐后的当前实现状态。
 
 ## 1. Critic 预训练：SAC warm-start -> Cal-QL/CQL-style
 
@@ -95,9 +95,11 @@
 ## 13. 静态完整性检查（本地）
 
 - `python -m py_compile`：
-  - `examples/RoboTwin/core/common.py`
   - `examples/RoboTwin/scripts/train_residual_sac.py`
   - `examples/RoboTwin/scripts/eval_residual_fast.py`
+  - `examples/RoboTwin/env_wrappers/task_env.py`
+  - `examples/RoboTwin/policy/action.py`
+  - `examples/RoboTwin/policy/observation.py`
   - `serl_launcher/serl_launcher/agents/continuous/sac.py`
   - `serl_launcher/serl_launcher/agents/continuous/drq.py`
   - `examples/RoboTwin/scripts/aggregate_eval_ci.py`

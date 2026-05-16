@@ -71,6 +71,142 @@ class BatchPrefetcher:
         self._executor.shutdown(wait=True, cancel_futures=True)
 
 
+class ProfileAccumulator:
+    """Accumulate numeric profile fields and report per-record averages."""
+
+    def __init__(self) -> None:
+        self._totals: dict[str, float] = {}
+        self._records = 0
+
+    def record(self, profile: dict[str, float]) -> None:
+        if not profile:
+            return
+        self._records += 1
+        for key, value in profile.items():
+            if isinstance(value, (int, float)):
+                self._totals[str(key)] = float(self._totals.get(str(key), 0.0)) + float(
+                    value
+                )
+
+    def drain(self) -> dict[str, float | int]:
+        if not self._totals:
+            return {}
+        totals = dict(self._totals)
+        records = max(int(self._records), 1)
+        self._totals.clear()
+        self._records = 0
+        result: dict[str, float | int] = {"profile_records": int(records)}
+        for key, total in sorted(totals.items()):
+            if key.endswith("_calls"):
+                result[key] = int(total)
+            else:
+                result[key] = float(total) / float(records)
+        return result
+
+
+class PrefetchingMixedBatchSampler:
+    """Prefetch mixed online/offline replay batches and aggregate sample profile."""
+
+    def __init__(
+        self,
+        *,
+        online_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore,
+        offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None,
+        batch_size: int,
+        device: Any = None,
+        pack_obs_and_next_obs: bool = True,
+        prefer_device_concat: bool = True,
+        thread_name_prefix: str = "replay-prefetch",
+    ) -> None:
+        self._online_replay_buffer = online_replay_buffer
+        self._offline_replay_buffer = offline_replay_buffer
+        self._batch_size = int(batch_size)
+        self._device = device
+        self._pack_obs_and_next_obs = bool(pack_obs_and_next_obs)
+        self._prefer_device_concat = bool(prefer_device_concat)
+        self._thread_name_prefix = str(thread_name_prefix)
+        self._prefetcher: BatchPrefetcher | None = None
+        self._prefetcher_offline_ratio: float | None = None
+        self._sample_profile_totals: dict[str, float] = {}
+
+    def next_batch(
+        self, *, offline_ratio: float
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        prefetcher = self._get_prefetcher(offline_ratio=float(offline_ratio))
+        batch, batch_mix, sample_profile = prefetcher.get()
+        self._record_sample_profile(sample_profile)
+        return batch, batch_mix
+
+    def drain_sample_profile(self) -> dict[str, float | int]:
+        if not self._sample_profile_totals:
+            return {}
+        totals = dict(self._sample_profile_totals)
+        self._sample_profile_totals.clear()
+        mixed_calls = max(float(totals.get("mixed_sample_calls", 0.0)), 1.0)
+        online_calls = max(float(totals.get("online_sample_calls", 0.0)), 1.0)
+        offline_calls = max(float(totals.get("offline_sample_calls", 0.0)), 1.0)
+        result: dict[str, float | int] = {}
+        for key, total in sorted(totals.items()):
+            if key.endswith("_calls"):
+                result[key] = int(total)
+                continue
+            if key.startswith("online_"):
+                denom = online_calls
+            elif key.startswith("offline_"):
+                denom = offline_calls
+            else:
+                denom = mixed_calls
+            result[key] = float(total) / float(denom)
+        return result
+
+    def close(self) -> None:
+        if self._prefetcher is not None:
+            self._prefetcher.close()
+            self._prefetcher = None
+            self._prefetcher_offline_ratio = None
+
+    def _sample(
+        self,
+        *,
+        offline_ratio: float,
+    ) -> tuple[dict[str, Any], dict[str, int], dict[str, float]]:
+        sample_profile: dict[str, float] = {}
+        batch, batch_mix = sample_mixed_training_batch(
+            online_replay_buffer=self._online_replay_buffer,
+            offline_replay_buffer=self._offline_replay_buffer,
+            batch_size=int(self._batch_size),
+            offline_ratio=float(offline_ratio),
+            profile=sample_profile,
+            pack_obs_and_next_obs=bool(self._pack_obs_and_next_obs),
+            device=self._device,
+            prefer_device_concat=bool(self._prefer_device_concat),
+        )
+        return batch, batch_mix, sample_profile
+
+    def _get_prefetcher(self, *, offline_ratio: float) -> BatchPrefetcher:
+        resolved_ratio = float(offline_ratio)
+        if (
+            self._prefetcher is None
+            or self._prefetcher_offline_ratio is None
+            or float(self._prefetcher_offline_ratio) != float(resolved_ratio)
+        ):
+            self.close()
+            self._prefetcher = BatchPrefetcher(
+                lambda: self._sample(offline_ratio=resolved_ratio),
+                thread_name_prefix=self._thread_name_prefix,
+            )
+            self._prefetcher_offline_ratio = float(resolved_ratio)
+            self._prefetcher.start()
+        return self._prefetcher
+
+    def _record_sample_profile(self, profile: dict[str, float]) -> None:
+        for key, value in profile.items():
+            if isinstance(value, (int, float)):
+                self._sample_profile_totals[str(key)] = float(
+                    self._sample_profile_totals.get(str(key), 0.0)
+                ) + float(value)
+
+
 def _profile_add(profile: Optional[Dict[str, float]], key: str, value: float) -> None:
     if profile is not None:
         profile[key] = float(profile.get(key, 0.0)) + float(value)
@@ -128,7 +264,9 @@ def _sample_with_profile(
     if convert_to_torch:
         to_torch_start = time.perf_counter()
         batch = _to_torch(batch, device=device)
-        _profile_add(profile, f"{prefix}_to_torch_sec", time.perf_counter() - to_torch_start)
+        _profile_add(
+            profile, f"{prefix}_to_torch_sec", time.perf_counter() - to_torch_start
+        )
     return batch
 
 
@@ -179,8 +317,7 @@ def concat_batch_trees(values: list[Any]) -> Any:
     first = values[0]
     if isinstance(first, dict):
         return {
-            key: concat_batch_trees([value[key] for value in values])
-            for key in first
+            key: concat_batch_trees([value[key] for value in values]) for key in first
         }
     if any(isinstance(value, torch.Tensor) for value in values):
         tensor_values = []

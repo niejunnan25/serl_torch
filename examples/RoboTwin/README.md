@@ -9,10 +9,8 @@ This folder implements paper-aligned Stage-1/2 residual RL for RoboTwin:
 
 - `scripts/train_residual_sac.py`: Stage-1 residual RL training entry.
 - `scripts/eval_residual_fast.py`: Stage-2/eval rollout and data collection entry.
-- `core/common.py`: shared environment/action/IO utilities.
 - `conf/train_residual_sac.yaml`: main training config.
 - `conf/eval_residual_fast.yaml`: main eval config.
-- `conf/train_demo.yaml` / `conf/eval_demo.yaml`: minimal runnable demos.
 - `scripts/run_stage12_repro.sh`: 3-seed paper-style run helper.
 - `scripts/aggregate_eval_ci.py`: mean + 95% CI aggregation.
 

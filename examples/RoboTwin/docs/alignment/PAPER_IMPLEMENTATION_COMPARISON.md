@@ -18,7 +18,8 @@
 - 代码：
   - `examples/RoboTwin/scripts/train_residual_sac.py`
   - `examples/RoboTwin/scripts/eval_residual_fast.py`
-  - `examples/RoboTwin/core/common.py`
+  - `examples/RoboTwin/env_wrappers/`
+  - `examples/RoboTwin/policy/`
   - `serl_launcher/serl_launcher/agents/continuous/sac.py`
   - `examples/RoboTwin/conf/train_residual_sac.yaml`
 
@@ -53,4 +54,3 @@
 - 论文实验常见 7-DoF 机器人动作空间。
 - 当前 RoboTwin 以 ALOHA 14D 为基动作空间，并通过 `action_dim/action_indices` 适配残差维度。
 - 这属于平台迁移差异，不影响 Stage-1/2 算法结构对齐判断。
-

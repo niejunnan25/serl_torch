@@ -6,11 +6,7 @@
 
 - 训练主配置：`conf/train_residual_sac.yaml`
 - 评估主配置：`conf/eval_residual_fast.yaml`
-- 快速验证：`conf/train_demo.yaml` / `conf/eval_demo.yaml`
-
-`demo` 配置和主配置的主要区别：
-- 预算更小（便于 smoke test）
-- 默认 `encoder_type: small`（避免首次下载 pretrained ResNet）
+- 快速验证时直接使用主配置并通过命令行 override 缩小预算。
 
 ## 2. 输出目录与权重保存
 
@@ -119,25 +115,28 @@
 
 在 `examples/RoboTwin` 目录运行。
 
-### 5.1 训练 demo
+### 5.1 小预算训练 smoke test
 
 ```bash
-python scripts/train_residual_sac.py --config-name train_demo
+python scripts/train_residual_sac.py --config-name train_residual_sac \
+  training.max_online_env_steps=20000 \
+  training.checkpoint_period=200 \
+  hydra.run.dir=outputs/train_smoke
 ```
 
 常用覆写：
 
 ```bash
-python scripts/train_residual_sac.py --config-name train_demo \
+python scripts/train_residual_sac.py --config-name train_residual_sac \
   training.max_online_env_steps=20000 \
   training.checkpoint_period=200 \
-  hydra.run.dir=outputs/train_demo_local
+  hydra.run.dir=outputs/train_smoke_local
 ```
 
-### 5.2 评估 demo
+### 5.2 小预算评估 smoke test
 
 ```bash
-python scripts/eval_residual_fast.py --config-name eval_demo \
+python scripts/eval_residual_fast.py --config-name eval_residual_fast \
   eval.checkpoint_path=/abs/path/to/checkpoint_5000.pt
 ```
 
@@ -158,4 +157,3 @@ python scripts/eval_residual_fast.py --config-name eval_residual_fast \
 - `eval.episodes=50`
 - 保持 `training.xi_scheduler.enabled=true`
 - 保持 `training.async.enabled=true`
-

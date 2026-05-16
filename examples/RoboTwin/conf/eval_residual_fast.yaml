@@ -45,7 +45,7 @@ sac:
   encoder_type: resnet
   resnet:
     # HuggingFace model ID (如 microsoft/resnet-18) 或本地目录绝对路径
-    model_name: /home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings

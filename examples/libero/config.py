@@ -11,7 +11,6 @@ from typing import Literal
 from typing import cast
 
 from omegaconf import DictConfig
-from omegaconf import OmegaConf
 
 from serl_launcher.common.trainer_transport import SUPPORTED_TRANSPORT_MODES
 from serl_launcher.common.trainer_transport import TrainerTransportConfig
@@ -21,7 +20,7 @@ from serl_launcher.utils.serialization import to_jsonable
 
 from .env.observation import resolve_libero_image_keys
 
-RuntimeRole = Literal["actor", "learner"]
+RuntimeRole = Literal["actor", "learner", "processor"]
 EnvBackend = Literal["local", "remote"]
 PolicyBackend = Literal["openpi", "joyra"]
 OptimizerType = Literal["adam", "adamw"]
@@ -528,7 +527,7 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
     role = _parse_choice(
         runtime_cfg.get("role", "actor"),
         "runtime.role",
-        allowed=("actor", "learner"),
+        allowed=("actor", "learner", "processor"),
     )
     trainer_port = _positive_int(
         runtime_cfg.get("trainer_port", 5688),
@@ -1458,14 +1457,7 @@ def get_runtime_role(cfg: DictConfig) -> str:
 
 
 def parse_train_cfg_allow_processor(cfg: DictConfig) -> LiberoTrainConfig:
-    raw_role = get_runtime_role(cfg)
-    if raw_role in ("actor", "learner"):
-        return parse_train_cfg(cfg)
-    cfg_copy = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
-    if "runtime" not in cfg_copy:
-        cfg_copy["runtime"] = {}
-    cfg_copy["runtime"]["role"] = "actor"
-    return parse_train_cfg(cfg_copy)
+    return parse_train_cfg(cfg)
 
 
 def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:

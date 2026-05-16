@@ -469,7 +469,7 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_b
   runtime.role=learner \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+  encoder.resnet.model_name=pretrained_models/microsoft--resnet-18
 ```
 
 如果你要加载 prepared offline data，最常见的 learner 命令是：
@@ -482,7 +482,7 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_b
   offline.prepared_path=data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1 \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+  encoder.resnet.model_name=pretrained_models/microsoft--resnet-18
 ```
 
 如果你希望结果写到固定目录，可以加：
@@ -499,7 +499,7 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_b
   runtime.role=actor \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+  encoder.resnet.model_name=pretrained_models/microsoft--resnet-18
 ```
 
 ### 5.1 启动 optimized 实验线
@@ -684,96 +684,9 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_training_1_b
 - `async_eval_checkpoints/`
 - `async_eval_runs/`
 
-### `libero_spatial task4` 完整启动示例
-
-如果你要直接运行：
-
-- `configs/train_residual_libero_spatial_task4.yaml`
-
-可以按下面这 5 个终端分别启动。这个例子使用：
-
-- `train env`: `127.0.0.1:30100`
-- `policy`: `127.0.0.1:30101`
-- `eval env`: `127.0.0.1:30110`
-- `learner`: `GPU 5`
-- `actor + policy + env render`: `GPU 6`
-
-1. `pi0_10000` policy server
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate openpi-modified
-export CUDA_VISIBLE_DEVICES=6
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
-export PYTHONPATH=/vla/users/niejunnan/codebase/openpi/src:${PYTHONPATH}
-cd /vla/users/niejunnan/codebase/openpi
-uv run scripts/serve_policy.py \
-  --port 30101 \
-  policy:checkpoint \
-  --policy.config=pi0_libero_baseline_10_bs32_150000 \
-  --policy.dir=/vla/users/niejunnan/assets/openpi-assets/serl_torch_ckpt/pi0_10000
-```
-
-2. 训练 env server
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate /vla/users/niejunnan/envs/libero
-cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30100 --gpu-id 6
-```
-
-3. eval env server
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate /vla/users/niejunnan/envs/libero
-cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/serve_env.py --host 127.0.0.1 --port 30110 --gpu-id 6
-```
-
-4. learner
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate serl_torch
-export CUDA_VISIBLE_DEVICES=5
-cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/run_residual_training_1_baseline.py \
-  --config-name train_residual_libero_spatial_task4 \
-  runtime.role=learner \
-  policy.port=30101 \
-  env.remote.port=30100 \
-  training.async_eval.env.remote.port=30110 \
-  libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets
-```
-
-5. actor
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate serl_torch
-export CUDA_VISIBLE_DEVICES=6
-cd /home/hello/codebase/serl_torch
-python examples/libero/scripts/run_residual_training_1_baseline.py \
-  --config-name train_residual_libero_spatial_task4 \
-  runtime.role=actor \
-  policy.port=30101 \
-  env.remote.port=30100 \
-  training.async_eval.env.remote.port=30110 \
-  libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets
-```
-
 ### `exp1` task4 / task9 对比实验
 
-如果你要直接跑当前整理好的 `exp1` 对比实验，建议先看两份完整命令清单：
-
-- task4:
-  [../../docs/2026-04-23-libero-exp1-startup-commands.md](../../docs/2026-04-23-libero-exp1-startup-commands.md)
-- task9:
-  [../../docs/2026-04-23-libero-task9-exp1-startup-commands.md](../../docs/2026-04-23-libero-task9-exp1-startup-commands.md)
+如果你要直接跑当前整理好的 `exp1` 对比实验，以本节下面的 `scripts_2 / scripts_5` 配置名为准。
 
 这四份配置当前都已经统一到：
 
@@ -847,7 +760,7 @@ python examples/libero/scripts/run_residual_training_5_split_pipeline.py \
   libero_datasets_root=/vla/users/niejunnan/datasets
 ```
 
-如果你要直接按多终端方式启动 `env / eval env / decision policy / backfill policy / processor / actor`，不要自己手拼，直接照上面两份 `docs/` 文档里的端口和 GPU 分配执行。
+如果你要直接按多终端方式启动 `env / eval env / decision policy / backfill policy / processor / actor`，优先用 `examples/libero/tools/launch_residual_training.sh` 统一拉起；历史的手写 exp1 多终端命令已经清理掉。
 
 ## 8. 跑 checkpoint eval
 
@@ -870,7 +783,7 @@ conda run -n serl_torch python examples/libero/scripts/run_residual_eval.py \
   eval.deterministic=true \
   libero_root=/home/hello/codebase/serl_torch/third_party/LIBERO \
   libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/home/hello/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+  encoder.resnet.model_name=pretrained_models/microsoft--resnet-18
 ```
 
 `eval.checkpoint_path` 支持两种输入：

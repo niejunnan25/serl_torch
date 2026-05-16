@@ -88,6 +88,19 @@ if [[ ! -d "$OPENPI_ROOT" ]]; then
     exit 1
 fi
 
+OPENPI_VENV_DIR="${OPENPI_ROOT}/.venv"
+if [[ -d "$OPENPI_VENV_DIR" ]]; then
+    OPENPI_NVIDIA_DIR="$(find "$OPENPI_VENV_DIR/lib" -path "*/site-packages/nvidia" -type d 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$OPENPI_NVIDIA_DIR" ]]; then
+        for cuda_lib in cudnn cublas cuda_runtime cuda_cupti cuda_nvrtc cufft curand cusolver cusparse nccl nvjitlink nvtx; do
+            cuda_lib_dir="${OPENPI_NVIDIA_DIR}/${cuda_lib}/lib"
+            if [[ -d "$cuda_lib_dir" ]]; then
+                export LD_LIBRARY_PATH="${cuda_lib_dir}:${LD_LIBRARY_PATH:-}"
+            fi
+        done
+    fi
+fi
+
 if ! command -v uv >/dev/null 2>&1; then
     echo "ERROR: 'uv' not found in PATH for tools/serve_openpi_policy.sh"
     echo "Hint: set OPENPI_CONDA_ENV or OPENPI_CONDA_PREFIX to an env with uv installed."

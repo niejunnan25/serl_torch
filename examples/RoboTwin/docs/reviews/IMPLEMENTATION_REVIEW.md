@@ -7,14 +7,13 @@
 - 代码：
   - `examples/RoboTwin/scripts/train_residual_sac.py`
   - `examples/RoboTwin/scripts/eval_residual_fast.py`
-  - `examples/RoboTwin/core/common.py`
+  - `examples/RoboTwin/env_wrappers/`
+  - `examples/RoboTwin/policy/`
   - `serl_launcher/serl_launcher/agents/continuous/sac.py`
   - `serl_launcher/serl_launcher/agents/continuous/drq.py`
 - 配置：
   - `examples/RoboTwin/conf/train_residual_sac.yaml`
   - `examples/RoboTwin/conf/eval_residual_fast.yaml`
-  - `examples/RoboTwin/conf/train_demo.yaml`
-  - `examples/RoboTwin/conf/eval_demo.yaml`
 - 脚本：
   - `examples/RoboTwin/scripts/run_stage12_repro.sh`
   - `examples/RoboTwin/scripts/aggregate_eval_ci.py`
@@ -106,4 +105,3 @@
   - OpenPI 服务可达
   - RoboTwin 环境可正常 reset/step
   - 预训练权重可用（若启用 `resnet-pretrained`）
-

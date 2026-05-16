@@ -5,6 +5,7 @@ DRQ (Data-regularized Q) Agent 模块。
 """
 
 import copy
+import time
 from typing import Iterable, Optional, Tuple
 
 import torch
@@ -16,6 +17,16 @@ from serl_launcher.networks.lagrange import GeqLagrangeMultiplier
 from serl_launcher.networks.mlp import MLP
 from serl_launcher.utils.train_utils import _unpack
 from serl_launcher.vision.data_augmentations import batched_random_crop
+
+
+def _profile_add(profile: Optional[dict[str, float]], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+def _profile_count(profile: Optional[dict[str, float]], key: str) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + 1.0
 
 
 class DrQAgent(SACAgent):
@@ -227,45 +238,75 @@ class DrQAgent(SACAgent):
         *,
         utd_ratio: int,
         pmap_axis: Optional[str] = None,
+        profile: Optional[dict[str, float]] = None,
     ) -> Tuple["DrQAgent", dict]:
         """
         高 UTD（update-to-data）比的一次更新：先对图像做数据增强，再调用 SAC 的 update_high_utd。
         utd_ratio 表示每批数据要做的梯度更新次数。
         """
         del pmap_axis
+        _profile_count(profile, "drq_high_utd_calls")
         # 若 batch 是打包格式（如来自 agentlace），先解包成带 image 等键的 dict
         if self.config["image_keys"][0] not in batch["next_observations"]:
+            start = time.perf_counter()
             batch = _unpack(batch)
+            _profile_add(profile, "drq_unpack_sec", time.perf_counter() - start)
 
+        start = time.perf_counter()
         batch = _to_torch(batch, self.device)
+        _profile_add(profile, "drq_to_torch_sec", time.perf_counter() - start)
+        start = time.perf_counter()
         batch["observations"] = self.data_augmentation_fn(batch["observations"])
+        _profile_add(profile, "drq_crop_obs_sec", time.perf_counter() - start)
+        start = time.perf_counter()
         batch["next_observations"] = self.data_augmentation_fn(
             batch["next_observations"]
         )
+        _profile_add(profile, "drq_crop_next_obs_sec", time.perf_counter() - start)
 
-        return super().update_high_utd(batch, utd_ratio=utd_ratio)
+        return super().update_high_utd(
+            batch,
+            utd_ratio=utd_ratio,
+            profile=profile,
+            batch_is_torch=True,
+        )
 
     def update_critics(
         self,
         batch,
         *,
         pmap_axis: Optional[str] = None,
+        profile: Optional[dict[str, float]] = None,
     ) -> Tuple["DrQAgent", dict]:
         """
         仅更新 Q 网络（critic）：先做图像增强，再调用 update 并限定 networks_to_update={"critic"}。
         常用于异步架构中 learner 只更新 critic 的步骤。
         """
         del pmap_axis
+        _profile_count(profile, "drq_update_critics_calls")
         if self.config["image_keys"][0] not in batch["next_observations"]:
+            start = time.perf_counter()
             batch = _unpack(batch)
+            _profile_add(profile, "drq_unpack_sec", time.perf_counter() - start)
 
+        start = time.perf_counter()
         batch = _to_torch(batch, self.device)
+        _profile_add(profile, "drq_to_torch_sec", time.perf_counter() - start)
+        start = time.perf_counter()
         batch["observations"] = self.data_augmentation_fn(batch["observations"])
+        _profile_add(profile, "drq_crop_obs_sec", time.perf_counter() - start)
+        start = time.perf_counter()
         batch["next_observations"] = self.data_augmentation_fn(
             batch["next_observations"]
         )
+        _profile_add(profile, "drq_crop_next_obs_sec", time.perf_counter() - start)
 
-        return self.update(batch, networks_to_update=frozenset({"critic"}))
+        return self.update(
+            batch,
+            networks_to_update=frozenset({"critic"}),
+            profile=profile,
+            batch_is_torch=True,
+        )
 
     def update_critics_calql(
         self,

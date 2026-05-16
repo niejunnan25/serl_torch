@@ -106,7 +106,7 @@ class LiberoConfigTest(unittest.TestCase):
         ):
             parse_train_cfg(cfg)
 
-    def test_parse_train_cfg_allow_processor_uses_actor_fallback(self) -> None:
+    def test_parse_train_cfg_allow_processor_preserves_processor_role(self) -> None:
         cfg = OmegaConf.load(
             Path(__file__).resolve().parents[3]
             / "examples"
@@ -118,7 +118,7 @@ class LiberoConfigTest(unittest.TestCase):
 
         parsed = parse_train_cfg_allow_processor(cfg)
 
-        self.assertEqual(parsed.runtime.role, "actor")
+        self.assertEqual(parsed.runtime.role, "processor")
 
     def test_parse_train_cfg_rejects_invalid_processor_transport_values(self) -> None:
         cfg = OmegaConf.load(

@@ -11,10 +11,6 @@
 - robot-service wrapper：[../tools/start_robot_service.sh](../tools/start_robot_service.sh)
 - eval 入口：[../scripts/run_residual_eval.py](../scripts/run_residual_eval.py)
 
-如果你想直接用 optimized 配置启动训练，请看：
-
-- [optimized_training_startup.md](optimized_training_startup.md)
-
 ## 1. 当前主线的运行语义
 
 当前默认配置不是逐步推理、逐步执行，而是：
@@ -426,14 +422,10 @@ python scripts/run_residual_eval.py \
   eval.checkpoint_path=/path/to/checkpoints/checkpoint_10000
 ```
 
-## 18. 当前主线和实验脚本的区别
+## 18. 当前主线
 
 你现在真正准备上真机的主线是：
 
 - [../scripts/run_residual_training.py](../scripts/run_residual_training.py)
 
-实验性 chunk-boundary 脚本是：
-
-- [../scripts/run_residual_training_chunk_boundary.py](../scripts/run_residual_training_chunk_boundary.py)
-
-当前真机 README 和 wrapper 命令，默认都以主线脚本为准，不以实验脚本为准。
+旧的 optimized / copy / chunk-boundary 独立启动说明已经清理掉；这些行为现在都收敛到主配置和主入口上，用 Hydra overrides 控制即可。
