@@ -14,6 +14,11 @@ DEFAULT_EVAL_METRICS = (
     "eval/status_failed",
     "eval/success_rate",
     "eval/mean_return",
+    "eval/eval_index",
+    "eval/train_update_step",
+    "eval/train_env_step",
+    "eval/duration_sec",
+    "eval/queue_backlog",
 )
 
 DEFAULT_ROLLOUT_AXIS_METRIC = "rollout/episode_id"
@@ -36,6 +41,32 @@ DEFAULT_ROLLOUT_METRIC_MAPPING = (
     ("cumulative_success_rate", "rollout/cumulative_success_rate"),
     ("recent_success_rate_20", "rollout/recent_success_rate_20"),
 )
+ROLLOUT_ENV_STEP_METRIC_MAPPING = (
+    ("rollout/episode_id", "rollout_by_env_steps/episode_id"),
+    ("rollout/episode_return", "rollout_by_env_steps/episode_return"),
+    (
+        "rollout/cumulative_success_rate",
+        "rollout_by_env_steps/cumulative_success_rate",
+    ),
+    (
+        "rollout/recent_success_rate_20",
+        "rollout_by_env_steps/recent_success_rate_20",
+    ),
+    ("rollout_progress/env_steps", "rollout_by_env_steps/env_steps"),
+    ("speed/actor_env_steps_per_sec", "speed_by_env_steps/actor_env_steps_per_sec"),
+    ("residual/mean_abs", "residual_by_env_steps/mean_abs"),
+    ("residual/max_abs", "residual_by_env_steps/max_abs"),
+    ("residual/std", "residual_by_env_steps/std"),
+    ("residual/saturation_rate", "residual_by_env_steps/saturation_rate"),
+    (
+        "action/mean_abs_delta_from_base",
+        "action_by_env_steps/mean_abs_delta_from_base",
+    ),
+    (
+        "action/max_abs_delta_from_base",
+        "action_by_env_steps/max_abs_delta_from_base",
+    ),
+)
 
 DEFAULT_LEARNER_METRICS = (
     "progress/env_steps",
@@ -43,6 +74,16 @@ DEFAULT_LEARNER_METRICS = (
     "progress/replay_size",
     "speed/learner_updates_per_sec",
     "eval_queue/backlog",
+    "replay/online_size",
+    "replay/offline_size",
+    "replay/sample_online_count",
+    "replay/sample_offline_count",
+    "replay/offline_ratio_actual",
+    "learner_time/sample_replay_buffer_sec",
+    "learner_time/train_sec",
+    "learner_time/train_critics_sec",
+    "learner_time/publish_snapshot_sec",
+    "learner_time/publish_network_sec",
     "learner/loss_critic",
     "learner/loss_critic_td",
     "learner/loss_actor",
@@ -157,6 +198,14 @@ def extract_learner_wandb_metrics(
     """Extract standard learner update metrics from an agent update payload."""
 
     return extract_numeric_metrics(update_info, mapping)
+
+
+def build_rollout_env_step_wandb_metrics(
+    rollout_metrics: Mapping[str, Any],
+) -> dict[str, float]:
+    """Mirror rollout metrics into an env-step-indexed namespace."""
+
+    return extract_numeric_metrics(rollout_metrics, ROLLOUT_ENV_STEP_METRIC_MAPPING)
 
 
 def build_learner_runtime_wandb_metrics(

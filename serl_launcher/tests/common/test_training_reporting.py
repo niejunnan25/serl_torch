@@ -33,12 +33,18 @@ class TrainingReportingTest(unittest.TestCase):
             logger=logging.getLogger(__name__),
         )
 
-        self.assertEqual(len(wandb_logger.calls), 1)
+        self.assertEqual(len(wandb_logger.calls), 2)
         metrics, step = wandb_logger.calls[0]
         self.assertEqual(step, 150)
         self.assertEqual(metrics["eval/train_episode_id"], 150.0)
         self.assertEqual(metrics["eval/success_rate"], 0.8)
         self.assertEqual(metrics["eval/mean_return"], 0.7)
+
+        env_step_metrics, env_step = wandb_logger.calls[1]
+        self.assertEqual(env_step, 45678)
+        self.assertEqual(env_step_metrics["eval_by_env_steps/train_episode_id"], 150.0)
+        self.assertEqual(env_step_metrics["eval_by_env_steps/train_env_step"], 45678.0)
+        self.assertEqual(env_step_metrics["eval_by_env_steps/success_rate"], 0.8)
 
 
 if __name__ == "__main__":

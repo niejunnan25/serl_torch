@@ -29,11 +29,14 @@ class TrainingPayloadsTest(unittest.TestCase):
                 "success": True,
                 "reward_trace": np.asarray([1.0, 2.0], dtype=np.float32),
             },
+            residual={"mean_abs": np.float32(0.25), "value_count": 14},
         )
 
         self.assertEqual(payload["env_steps"], 123)
         self.assertEqual(payload["rollout"]["episode_id"], 7)
         self.assertEqual(payload["env_info"]["reward_trace"], [1.0, 2.0])
+        self.assertEqual(payload["residual"]["mean_abs"], 0.25)
+        self.assertEqual(payload["residual"]["value_count"], 14)
 
         parsed = parse_rollout_stats_payload(payload)
         self.assertIsNotNone(parsed)
@@ -42,6 +45,8 @@ class TrainingPayloadsTest(unittest.TestCase):
         self.assertEqual(parsed["rollout"]["episode_steps"], 31)
         self.assertTrue(parsed["rollout"]["success"])
         self.assertEqual(parsed["env_info"]["reward_trace"], [1.0, 2.0])
+        self.assertEqual(parsed["residual"]["mean_abs"], 0.25)
+        self.assertEqual(parsed["residual"]["value_count"], 14)
         self.assertEqual(parsed["rollout"]["init_episode_idx"], 2)
 
     def test_parse_rollout_payload_without_init_episode_idx(self) -> None:

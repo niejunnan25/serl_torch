@@ -6,6 +6,7 @@ from .typed_action import ResidualActionSpec
 
 __all__ = [
     "ResidualActionSpec",
+    "ResidualActionStatsAccumulator",
     "ResidualDeltaActionFilter",
     "build_chunk_residual_obs",
     "build_chunk_residual_observation_space",
@@ -16,6 +17,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name == "ResidualActionStatsAccumulator":
+        from .action_metrics import ResidualActionStatsAccumulator
+
+        return ResidualActionStatsAccumulator
     if name == "ResidualDeltaActionFilter":
         from .action_filter import ResidualDeltaActionFilter
 

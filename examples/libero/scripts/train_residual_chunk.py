@@ -33,6 +33,7 @@ from serl_launcher.common.training_observability import configure_eval_wandb_met
 from serl_launcher.common.training_observability import configure_learner_wandb_metrics
 from serl_launcher.common.training_observability import configure_rollout_wandb_metrics
 from serl_launcher.common.training_observability import build_learner_runtime_wandb_metrics
+from serl_launcher.common.training_observability import build_rollout_env_step_wandb_metrics
 from serl_launcher.common.training_observability import extract_learner_wandb_metrics
 from serl_launcher.common.training_observability import extract_rollout_wandb_metrics
 from serl_launcher.common.training_payloads import build_rollout_payload
@@ -96,6 +97,12 @@ from serl_torch.examples.libero.runtime.async_eval_runtime import (
 )
 from serl_torch.examples.libero.runtime.async_eval_runtime import (
     wait_for_async_eval_worker,
+)
+from serl_torch.examples.libero.runtime.learner_shutdown import (
+    ACTOR_DONE_DATA_COMMITTED_STOP_REASON,
+)
+from serl_torch.examples.libero.runtime.learner_shutdown import (
+    actor_done_data_committed,
 )
 from serl_torch.examples.libero.runtime.transition_assembly import (
     AssemblyResult,
@@ -703,6 +710,8 @@ def learner(
     latest_completed_episode_id = 0
     completed_episode_env_steps: dict[int, int] = {}
     last_queued_async_eval_episode = 0
+    last_rollout_wall_time: float | None = None
+    last_rollout_env_steps = 0
     learner_timer_log_path = run_dir / "learner_timers.jsonl"
     progress_state_lock = Lock()
     summary: dict[str, Any] = {
@@ -713,7 +722,9 @@ def learner(
         "env_steps": 0,
         "replay_size": 0,
         "timer_log_path": str(learner_timer_log_path),
+        "stop_reason": None,
     }
+    stop_reason = "max_update_steps"
 
     def _transport_status() -> dict[str, Any]:
         try:
@@ -724,27 +735,27 @@ def learner(
     def _committed_online_steps() -> int:
         return int(replay_buffer.latest_data_id())
 
-    def _should_stop_after_actor_done(*, online_update_steps: int) -> bool:
-        if int(env_steps) < int(cfg.training.max_env_steps):
-            return False
-        committed_online_steps = int(_committed_online_steps())
-        if int(online_update_steps) < int(committed_online_steps):
-            return False
-        transport_status = _transport_status()
-        accepted = int(transport_status.get("accepted_update_id", -1))
-        committed = int(transport_status.get("committed_update_id", -1))
-        target_last_online_id = max(0, int(env_steps) - 1)
-        if accepted < int(target_last_online_id) or committed < int(
-            target_last_online_id
-        ):
-            return False
-        if accepted >= 0 and committed >= 0 and accepted > committed:
-            return False
-        return True
+    def _async_eval_backlog() -> int:
+        return max(
+            0,
+            int(async_eval.triggered_count) - int(async_eval.processed_summary_lines),
+        )
+
+    def _should_stop_after_actor_done() -> bool:
+        target_env_steps = int(cfg.training.max_env_steps)
+        return actor_done_data_committed(
+            actor_done=int(env_steps) >= target_env_steps,
+            target_env_steps=target_env_steps,
+            latest_data_id=int(_committed_online_steps()),
+            transport_status=_transport_status(),
+            require_transport_commit=True,
+        )
 
     def stats_callback(request_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal env_steps
         nonlocal latest_completed_episode_id
+        nonlocal last_rollout_wall_time
+        nonlocal last_rollout_env_steps
         if request_type != "send-stats":
             raise ValueError(f"Invalid request type: {request_type}")
         rollout_stats = parse_rollout_stats_payload(payload)
@@ -754,8 +765,18 @@ def learner(
                 sorted(payload.keys()),
             )
             return {}
+        rollout_env_steps = int(rollout_stats["env_steps"])
+        now = time.time()
+        actor_env_steps_per_sec: float | None = None
+        if last_rollout_wall_time is not None:
+            elapsed_sec = max(float(now - last_rollout_wall_time), 1e-6)
+            actor_env_steps_per_sec = float(
+                max(0, int(rollout_env_steps - last_rollout_env_steps))
+            ) / elapsed_sec
+        last_rollout_wall_time = float(now)
+        last_rollout_env_steps = int(rollout_env_steps)
         with progress_state_lock:
-            env_steps = max(int(env_steps), int(rollout_stats["env_steps"]))
+            env_steps = max(int(env_steps), int(rollout_env_steps))
             episode_id = int(rollout_stats["rollout"]["episode_id"])
             if episode_id > 0:
                 latest_completed_episode_id = max(
@@ -764,8 +785,21 @@ def learner(
                 )
                 completed_episode_env_steps[int(episode_id)] = int(env_steps)
         rollout_metrics = extract_rollout_wandb_metrics(rollout_stats)
+        if actor_env_steps_per_sec is not None:
+            rollout_metrics["speed/actor_env_steps_per_sec"] = float(
+                actor_env_steps_per_sec
+            )
         if rollout_metrics:
-            wandb_logger.log(to_jsonable(rollout_metrics))
+            rollout_step = int(rollout_stats["rollout"]["episode_id"])
+            wandb_logger.log(to_jsonable(rollout_metrics), step=rollout_step)
+            rollout_env_step_metrics = build_rollout_env_step_wandb_metrics(
+                rollout_metrics
+            )
+            if rollout_env_step_metrics:
+                wandb_logger.log(
+                    to_jsonable(rollout_env_step_metrics),
+                    step=int(rollout_env_steps),
+                )
         return {}
 
     server = build_learner_trainer_transport(
@@ -1059,13 +1093,18 @@ def learner(
             online_update_steps = max(
                 0, int(update_steps - offline_pretrain_steps_done)
             )
-            if _should_stop_after_actor_done(
-                online_update_steps=int(online_update_steps)
-            ):
+            if _should_stop_after_actor_done():
+                stop_reason = ACTOR_DONE_DATA_COMMITTED_STOP_REASON
+                _maybe_queue_async_eval()
                 logger.info(
-                    "stopping learner after actor env limit: update_steps=%s env_steps=%s replay_size=%s transport=%s",
+                    "stopping learner: reason=%s update_steps=%s env_steps=%s "
+                    "target_env_steps=%s replay_latest_data_id=%s replay_size=%s "
+                    "transport=%s",
+                    stop_reason,
                     int(update_steps),
                     int(env_steps),
+                    int(cfg.training.max_env_steps),
+                    int(_committed_online_steps()),
                     int(len(replay_buffer)),
                     _transport_status(),
                 )
@@ -1086,10 +1125,12 @@ def learner(
 
             if update_steps % log_period == 0:
                 check_async_eval_worker(async_eval, logger=logger)
+                eval_records = load_new_async_eval_results(async_eval)
                 sync_eval_results_to_wandb(
-                    records=load_new_async_eval_results(async_eval),
+                    records=eval_records,
                     wandb_logger=wandb_logger,
                     logger=logger,
+                    eval_queue_backlog=_async_eval_backlog(),
                 )
                 update_metrics = to_jsonable(update_info)
                 now = time.time()
@@ -1106,6 +1147,24 @@ def learner(
                 )
                 update_profile_metrics = to_jsonable(update_profile_accumulator.drain())
                 learner_metrics = extract_learner_wandb_metrics(update_metrics)
+                learner_metrics.update(
+                    build_learner_runtime_wandb_metrics(
+                        update_steps=int(update_steps),
+                        env_steps=int(env_steps),
+                        replay_size=int(len(replay_buffer)),
+                        updates_per_sec=float(updates_per_sec),
+                        eval_queue_backlog=_async_eval_backlog(),
+                        offline_replay_size=(
+                            0
+                            if offline_replay_buffer is None
+                            else int(len(offline_replay_buffer))
+                        ),
+                        batch_mix=batch_mix,
+                        timer_metrics=timer_metrics,
+                        sample_profile_metrics=sample_profile_metrics,
+                        update_profile_metrics=update_profile_metrics,
+                    )
+                )
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
                 append_jsonl(
@@ -1166,6 +1225,7 @@ def learner(
                 )
     except KeyboardInterrupt:
         interrupted = True
+        stop_reason = "interrupted"
         logger.info("learner interrupted; shutting down gracefully")
 
     finally:
@@ -1182,6 +1242,7 @@ def learner(
                 records=load_new_async_eval_results(async_eval),
                 wandb_logger=wandb_logger,
                 logger=logger,
+                eval_queue_backlog=_async_eval_backlog(),
             )
             if async_eval_return_code not in (None, 0):
                 logger.warning(
@@ -1198,6 +1259,11 @@ def learner(
                 "update_steps": int(update_steps),
                 "env_steps": int(env_steps),
                 "replay_size": int(len(replay_buffer)),
+                "stop_reason": str(stop_reason),
+                "last_completed_episode_id": int(summary_last_completed_episode_id),
+                "last_queued_async_eval_episode": int(
+                    summary_last_queued_episode_id
+                ),
                 "transport": _transport_status(),
                 "offline": {
                     "enabled": bool(cfg.offline.enabled),
@@ -1230,8 +1296,12 @@ def learner(
                     "enabled": bool(async_eval.enabled),
                     "every_episodes": int(async_eval.every_episodes),
                     "triggered": int(async_eval.triggered_count),
+                    "backlog": int(_async_eval_backlog()),
                     "last_completed_episode_id": int(summary_last_completed_episode_id),
                     "last_queued_episode_id": int(summary_last_queued_episode_id),
+                    "last_queued_async_eval_episode": int(
+                        summary_last_queued_episode_id
+                    ),
                     "results_total": int(async_eval_counts["total"]),
                     "results_ok": int(async_eval_counts["ok"]),
                     "results_failed": int(async_eval_counts["failed"]),

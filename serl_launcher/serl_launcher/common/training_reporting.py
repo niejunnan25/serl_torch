@@ -56,6 +56,13 @@ def sync_eval_results_to_wandb(
                 metrics["eval/mean_return"] = float(mean_return)
 
         wandb_logger.log(to_jsonable(metrics), step=int(train_episode_id))
+        if isinstance(train_env_step, (int, float)):
+            env_step_metrics = _build_eval_env_step_metrics(metrics)
+            if env_step_metrics:
+                wandb_logger.log(
+                    to_jsonable(env_step_metrics),
+                    step=int(train_env_step),
+                )
 
         if status == "ok":
             logger.info(
@@ -112,6 +119,26 @@ def _maybe_float(metrics: Mapping[str, Any], key: str) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _build_eval_env_step_metrics(metrics: Mapping[str, Any]) -> dict[str, float]:
+    mapping = (
+        ("eval/status_failed", "eval_by_env_steps/status_failed"),
+        ("eval/success_rate", "eval_by_env_steps/success_rate"),
+        ("eval/mean_return", "eval_by_env_steps/mean_return"),
+        ("eval/eval_index", "eval_by_env_steps/eval_index"),
+        ("eval/train_episode_id", "eval_by_env_steps/train_episode_id"),
+        ("eval/train_update_step", "eval_by_env_steps/train_update_step"),
+        ("eval/train_env_step", "eval_by_env_steps/train_env_step"),
+        ("eval/duration_sec", "eval_by_env_steps/duration_sec"),
+        ("eval/queue_backlog", "eval_by_env_steps/queue_backlog"),
+    )
+    env_step_metrics: dict[str, float] = {}
+    for source_key, metric_key in mapping:
+        value = metrics.get(source_key, None)
+        if isinstance(value, (int, float)):
+            env_step_metrics[metric_key] = float(value)
+    return env_step_metrics
 
 
 def _format_optional_metric(value: float | None, *, digits: int = 3) -> str:

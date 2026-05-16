@@ -120,6 +120,42 @@ def _resolve_checkpoint_input(
     return checkpoint_input_path, resolved_checkpoint_path
 
 
+def _build_decision_obs(
+    *,
+    obs: dict[str, Any],
+    task_prompt: str,
+    policy_client: Any,
+    chunk_horizon: int,
+    image_keys: Any,
+    residual_alpha: float,
+    timer: Timer,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    with timer.context("decision_obs_extract"):
+        robot_state = build_libero_state(obs)
+        image_observations = extract_libero_images(obs)
+    with timer.context("decision_obs_policy_input"):
+        base_policy_input = build_libero_policy_input(
+            prompt=task_prompt,
+            state=robot_state,
+            images=image_observations,
+        )
+    with timer.context("policy_infer"):
+        base_actions, _ = policy_client.infer(base_policy_input)
+    with timer.context("decision_obs_residual"):
+        base_actions = prepare_base_actions_chunk(
+            base_actions=base_actions,
+            chunk_horizon=chunk_horizon,
+        )
+        residual_obs = build_chunk_residual_obs(
+            robot_state=robot_state,
+            images=image_observations,
+            image_keys=image_keys,
+            base_actions=base_actions,
+            residual_alpha=residual_alpha,
+        )
+    return np.asarray(base_actions, dtype=np.float32), residual_obs
+
+
 def run_residual_eval(
     cfg: LiberoEvalConfig,
     *,
@@ -213,6 +249,7 @@ def run_residual_eval(
     successes = 0
     total_env_steps = 0
     completed_episodes = 0
+    policy_requests = 0
 
     summary: dict[str, Any] = {
         "role": "eval",
@@ -264,52 +301,6 @@ def run_residual_eval(
                     manual_cap_reached = True
                     break
 
-                timer.tick("total")
-                with timer.context("sample_actions"):
-                    if prefetched is None:
-                        robot_state = build_libero_state(obs)
-                        image_observations = extract_libero_images(obs)
-                        base_policy_input = build_libero_policy_input(
-                            prompt=task_prompt,
-                            state=robot_state,
-                            images=image_observations,
-                        )
-                        base_actions, _ = policy_client.infer(base_policy_input)
-                        base_actions = prepare_base_actions_chunk(
-                            base_actions=base_actions,
-                            chunk_horizon=chunk_horizon,
-                        )
-                        residual_obs = build_chunk_residual_obs(
-                            robot_state=robot_state,
-                            images=image_observations,
-                            image_keys=image_keys,
-                            base_actions=base_actions,
-                            residual_alpha=residual_action_spec.alpha,
-                        )
-                    else:
-                        base_actions = prefetched["base_actions"]
-                        residual_obs = prefetched["residual_obs"]
-                        prefetched = None
-
-                    if agent is None:
-                        residual_actions = np.zeros(
-                            (
-                                int(chunk_horizon),
-                                int(residual_action_spec.policy_action_dim),
-                            ),
-                            dtype=np.float32,
-                        )
-                    else:
-                        residual_actions = agent.sample_action(
-                            residual_obs,
-                            deterministic=deterministic,
-                        )
-
-                    final_actions = residual_action_spec.compose_chunk(
-                        base_action_chunk=base_actions,
-                        residual_action=residual_actions,
-                    )
-
                 remaining_episode_budget = (
                     None
                     if max_env_steps_per_episode is None
@@ -317,7 +308,6 @@ def run_residual_eval(
                 )
                 if remaining_episode_budget is not None and remaining_episode_budget <= 0:
                     manual_cap_reached = True
-                    timer.tock("total")
                     break
                 execute_horizon = (
                     int(chunk_horizon)
@@ -325,61 +315,112 @@ def run_residual_eval(
                     else min(int(chunk_horizon), int(remaining_episode_budget))
                 )
 
-                for action in np.asarray(
-                    final_actions[:execute_horizon],
-                    dtype=np.float32,
-                ):
+                with timer.context("total"):
+                    with timer.context("sample_actions"):
+                        if prefetched is None:
+                            with timer.context("build_decision_obs"):
+                                base_actions, residual_obs = _build_decision_obs(
+                                    obs=obs,
+                                    task_prompt=task_prompt,
+                                    policy_client=policy_client,
+                                    chunk_horizon=chunk_horizon,
+                                    image_keys=image_keys,
+                                    residual_alpha=residual_action_spec.alpha,
+                                    timer=timer,
+                                )
+                            policy_requests += 1
+                        else:
+                            base_actions = prefetched["base_actions"]
+                            residual_obs = prefetched["residual_obs"]
+                            prefetched = None
+
+                        if agent is None:
+                            residual_actions = np.zeros(
+                                (
+                                    int(chunk_horizon),
+                                    int(residual_action_spec.policy_action_dim),
+                                ),
+                                dtype=np.float32,
+                            )
+                        else:
+                            residual_actions = agent.sample_action(
+                                residual_obs,
+                                deterministic=deterministic,
+                            )
+
+                        final_actions = residual_action_spec.compose_chunk(
+                            base_action_chunk=base_actions,
+                            residual_action=residual_actions,
+                        )
+
+                    action_chunk = np.asarray(
+                        final_actions[:execute_horizon],
+                        dtype=np.float32,
+                    )
+
                     with timer.context("step_env"):
-                        next_obs, reward, done, truncated, info = env.step(action)
+                        chunk_result = env.step_chunk(action_chunk)
 
-                    with timer.context("build_decision_obs"):
-                        next_robot_state = build_libero_state(next_obs)
-                        next_image_observations = extract_libero_images(next_obs)
-                        next_base_policy_input = build_libero_policy_input(
-                            prompt=task_prompt,
-                            state=next_robot_state,
-                            images=next_image_observations,
+                    rewards = [float(value) for value in chunk_result["rewards"]]
+                    dones = [bool(value) for value in chunk_result["dones"]]
+                    infos = [dict(value) for value in chunk_result["infos"]]
+                    executed_steps = int(chunk_result.get("num_steps", len(rewards)))
+                    if executed_steps <= 0:
+                        raise RuntimeError("eval step_chunk returned no executed steps")
+                    if len(rewards) < executed_steps or len(dones) < executed_steps:
+                        raise RuntimeError(
+                            "eval step_chunk returned fewer rewards/dones than num_steps"
                         )
-                        next_base_actions, _ = policy_client.infer(next_base_policy_input)
-                        next_base_actions = prepare_base_actions_chunk(
-                            base_actions=next_base_actions,
-                            chunk_horizon=chunk_horizon,
+                    if len(infos) < executed_steps:
+                        raise RuntimeError(
+                            "eval step_chunk returned fewer infos than num_steps"
                         )
-                        next_residual_obs = build_chunk_residual_obs(
-                            robot_state=next_robot_state,
-                            images=next_image_observations,
-                            image_keys=image_keys,
-                            base_actions=next_base_actions,
-                            residual_alpha=residual_action_spec.alpha,
-                        )
+                    rewards = rewards[:executed_steps]
+                    dones = dones[:executed_steps]
+                    infos = infos[:executed_steps]
 
-                    env_done = bool(info.get("env_done", False))
-                    last_info = dict(info)
-                    episode_steps += 1
-                    total_env_steps += 1
-                    episode_return += float(reward)
+                    last_info = dict(chunk_result.get("info", infos[-1]))
+                    episode_steps += int(executed_steps)
+                    total_env_steps += int(executed_steps)
+                    episode_return += float(sum(rewards))
                     episode_success = bool(
                         episode_success
-                        or env_done
-                        or bool(info.get("success", False))
+                        or any(
+                            bool(info.get("env_done", False))
+                            or bool(info.get("success", False))
+                            for info in infos
+                        )
                     )
-                    obs = dict(next_obs)
-                    prefetched = {
-                        "base_actions": next_base_actions,
-                        "residual_obs": next_residual_obs,
-                    }
-
-                    if bool(done or truncated):
-                        env_episode_done = True
-                        break
+                    obs = dict(chunk_result["obs"])
+                    env_episode_done = bool(
+                        chunk_result.get("done", dones[-1])
+                        or chunk_result.get("truncated", False)
+                    )
                     if (
-                        max_env_steps_per_episode is not None
+                        (not env_episode_done)
+                        and max_env_steps_per_episode is not None
                         and episode_steps >= max_env_steps_per_episode
                     ):
                         manual_cap_reached = True
-                        break
 
-                timer.tock("total")
+                    if not (env_episode_done or manual_cap_reached):
+                        with timer.context("build_decision_obs"):
+                            next_base_actions, next_residual_obs = _build_decision_obs(
+                                obs=obs,
+                                task_prompt=task_prompt,
+                                policy_client=policy_client,
+                                chunk_horizon=chunk_horizon,
+                                image_keys=image_keys,
+                                residual_alpha=residual_action_spec.alpha,
+                                timer=timer,
+                            )
+                        policy_requests += 1
+                        prefetched = {
+                            "base_actions": next_base_actions,
+                            "residual_obs": next_residual_obs,
+                        }
+                    else:
+                        prefetched = None
 
                 if env_episode_done or manual_cap_reached:
                     break
@@ -438,6 +479,12 @@ def run_residual_eval(
                     else 0.0
                 ),
                 "env_steps": int(total_env_steps),
+                "policy_requests": int(policy_requests),
+                "policy_requests_per_env_step": (
+                    float(policy_requests / total_env_steps)
+                    if total_env_steps > 0
+                    else 0.0
+                ),
                 "timer": to_jsonable(timer.get_average_times()),
             }
         )
