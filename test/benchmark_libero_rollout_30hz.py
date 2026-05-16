@@ -5,16 +5,16 @@ from __future__ import annotations
 This benchmark compares four actor-side rollout shapes:
 
 1. baseline_step:
-   Mirrors examples/libero/scripts/run_residual_training_1_baseline.py
+   Mirrors examples/libero/scripts/train_residual_step.py
 2. chunk_sync:
    Mirrors the synchronous chunk assembly path in
-   examples/libero/scripts/run_residual_training_2_chunk_local.py
+   examples/libero/scripts/train_residual_chunk.py
 3. chunk_async:
    Mirrors the async backfill / ordered commit path in
-   examples/libero/scripts/run_residual_training_2_chunk_local.py
+   examples/libero/scripts/train_residual_chunk.py
 4. chunk_async_batch:
    Mirrors the batch-aware async backfill path in
-   examples/libero/scripts/run_residual_training_2_chunk_local.py
+   examples/libero/scripts/train_residual_chunk.py
 
 The environment is synthetic but shaped like LIBERO observations so the
 benchmark still exercises:

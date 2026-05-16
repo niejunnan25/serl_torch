@@ -20,7 +20,7 @@ from serl_torch.examples.libero.config import train_cfg_to_eval_cfg
 
 class LiberoEvalConfigCompileTest(unittest.TestCase):
     def test_train_cfg_to_eval_cfg_preserves_torch_compile(self) -> None:
-        cfg = OmegaConf.load("examples/libero/configs/train_residual.yaml")
+        cfg = OmegaConf.load("examples/libero/configs/train_residual_step.yaml")
         cfg.training.torch_compile.enabled = True
         cfg.training.torch_compile.target = "actor_critic"
         cfg.training.torch_compile.backend = "inductor"

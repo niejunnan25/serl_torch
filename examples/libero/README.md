@@ -26,16 +26,16 @@ wandb login                 # 可选，仍支持
 
 ### 配置文件
 
-配置文件位于 `examples/libero/configs/`，使用 Hydra YAML，文件名编码实验参数：
+配置文件位于 `examples/libero/configs/`，使用 Hydra YAML，文件名编码实验参数。训练模式直接写入配置名，并与 launcher 的 `--mode` 保持一致：
 
 ```
-{task}_{scripts}_{alpha}_{data}_{entropy}_{std}_ports{prefix}.yaml
+{task}_{mode}_{alpha}_{data}_{entropy}_{std}_ports{prefix}.yaml
 ```
 
 | 字段 | 含义 |
 |------|------|
 | `spatial4` / `long3` | 任务 |
-| `scripts_2` / `scripts_5` | 训练脚本版本 |
+| `chunk` / `processor` | residual 训练模式，对应 `--mode chunk` / `--mode processor` |
 | `alpha0p1` / `alpha0p2` / `alpha0p5` | 残差缩放系数 |
 | `unfiltered_offline` | 离线数据过滤策略 |
 | `noent` | backup_entropy=false |
@@ -102,7 +102,7 @@ bash examples/libero/tools/serve_openpi_10000_policy.sh \
 
 ```bash
 python examples/libero/scripts/run_residual_offline_prepare.py \
-  --config-name spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
   policy.host=127.0.0.1 \
   policy.port=55101 \
   offline.prepare.output_root=data/residual/offline_data
@@ -139,8 +139,8 @@ offline:
 
 ```bash
 bash examples/libero/tools/launch_residual_training.sh \
-  --script-id 2 \
-  --config-file examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml \
+  --mode chunk \
+  --config-file examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml \
   --output-root examples/libero/outputs/my_first_experiment \
   --learner-gpu 1 \
   --actor-gpu 0 \
@@ -156,7 +156,7 @@ bash examples/libero/tools/launch_residual_training.sh \
 
 | 参数 | 说明 |
 |------|------|
-| `--script-id` | 训练脚本版本（`2` = 最常用） |
+| `--mode` | residual 训练模式：`step` / `chunk` / `processor`（必须与配置名中的 mode 一致，日常最常用 `chunk`） |
 | `--config-file` | Hydra YAML 配置文件路径 |
 | `--output-root` | 输出目录（日志、checkpoint、结果） |
 | `--learner-gpu` / `--actor-gpu` / `--env-gpu` / `--policy-gpu` | 各进程 GPU 分配 |
@@ -169,7 +169,7 @@ bash examples/libero/tools/launch_residual_training.sh \
 
 适合调试、单步验证，每个进程在独立终端中运行。
 
-默认 Hydra 输出路径由 `train_residual.yaml` 中的 `hydra.run.dir` 决定：
+默认 Hydra 输出路径由 `train_residual_step.yaml` 中的 `hydra.run.dir` 决定：
 
 ```
 ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
@@ -207,8 +207,8 @@ bash examples/libero/tools/serve_openpi_policy.sh \
 **终端 4 — Learner：**
 
 ```bash
-python examples/libero/scripts/run_residual_training_2_chunk_local.py \
-  --config-name spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
+python examples/libero/scripts/train_residual_chunk.py \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
   runtime.role=learner \
   runtime.trainer_port=31004 \
   runtime.broadcast_port=31005 \
@@ -221,15 +221,15 @@ python examples/libero/scripts/run_residual_training_2_chunk_local.py \
   training.async_eval.enabled=true \
   training.async_eval.env.backend=remote \
   training.async_eval.env.remote.port=31003 \
-  launch.output_root=examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0 \
-  hydra.run.dir=examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0/learner
+  launch.output_root=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0 \
+  hydra.run.dir=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0/learner
 ```
 
 **终端 5 — Actor：**
 
 ```bash
-python examples/libero/scripts/run_residual_training_2_chunk_local.py \
-  --config-name spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
+python examples/libero/scripts/train_residual_chunk.py \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
   runtime.role=actor \
   runtime.trainer_port=31004 \
   runtime.broadcast_port=31005 \
@@ -239,8 +239,8 @@ python examples/libero/scripts/run_residual_training_2_chunk_local.py \
   policy.port=31001 \
   env.backend=remote \
   env.remote.port=31000 \
-  launch.output_root=examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0 \
-  hydra.run.dir=examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0/actor
+  launch.output_root=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0 \
+  hydra.run.dir=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0/actor
 ```
 
 ### 单独评估 Checkpoint
@@ -306,12 +306,12 @@ ${RUN_ROOT}/
 │   ├── eval_env.log
 │   └── policy.log
 ├── learner/
-│   ├── run_residual_training_*.log
+│   ├── train_residual_*.log
 │   ├── learner_timers.jsonl
 │   ├── async_eval_results.jsonl
 │   └── checkpoints/
 ├── actor/
-│   ├── run_residual_training_*.log
+│   ├── train_residual_*.log
 │   ├── actor_timers.jsonl
 │   └── episode_logs.jsonl
 └── .launcher/

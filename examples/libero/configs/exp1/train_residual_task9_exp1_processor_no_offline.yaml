@@ -1,0 +1,41 @@
+ # @package _global_
+defaults:
+  - /exp1/train_residual_task9_exp1_processor@_global_
+  - _self_
+
+runtime:
+  trainer_port: 50074
+  broadcast_port: 50075
+  trainer_transport:
+    data_port: 50076
+
+processor_transport:
+  port: 50077
+
+wandb:
+  exp_name: ${task.suite_name}_task_${task.task_id}_exp1_processor_no_offline
+
+policy:
+  port: 50071
+
+backfill_policy:
+  port: 50072
+
+env:
+  remote:
+    port: 50070
+
+offline:
+  enabled: false
+  prepared_path: null
+  ratio: 0.0
+  pretrain_steps: 0
+
+training:
+  async_eval:
+    env:
+      remote:
+        port: 50073
+
+launch:
+  output_root: outputs/exp1/${task.suite_name}_task${task.task_id}/processor_no_offline

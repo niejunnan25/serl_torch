@@ -559,7 +559,7 @@ optimizer state
 
 ```text
 examples/agibot_real/scripts/run_residual_training.py
-examples/libero/scripts/run_residual_training_1_baseline.py
+examples/libero/scripts/train_residual_step.py
 ```
 
 保留 full checkpoint 的路径不变：
@@ -1619,7 +1619,7 @@ updates/s:
 前面第 1~14 节主要是 benchmark-only 消融。这里额外补一轮：
 
 ```text
-examples/libero/scripts/run_residual_training_1_baseline.py
+examples/libero/scripts/train_residual_step.py
 ```
 
 的正式 learner 路径验证，确认：
@@ -1640,7 +1640,7 @@ runtime.role=learner
 
 路径。
 
-这样仍然走的是正式 `run_residual_training_1_baseline.py` 的 learner 代码，不是 test benchmark 脚本，但可以避免 actor / env / RPC 噪声干扰。
+这样仍然走的是正式 `train_residual_step.py` 的 learner 代码，不是 test benchmark 脚本，但可以避免 actor / env / RPC 噪声干扰。
 
 本轮使用：
 
@@ -1662,7 +1662,7 @@ conda activate /vla/miniconda3/envs/serl_torch
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0
 
-python examples/libero/scripts/run_residual_training_1_baseline.py \
+python examples/libero/scripts/train_residual_step.py \
   runtime.role=learner \
   runtime.trainer_port=59988 \
   runtime.broadcast_port=59989 \
@@ -1686,7 +1686,7 @@ conda activate /vla/miniconda3/envs/serl_torch
 export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0
 
-python examples/libero/scripts/run_residual_training_1_baseline.py \
+python examples/libero/scripts/train_residual_step.py \
   runtime.role=learner \
   runtime.trainer_port=60088 \
   runtime.broadcast_port=60089 \
@@ -1767,7 +1767,7 @@ python examples/libero/scripts/run_residual_training_1_baseline.py \
 
 这轮的保守结论是：
 
-1. 在正式 `run_residual_training_1_baseline.py` learner 路径里，打开 bf16 的收益是明确正的
+1. 在正式 `train_residual_step.py` learner 路径里，打开 bf16 的收益是明确正的
 2. 共享机器上按这轮数据看，收益区间大致在 `36% ~ 67%`
 3. 如果把 2-step 和 3-step 合并，当前更稳妥的工作数字可以先记成：
 

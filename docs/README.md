@@ -28,8 +28,8 @@
 
 ### LIBERO 训练线
 
-- [2026-04-23-libero-residual-training-1-to-5-comparison.md](./2026-04-23-libero-residual-training-1-to-5-comparison.md)
-  `run_residual_training_1/2/3/4/5` 的演化顺序、语义差异和推荐入口。
+- [2026-04-23-libero-residual-training-entrypoints.md](./2026-04-23-libero-residual-training-entrypoints.md)
+  当前 LIBERO residual 训练入口、launcher mode 和推荐使用方式。
 - [2026-04-23-libero-spatial-0-to-9-offline-prepare-commands.md](./2026-04-23-libero-spatial-0-to-9-offline-prepare-commands.md)
   `libero_spatial` task 0-9 filtered offline 数据准备命令记录。
 

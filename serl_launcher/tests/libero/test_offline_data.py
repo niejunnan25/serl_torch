@@ -47,7 +47,7 @@ def _train_cfg_with_prepared_path(prepared_path: str) -> object:
         / "examples"
         / "libero"
         / "configs"
-        / "train_residual.yaml"
+        / "train_residual_step.yaml"
     )
     cfg.runtime.role = "learner"
     cfg.offline.enabled = True

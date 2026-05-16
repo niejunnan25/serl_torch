@@ -17,7 +17,7 @@ d4870e4 Optimize visual encoder and target updates
 
 ## 结论
 
-这一路优化后，当前 learner 的瓶颈已经从“采样和系统开销明显拖慢模型”转成“模型更新本身占主导”。用 `spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5` 这条配置模拟完整 learner 外层循环时，当前代码在 GPU5 上测到：
+这一路优化后，当前 learner 的瓶颈已经从“采样和系统开销明显拖慢模型”转成“模型更新本身占主导”。用 `spatial4_chunk_alpha0p1_unfiltered_offline_noent_std0p5` 这条配置模拟完整 learner 外层循环时，当前代码在 GPU5 上测到：
 
 ```text
 3.99 updates/s
@@ -50,7 +50,7 @@ source /vla/miniconda3/etc/profile.d/conda.sh
 conda activate serl_torch
 
 CUDA_VISIBLE_DEVICES=5 python test/benchmark_libero_real_replay_update.py \
-  --config-name spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5_ports53500 \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std0p5_ports53500 \
   --mode all \
   --updates 30 \
   --warmup 8 \
@@ -97,7 +97,7 @@ CUDA_VISIBLE_DEVICES=5 python test/benchmark_libero_real_replay_update.py \
 历史输出目录：
 
 ```text
-examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5
+examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std0p5
 ```
 
 统计文件：
@@ -184,7 +184,7 @@ serl_launcher/serl_launcher/residual/chunk_window_replay.py
 
 ```text
 serl_launcher/serl_launcher/residual/chunk_window_replay.py
-examples/libero/scripts/run_residual_training_2_chunk_local.py
+examples/libero/scripts/train_residual_chunk.py
 ```
 
 现在 learner 在训练当前 batch 时，后台线程提前准备下一批 replay batch。算法语义不变：batch 仍然来自同一个 replay 分布，只是采样和训练从串行变成部分重叠。

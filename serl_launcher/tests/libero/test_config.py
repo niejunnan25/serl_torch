@@ -37,7 +37,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual.yaml"
+            / "train_residual_step.yaml"
         )
 
         parsed = parse_train_cfg(cfg)
@@ -96,7 +96,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual.yaml"
+            / "train_residual_step.yaml"
         )
         cfg.backfill_policy.max_pending_chunks = 0
 
@@ -112,7 +112,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual_optimized.yaml"
+            / "train_residual_chunk.yaml"
         )
         cfg.runtime.role = "processor"
 
@@ -126,7 +126,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual_optimized.yaml"
+            / "train_residual_chunk.yaml"
         )
         cfg.processor_transport = {"queue_capacity": 0}
 
@@ -142,7 +142,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual_5_split_serl_recommended.yaml"
+            / "train_residual_processor.yaml"
         )
         cfg.processor_batching.max_batch_obs = 0
 
@@ -158,7 +158,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual.yaml"
+            / "train_residual_step.yaml"
         )
         cfg.recycle = {"enabled": True, "output_root": "   "}
 
@@ -174,7 +174,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual.yaml"
+            / "train_residual_step.yaml"
         )
 
         with patch.dict(os.environ, {"WANDB_ENTITY": "niejunnan"}, clear=False):
@@ -188,7 +188,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual.yaml"
+            / "train_residual_step.yaml"
         )
         cfg.wandb.entity = "explicit-team"
 
@@ -203,7 +203,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual_optimized.yaml"
+            / "train_residual_chunk.yaml"
         )
         cfg.wandb.mode = "offline"
         cfg.wandb.debug = False
@@ -218,7 +218,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual.yaml"
+            / "train_residual_step.yaml"
         )
         del cfg.wandb["mode"]
         cfg.wandb.debug = True
@@ -233,7 +233,7 @@ class LiberoConfigTest(unittest.TestCase):
             / "examples"
             / "libero"
             / "configs"
-            / "train_residual.yaml"
+            / "train_residual_step.yaml"
         )
         cfg.wandb.mode = "online"
         cfg.wandb.debug = True

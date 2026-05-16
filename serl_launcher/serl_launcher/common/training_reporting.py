@@ -15,12 +15,14 @@ def sync_eval_results_to_wandb(
     records: Iterable[Mapping[str, Any]],
     wandb_logger: Any,
     logger: logging.Logger,
+    eval_queue_backlog: int | None = None,
 ) -> None:
     """Log completed episodic eval results onto the dedicated eval axis."""
 
     for payload in records:
         status = str(payload.get("status", "")).strip().lower()
         train_update_step = payload.get("train_update_step", None)
+        train_env_step = payload.get("train_env_step", None)
         train_episode_id = payload.get("train_episode_id", None)
         if not isinstance(train_episode_id, (int, float)):
             continue
@@ -29,6 +31,20 @@ def sync_eval_results_to_wandb(
             "eval/train_episode_id": float(train_episode_id),
             "eval/status_failed": 0.0 if status == "ok" else 1.0,
         }
+        eval_index = _maybe_float(payload, "eval_index")
+        train_update_step_float = _maybe_float(payload, "train_update_step")
+        train_env_step_float = _maybe_float(payload, "train_env_step")
+        duration_sec = _maybe_float(payload, "duration_sec")
+        if eval_index is not None:
+            metrics["eval/eval_index"] = float(eval_index)
+        if train_update_step_float is not None:
+            metrics["eval/train_update_step"] = float(train_update_step_float)
+        if train_env_step_float is not None:
+            metrics["eval/train_env_step"] = float(train_env_step_float)
+        if duration_sec is not None:
+            metrics["eval/duration_sec"] = float(duration_sec)
+        if eval_queue_backlog is not None:
+            metrics["eval/queue_backlog"] = float(max(0, int(eval_queue_backlog)))
 
         summary = payload.get("summary", None)
         if status == "ok" and isinstance(summary, Mapping):
@@ -39,7 +55,7 @@ def sync_eval_results_to_wandb(
             if mean_return is not None:
                 metrics["eval/mean_return"] = float(mean_return)
 
-        wandb_logger.log(to_jsonable(metrics))
+        wandb_logger.log(to_jsonable(metrics), step=int(train_episode_id))
 
         if status == "ok":
             logger.info(
@@ -47,7 +63,7 @@ def sync_eval_results_to_wandb(
                 payload.get("eval_index", None),
                 payload.get("train_episode_id", None),
                 train_update_step,
-                payload.get("train_env_step", None),
+                train_env_step,
                 summary.get("success_rate", None)
                 if isinstance(summary, Mapping)
                 else None,

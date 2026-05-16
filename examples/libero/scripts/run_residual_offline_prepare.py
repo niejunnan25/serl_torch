@@ -188,7 +188,7 @@ def prepare_offline_data(
 @hydra.main(
     version_base=None,
     config_path="../configs",
-    config_name="train_residual",
+    config_name="train_residual_step",
 )
 def main(cfg: DictConfig) -> None:
     typed_cfg = parse_train_cfg(cfg)
@@ -244,7 +244,7 @@ def main(cfg: DictConfig) -> None:
     if offline_inputs.prepared_paths:
         prepared_path = str(offline_inputs.prepared_paths[0])
         logger.info(
-            "next learner command: python examples/libero/scripts/run_residual_training_1_baseline.py "
+            "next learner command: python examples/libero/scripts/train_residual_step.py "
             "runtime.role=learner offline.enabled=true "
             "offline.pretrain_steps=1000 offline.ratio=0.5 "
             "offline.prepared_path=%s",

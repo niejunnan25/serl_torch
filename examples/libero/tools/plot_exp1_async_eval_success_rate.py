@@ -12,14 +12,14 @@ import matplotlib.pyplot as plt
 
 
 RUN_NAMES = [
-    "train_residual_task4_exp1_scripts_2",
-    "train_residual_task4_exp1_scripts_2_no_offline",
-    "train_residual_task4_exp1_scripts_5",
-    "train_residual_task4_exp1_scripts_5_no_offline",
-    "train_residual_task9_exp1_scripts_2",
-    "train_residual_task9_exp1_scripts_2_no_offline",
-    "train_residual_task9_exp1_scripts_5",
-    "train_residual_task9_exp1_scripts_5_no_offline",
+    "train_residual_task4_exp1_chunk",
+    "train_residual_task4_exp1_chunk_no_offline",
+    "train_residual_task4_exp1_processor",
+    "train_residual_task4_exp1_processor_no_offline",
+    "train_residual_task9_exp1_chunk",
+    "train_residual_task9_exp1_chunk_no_offline",
+    "train_residual_task9_exp1_processor",
+    "train_residual_task9_exp1_processor_no_offline",
 ]
 
 

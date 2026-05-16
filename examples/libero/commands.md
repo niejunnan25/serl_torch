@@ -34,9 +34,9 @@ pip install -e .
 cd /vla/users/niejunnan/codebase/serl_torch
 
 bash examples/libero/tools/launch_residual_training.sh \
-  --script-id 2 \
-  --config-file examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml \
-  --output-root /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0 \
+  --mode chunk \
+  --config-file examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml \
+  --output-root /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0 \
   --learner-gpu 1 \
   --actor-gpu 0 \
   --env-gpu 0 \
@@ -86,37 +86,37 @@ examples/libero/configs/long_3/
 ### Spatial Task 4（打开柜子拿黑碗放盘子上）
 
 ```text
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5_ports53500.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std5p0_ports53600.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p2_unfiltered_offline_noent_std0p5_ports53200.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p2_unfiltered_offline_noent_std1p0_ports53300.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p2_unfiltered_offline_noent_std5p0_ports53400.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p5_unfiltered_offline_noent_std0p5_ports53700.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p5_unfiltered_offline_noent_std1p0_ports53800.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p5_unfiltered_offline_noent_std5p0_ports53900.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std0p5_ports53500.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std5p0_ports53600.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p2_unfiltered_offline_noent_std0p5_ports53200.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p2_unfiltered_offline_noent_std1p0_ports53300.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p2_unfiltered_offline_noent_std5p0_ports53400.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p5_unfiltered_offline_noent_std0p5_ports53700.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p5_unfiltered_offline_noent_std1p0_ports53800.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p5_unfiltered_offline_noent_std5p0_ports53900.yaml
 ```
 
 ### 动作限幅消融
 
 ```text
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_limits_xyz1_rot0p4_grip0p3_ports54100.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p2_unfiltered_offline_noent_std1p0_limits_xyz1_rot0p4_grip0p3_ports54200.yaml
-examples/libero/configs/spatial_4_0514_runtime/spatial4_scripts_2_alpha0p3_unfiltered_offline_noent_std1p0_limits_xyz1_rot0p4_grip0p3_ports54300.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_limits_xyz1_rot0p4_grip0p3_ports54100.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p2_unfiltered_offline_noent_std1p0_limits_xyz1_rot0p4_grip0p3_ports54200.yaml
+examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p3_unfiltered_offline_noent_std1p0_limits_xyz1_rot0p4_grip0p3_ports54300.yaml
 ```
 
 ### Long Task 3
 
 ```text
-examples/libero/configs/long_3/long3_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5_ports53500.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p1_unfiltered_offline_noent_std5p0_ports53600.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p2_unfiltered_offline_noent_std0p5_ports53200.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p2_unfiltered_offline_noent_std1p0_ports53300.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p2_unfiltered_offline_noent_std5p0_ports53400.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p5_unfiltered_offline_noent_std0p5_ports53700.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p5_unfiltered_offline_noent_std1p0_ports53800.yaml
-examples/libero/configs/long_3/long3_scripts_2_alpha0p5_unfiltered_offline_noent_std5p0_ports53900.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p1_unfiltered_offline_noent_std0p5_ports53500.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p1_unfiltered_offline_noent_std5p0_ports53600.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p2_unfiltered_offline_noent_std0p5_ports53200.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p2_unfiltered_offline_noent_std1p0_ports53300.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p2_unfiltered_offline_noent_std5p0_ports53400.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p5_unfiltered_offline_noent_std0p5_ports53700.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p5_unfiltered_offline_noent_std1p0_ports53800.yaml
+examples/libero/configs/long_3/long3_chunk_alpha0p5_unfiltered_offline_noent_std5p0_ports53900.yaml
 ```
 
 ## 准备离线数据
@@ -146,7 +146,7 @@ LOG_ROOT=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/offlin
 mkdir -p "${LOG_ROOT}"
 
 python examples/libero/scripts/run_residual_offline_prepare.py \
-  --config-name spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
   policy.host=127.0.0.1 \
   policy.port=55101 \
   offline.prepared_path=null \
@@ -173,18 +173,18 @@ offline.prepare.output_root=/abs/path/to/offline_data_root
 ## 查看日志
 
 ```bash
-RUN_ROOT=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0
+RUN_ROOT=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0
 
 # key log files:
 # ${RUN_ROOT}/services/train_env.log
 # ${RUN_ROOT}/services/eval_env.log
 # ${RUN_ROOT}/services/policy.log
 # ${RUN_ROOT}/learner/launcher.log
-# ${RUN_ROOT}/learner/run_residual_training_2_chunk_local.log
+# ${RUN_ROOT}/learner/train_residual_chunk.log
 # ${RUN_ROOT}/learner/learner_timers.jsonl
 # ${RUN_ROOT}/learner/async_eval_results.jsonl
 # ${RUN_ROOT}/actor/launcher.log
-# ${RUN_ROOT}/actor/run_residual_training_2_chunk_local.log
+# ${RUN_ROOT}/actor/train_residual_chunk.log
 # ${RUN_ROOT}/actor/actor_timers.jsonl
 # ${RUN_ROOT}/actor/episode_logs.jsonl
 ```
@@ -193,10 +193,10 @@ RUN_ROOT=/vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/spatia
 
 ```bash
 # learner
-tail -f "${RUN_ROOT}/learner/run_residual_training_2_chunk_local.log"
+tail -f "${RUN_ROOT}/learner/train_residual_chunk.log"
 
 # actor
-tail -f "${RUN_ROOT}/actor/run_residual_training_2_chunk_local.log"
+tail -f "${RUN_ROOT}/actor/train_residual_chunk.log"
 
 # 成功率
 tail -f "${RUN_ROOT}/actor/episode_logs.jsonl"
@@ -211,7 +211,7 @@ tail -f "${RUN_ROOT}/learner/async_eval_results.jsonl"
 cd /vla/users/niejunnan/codebase/serl_torch
 
 bash examples/libero/tools/stop_launched_training.sh \
-  --output-root /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/spatial_4_0514/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std1p0
+  --output-root /vla/users/niejunnan/codebase/serl_torch/examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0
 ```
 
 ## 单独评估 checkpoint

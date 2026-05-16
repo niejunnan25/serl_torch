@@ -9,7 +9,7 @@
 - 训练数据/控制传输已经不再直接依赖 `agentlace.trainer.TrainerClient` / `TrainerServer`
 - 当前实验训练线已经改为通过 [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py) 创建 transport
 - 外部 `agentlace` 现在只继续负责参数广播，不再负责 trainer data/control path
-- LIBERO `optimized` 和 AgiBot `copy` 都已经接入 typed `runtime.trainer_transport`
+- LIBERO `chunk` 和 AgiBot `copy` 都已经接入 typed `runtime.trainer_transport`
 
 因此，下面的很多章节应当理解为：
 
@@ -24,7 +24,7 @@
 当前接入点主要在：
 
 - LIBERO actor / learner:
-  [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py)
+  [examples/libero/scripts/train_residual_chunk.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_chunk.py)
 - AgiBot actor / learner:
   [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
 - transport 实现：
@@ -437,12 +437,12 @@ class RuntimeConfig:
 当前约定是：
 
 - canonical `train_residual*.yaml` 默认 `mode: legacy_reqrep`
-- `LIBERO optimized` 和当前 AgiBot mainline yaml 默认 `mode: async_commit`
+- `LIBERO chunk` 和当前 AgiBot mainline yaml 默认 `mode: async_commit`
 
 对应文件分别是：
 
-- LIBERO optimized:
-  [examples/libero/configs/train_residual_optimized.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/train_residual_optimized.yaml)
+- LIBERO chunk:
+  [examples/libero/configs/train_residual_chunk.yaml](/home/hello/codebase/serl_torch/examples/libero/configs/train_residual_chunk.yaml)
 - AgiBot mainline:
   [examples/agibot_real/configs/train_residual.yaml](/home/hello/codebase/serl_torch/examples/agibot_real/configs/train_residual.yaml)
 
@@ -552,19 +552,19 @@ class LearnerTrainerTransport(Protocol):
 
 第一批建议改这些：
 
-- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:472)
+- [examples/libero/scripts/train_residual_chunk.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_chunk.py:472)
 - [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:415)
 
 第二批再考虑：
 
-- `run_residual_training_1_baseline.py`
+- `train_residual_step.py`
 - 其他 eval / prepare 相关训练辅助脚本
 
 ### 10.2 actor 的 `update()` 语义怎么变
 
 当前 actor 调用 `client.update()` 的位置很多，例如：
 
-- LIBERO optimized: [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:535)
+- LIBERO chunk: [examples/libero/scripts/train_residual_chunk.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_chunk.py:535)
 - AgiBot copy: [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:540)
 
 Plan C 下，这些调用点原则上可以不改调用形状，但要改语义：
@@ -629,7 +629,7 @@ learner 训练主循环本身应尽量少改。
 
 受影响的 learner 接入点：
 
-- LIBERO learner: [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:910)
+- LIBERO learner: [examples/libero/scripts/train_residual_chunk.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_chunk.py:910)
 - AgiBot learner: [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:954)
 
 ### 11.2 learner 的 replay 可见性语义
@@ -741,7 +741,7 @@ Plan C 只是把慢操作从 control thread 挪开，不会凭空让 insert 变�
 - 已完成
 - 当前实现没有去改外部 `agentlace`，而是在仓库内自管 trainer transport
 
-### Phase 3：先在 LIBERO optimized 线上灰度
+### Phase 3：先在 LIBERO chunk 线上灰度
 
 原因：
 
@@ -832,12 +832,12 @@ Plan C 只是把慢操作从 control thread 挪开，不会凭空让 insert 变�
 
 第一批，已接入：
 
-- `examples/libero/scripts/run_residual_training_2_chunk_local.py`
+- `examples/libero/scripts/train_residual_chunk.py`
 - `examples/agibot_real/scripts/run_residual_training.py`
 
 第二批，当前仍保留 legacy：
 
-- `examples/libero/scripts/run_residual_training_1_baseline.py`
+- `examples/libero/scripts/train_residual_step.py`
 - `examples/agibot_real/scripts/run_residual_training.py`
 
 ---

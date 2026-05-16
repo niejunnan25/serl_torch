@@ -326,7 +326,7 @@ PyTorch 的默认 `torch.load` 底层同样基于 pickle 语义。也就是说�
 ### 代码位置
 
 - [`examples/libero/runtime/async_eval_runtime.py`](../examples/libero/runtime/async_eval_runtime.py)
-- [`examples/libero/scripts/run_residual_training_1_baseline.py`](../examples/libero/scripts/run_residual_training_1_baseline.py)
+- [`examples/libero/scripts/train_residual_step.py`](../examples/libero/scripts/train_residual_step.py)
 - [`examples/libero/runtime/async_eval_worker.py`](../examples/libero/runtime/async_eval_worker.py)
 
 ### 现象

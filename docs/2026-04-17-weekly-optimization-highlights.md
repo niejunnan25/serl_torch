@@ -4,7 +4,7 @@
 
 1. learner 侧：`bf16` + actor update 阶段冻结 critic 参数梯度
 2. replay / transport 侧：`batch_insert()` + `split_queue`
-3. OpenPI batch infer 侧：`infer_many()` + LIBERO optimized 训练线
+3. OpenPI batch infer 侧：`infer_many()` + LIBERO chunk 训练线
 4. actor 热路径：把大量 post-hoc 组装从主控制路径上移开
 
 这四项工作不是彼此独立的小修小补，而是围绕同一条训练链路在不同位置做减压：
@@ -153,7 +153,7 @@
 - [serl_launcher/serl_launcher/data/data_store.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/data/data_store.py:104)
 - [serl_launcher/serl_launcher/common/trainer_transport.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/common/trainer_transport.py:87)
 - [examples/agibot_real/scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py:137)
-- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:471)
+- [examples/libero/scripts/train_residual_chunk.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_chunk.py:471)
 
 ### 2.1 原来的问题是什么
 
@@ -275,17 +275,17 @@
 
 - 本周最硬的一组系统优化结果之一，是 trainer ingest 和 replay 写入链路的重构与量化提速
 
-## 3. OpenPI Batch Infer：`infer_many()` + LIBERO optimized 训练线
+## 3. OpenPI Batch Infer：`infer_many()` + LIBERO chunk 训练线
 
 相关文档：
 
-- [examples/libero/docs/openpi_batch_infer_copy_copy_report_2026_04_17.md](/home/hello/codebase/serl_torch/examples/libero/docs/openpi_batch_infer_copy_copy_report_2026_04_17.md:1)
+- [examples/libero/docs/openpi_batch_infer_chunk_report_2026_04_17.md](/home/hello/codebase/serl_torch/examples/libero/docs/openpi_batch_infer_chunk_report_2026_04_17.md:1)
 
 相关实现：
 
 - [serl_launcher/serl_launcher/policy/openpi/request_builder.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/request_builder.py:67)
 - [serl_launcher/serl_launcher/policy/openpi/client.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/policy/openpi/client.py:159)
-- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:1)
+- [examples/libero/scripts/train_residual_chunk.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_chunk.py:1)
 
 ### 3.1 原来的问题是什么
 
@@ -318,7 +318,7 @@
 
 在训练线里，对应的是：
 
-- `optimized` 的 backfill 路径在检测到 client 支持 `infer_many(...)` 后
+- `chunk` 的 backfill 路径在检测到 client 支持 `infer_many(...)` 后
 - 会把一个 chunk 的多个 `PolicyInput` 打成一个 batch 发出去
 
 文档里还记录了外部 `openpi-modified` 的配套改动：
@@ -353,8 +353,8 @@
 
 再看端到端 actor 吞吐：
 
-- `optimized = 5.803 step/s`
-- 原始 `run_residual_training_1_baseline.py = 5.105 step/s`
+- `chunk = 5.803 step/s`
+- 原始 `train_residual_step.py = 5.105 step/s`
 - 提升约 `13.7%`
 
 端到端没有吃满 `2.336x` 很正常，因为现在新的主瓶颈已经不是 OpenPI 本身，而是：
@@ -373,12 +373,12 @@
 
 相关文档：
 
-- [examples/libero/docs/openpi_batch_infer_copy_copy_report_2026_04_17.md](/home/hello/codebase/serl_torch/examples/libero/docs/openpi_batch_infer_copy_copy_report_2026_04_17.md:145)
+- [examples/libero/docs/openpi_batch_infer_chunk_report_2026_04_17.md](/home/hello/codebase/serl_torch/examples/libero/docs/openpi_batch_infer_chunk_report_2026_04_17.md:145)
 - [2026-04-16-agibot-transition-dataflow-and-refactor-plan.md](./2026-04-16-agibot-transition-dataflow-and-refactor-plan.md)
 
 相关实现：
 
-- [examples/libero/scripts/run_residual_training_2_chunk_local.py](/home/hello/codebase/serl_torch/examples/libero/scripts/run_residual_training_2_chunk_local.py:620)
+- [examples/libero/scripts/train_residual_chunk.py](/home/hello/codebase/serl_torch/examples/libero/scripts/train_residual_chunk.py:620)
 - [test/benchmark_libero_rollout_30hz.py](/home/hello/codebase/serl_torch/test/benchmark_libero_rollout_30hz.py:15)
 
 ### 4.1 原来的问题是什么
@@ -400,7 +400,7 @@
 
 ### 4.2 这次具体改了什么
 
-`optimized` 路径做的不是小修，而是重新安排了工作分布：
+`chunk` 路径做的不是小修，而是重新安排了工作分布：
 
 - chunk 决策时，只做当前真正需要的决策工作
 - chunk 执行后，先缓存原始 rollout
@@ -424,7 +424,7 @@ actor 热路径最怕的不是计算量大本身，而是把不影响当前控�
 
 actor 就会在 chunk 与 chunk 之间花很多时间做“此刻并不影响机器人继续动”的事情。
 
-`optimized` 的价值就在于把这些工作拆开：
+`chunk` 的价值就在于把这些工作拆开：
 
 - 当前控制继续尽量快
 - 训练数据的完整性通过 post-hoc assembly 保证
@@ -438,7 +438,7 @@ actor 就会在 chunk 与 chunk 之间花很多时间做“此刻并不影响机
 - `build_decision_obs ~= 0.1077s`
 - `total ~= 0.8509s`
 
-`optimized` 训练线：
+`chunk` 训练线：
 
 - `build_decision_obs ~= 0.000078s`
 - `total ~= 0.5025s`

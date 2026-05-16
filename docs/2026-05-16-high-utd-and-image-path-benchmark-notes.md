@@ -10,7 +10,7 @@ bench/high-utd-image-path-benchmarks
 
 ## 当前 ResNet18 是否已经编译
 
-当前 `spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5_ports53500` 这条训练配置里，Torch ResNet18 所在的 actor/critic 路径是会被 `torch.compile` 编译的。
+当前 `spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std0p5_ports53500` 这条训练配置里，Torch ResNet18 所在的 actor/critic 路径是会被 `torch.compile` 编译的。
 
 配置来源：
 

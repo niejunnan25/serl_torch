@@ -85,7 +85,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config-name",
-        default="spatial_4_0514_runtime/spatial4_scripts_2_alpha0p1_unfiltered_offline_noent_std0p5_ports53500",
+        default="spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std0p5_ports53500",
     )
     parser.add_argument("--updates", type=int, default=300)
     parser.add_argument("--warmup", type=int, default=10)

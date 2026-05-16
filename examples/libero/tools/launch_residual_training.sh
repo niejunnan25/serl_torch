@@ -10,10 +10,11 @@ DEFAULT_WAIT_TIMEOUT_SEC=120
 DEFAULT_MINICONDA_ROOT="/vla/miniconda3"
 DEFAULT_CONDA_SH="$DEFAULT_MINICONDA_ROOT/etc/profile.d/conda.sh"
 
-SCRIPT_ID=""
+TRAINING_MODE=""
 CONFIG_NAME=""
 CONFIG_FILE=""
 OUTPUT_ROOT=""
+CONFIG_TRAINING_MODE=""
 SERL_CONDA_ENV="${SERL_CONDA_ENV:-$DEFAULT_SERL_CONDA_ENV}"
 LEARNER_GPU=""
 ACTOR_GPU=""
@@ -31,22 +32,92 @@ WAIT_TIMEOUT_SEC="$DEFAULT_WAIT_TIMEOUT_SEC"
 DRY_RUN=0
 CLEAN_OUTPUT_DIR=0
 REUSE_OUTPUT_DIR=0
-CONDA_SH="$DEFAULT_CONDA_SH"
+CONDA_SH="${CONDA_SH:-$DEFAULT_CONDA_SH}"
 
 declare -a EXTRA_HYDRA_ARGS=()
 declare -a STARTED_PROCESS_NAMES=()
-declare -A STARTED_PROCESS_PIDS=()
-declare -A COMPLETED_PROCESS_STATUSES=()
 CLEANUP_IN_PROGRESS=0
 TRAINING_DRAINING=0
 LEARNER_INTERRUPT_SENT=0
 PROCESS_EXIT_STATUS=0
+STARTED_PROCESS_PID_train_env=""
+STARTED_PROCESS_PID_eval_env=""
+STARTED_PROCESS_PID_policy=""
+STARTED_PROCESS_PID_backfill_policy=""
+STARTED_PROCESS_PID_learner=""
+STARTED_PROCESS_PID_processor=""
+STARTED_PROCESS_PID_actor=""
+COMPLETED_PROCESS_STATUS_train_env=""
+COMPLETED_PROCESS_STATUS_eval_env=""
+COMPLETED_PROCESS_STATUS_policy=""
+COMPLETED_PROCESS_STATUS_backfill_policy=""
+COMPLETED_PROCESS_STATUS_learner=""
+COMPLETED_PROCESS_STATUS_processor=""
+COMPLETED_PROCESS_STATUS_actor=""
+
+set_started_process_pid() {
+    local name="$1"
+    local pid="$2"
+    case "$name" in
+        train_env) STARTED_PROCESS_PID_train_env="$pid" ;;
+        eval_env) STARTED_PROCESS_PID_eval_env="$pid" ;;
+        policy) STARTED_PROCESS_PID_policy="$pid" ;;
+        backfill_policy) STARTED_PROCESS_PID_backfill_policy="$pid" ;;
+        learner) STARTED_PROCESS_PID_learner="$pid" ;;
+        processor) STARTED_PROCESS_PID_processor="$pid" ;;
+        actor) STARTED_PROCESS_PID_actor="$pid" ;;
+        *) die "unknown managed process name: $name" ;;
+    esac
+}
+
+get_started_process_pid() {
+    local name="$1"
+    case "$name" in
+        train_env) printf "%s" "$STARTED_PROCESS_PID_train_env" ;;
+        eval_env) printf "%s" "$STARTED_PROCESS_PID_eval_env" ;;
+        policy) printf "%s" "$STARTED_PROCESS_PID_policy" ;;
+        backfill_policy) printf "%s" "$STARTED_PROCESS_PID_backfill_policy" ;;
+        learner) printf "%s" "$STARTED_PROCESS_PID_learner" ;;
+        processor) printf "%s" "$STARTED_PROCESS_PID_processor" ;;
+        actor) printf "%s" "$STARTED_PROCESS_PID_actor" ;;
+        *) printf "" ;;
+    esac
+}
+
+set_completed_process_status() {
+    local name="$1"
+    local status="$2"
+    case "$name" in
+        train_env) COMPLETED_PROCESS_STATUS_train_env="$status" ;;
+        eval_env) COMPLETED_PROCESS_STATUS_eval_env="$status" ;;
+        policy) COMPLETED_PROCESS_STATUS_policy="$status" ;;
+        backfill_policy) COMPLETED_PROCESS_STATUS_backfill_policy="$status" ;;
+        learner) COMPLETED_PROCESS_STATUS_learner="$status" ;;
+        processor) COMPLETED_PROCESS_STATUS_processor="$status" ;;
+        actor) COMPLETED_PROCESS_STATUS_actor="$status" ;;
+        *) die "unknown managed process name: $name" ;;
+    esac
+}
+
+get_completed_process_status() {
+    local name="$1"
+    case "$name" in
+        train_env) printf "%s" "$COMPLETED_PROCESS_STATUS_train_env" ;;
+        eval_env) printf "%s" "$COMPLETED_PROCESS_STATUS_eval_env" ;;
+        policy) printf "%s" "$COMPLETED_PROCESS_STATUS_policy" ;;
+        backfill_policy) printf "%s" "$COMPLETED_PROCESS_STATUS_backfill_policy" ;;
+        learner) printf "%s" "$COMPLETED_PROCESS_STATUS_learner" ;;
+        processor) printf "%s" "$COMPLETED_PROCESS_STATUS_processor" ;;
+        actor) printf "%s" "$COMPLETED_PROCESS_STATUS_actor" ;;
+        *) printf "" ;;
+    esac
+}
 
 usage() {
     cat <<'EOF'
 Usage:
   bash examples/libero/tools/launch_residual_training.sh \
-    --script-id {1|2|3|4|5} \
+    --mode {step|chunk|processor} \
     [--config-name NAME | --config-file /abs/path/to/config.yaml] \
     [--output-root DIR] \
     [--learner-gpu N] [--actor-gpu N] [--env-gpu N] [--eval-env-gpu N] \
@@ -62,8 +133,8 @@ Usage:
 
 Examples:
   bash examples/libero/tools/launch_residual_training.sh \
-    --script-id 5 \
-    --config-name exp1/train_residual_task4_exp1_scripts_5 \
+    --mode processor \
+    --config-name exp1/train_residual_task4_exp1_processor \
     --learner-gpu 5 \
     --env-gpu 6 \
     --policy-gpu 6 \
@@ -75,6 +146,14 @@ Examples:
     libero_datasets_root=/vla/users/niejunnan/datasets
 
 Notes:
+  - Modes map to residual training entrypoints:
+      step      -> train_residual_step.py
+      chunk     -> train_residual_chunk.py
+      processor -> train_residual_processor.py
+  - The selected mode must match the config name:
+      train_residual_step -> step, train_residual_chunk -> chunk,
+      train_residual_processor -> processor,
+      names containing chunk/processor/step -> the same mode.
   - The experiment root defaults to:
       examples/libero/outputs/<relative_config_dir>/<config_stem>/
     For configs at the root of examples/libero/configs, this remains:
@@ -141,12 +220,12 @@ remove_pid_file() {
 
 process_completed() {
     local name="$1"
-    [[ -n "${COMPLETED_PROCESS_STATUSES[$name]+set}" ]]
+    [[ -n "$(get_completed_process_status "$name")" ]]
 }
 
 process_completed_successfully() {
     local name="$1"
-    process_completed "$name" && [[ "${COMPLETED_PROCESS_STATUSES[$name]}" == "0" ]]
+    process_completed "$name" && [[ "$(get_completed_process_status "$name")" == "0" ]]
 }
 
 record_process_exit() {
@@ -158,7 +237,7 @@ record_process_exit() {
     else
         PROCESS_EXIT_STATUS=$?
     fi
-    COMPLETED_PROCESS_STATUSES["$name"]="$PROCESS_EXIT_STATUS"
+    set_completed_process_status "$name" "$PROCESS_EXIT_STATUS"
     remove_pid_file "$name"
     log_note "$name exited with status=$PROCESS_EXIT_STATUS"
 }
@@ -183,7 +262,7 @@ maybe_interrupt_learner_for_final_drain() {
     if (( START_PROCESSOR )) && ! process_completed "processor"; then
         return 0
     fi
-    learner_pid="${STARTED_PROCESS_PIDS[learner]:-}"
+    learner_pid="$(get_started_process_pid learner)"
     if pid_is_running "$learner_pid"; then
         log_note "actor finished and processor drained; sending SIGINT to learner for final eval/summary drain"
         # Signal only the learner process so its async eval worker can keep draining
@@ -225,7 +304,7 @@ cleanup_started_processes() {
 
     for ((idx=${#STARTED_PROCESS_NAMES[@]} - 1; idx >= 0; idx--)); do
         name="${STARTED_PROCESS_NAMES[$idx]}"
-        pid="${STARTED_PROCESS_PIDS[$name]:-}"
+        pid="$(get_started_process_pid "$name")"
         if managed_process_alive "$pid"; then
             log_note "sending SIGTERM to $name process group pgid=$pid"
             signal_managed_process "$pid" TERM
@@ -236,7 +315,7 @@ cleanup_started_processes() {
     while (( $(date +%s) < deadline )); do
         still_running=0
         for name in "${STARTED_PROCESS_NAMES[@]}"; do
-            pid="${STARTED_PROCESS_PIDS[$name]:-}"
+            pid="$(get_started_process_pid "$name")"
             if managed_process_alive "$pid"; then
                 still_running=1
                 break
@@ -248,7 +327,7 @@ cleanup_started_processes() {
 
     for ((idx=${#STARTED_PROCESS_NAMES[@]} - 1; idx >= 0; idx--)); do
         name="${STARTED_PROCESS_NAMES[$idx]}"
-        pid="${STARTED_PROCESS_PIDS[$name]:-}"
+        pid="$(get_started_process_pid "$name")"
         if managed_process_alive "$pid"; then
             log_note "sending SIGKILL to $name process group pgid=$pid"
             signal_managed_process "$pid" KILL
@@ -303,6 +382,34 @@ import os
 import sys
 print(os.path.abspath(sys.argv[1]))
 PY
+}
+
+infer_config_training_mode() {
+    local config_name="$1"
+    local config_base="${config_name##*/}"
+    case "$config_base" in
+        train_residual_step)
+            printf "%s" "step"
+            ;;
+        train_residual_chunk)
+            printf "%s" "chunk"
+            ;;
+        train_residual_processor)
+            printf "%s" "processor"
+            ;;
+        *processor*)
+            printf "%s" "processor"
+            ;;
+        *chunk*)
+            printf "%s" "chunk"
+            ;;
+        *step*)
+            printf "%s" "step"
+            ;;
+        *)
+            printf ""
+            ;;
+    esac
 }
 
 is_local_host() {
@@ -384,7 +491,7 @@ start_logged_process() {
     pid="$!"
     write_text_file "$LAUNCHER_DIR/pids/${name}.pid" "$pid"
     STARTED_PROCESS_NAMES+=("$name")
-    STARTED_PROCESS_PIDS["$name"]="$pid"
+    set_started_process_pid "$name" "$pid"
     log_note "started $name pid=$pid log=$log_file"
 }
 
@@ -405,8 +512,8 @@ while [[ $# -gt 0 ]]; do
             usage
             exit 0
             ;;
-        --script-id)
-            SCRIPT_ID="$2"
+        --mode)
+            TRAINING_MODE="$2"
             shift 2
             ;;
         --config-name)
@@ -504,14 +611,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$SCRIPT_ID" ]] || die "--script-id is required"
-case "$SCRIPT_ID" in
-    1) TRAINING_SCRIPT="$LIBERO_DIR/scripts/run_residual_training_1_baseline.py" ;;
-    2) TRAINING_SCRIPT="$LIBERO_DIR/scripts/run_residual_training_2_chunk_local.py" ;;
-    3) TRAINING_SCRIPT="$LIBERO_DIR/scripts/run_residual_training_3_split_proto.py" ;;
-    4) TRAINING_SCRIPT="$LIBERO_DIR/scripts/run_residual_training_4_split_refined.py" ;;
-    5) TRAINING_SCRIPT="$LIBERO_DIR/scripts/run_residual_training_5_split_pipeline.py" ;;
-    *) die "--script-id must be one of 1, 2, 3, 4, 5" ;;
+[[ -n "$TRAINING_MODE" ]] || die "--mode is required"
+case "$TRAINING_MODE" in
+    step) TRAINING_SCRIPT="$LIBERO_DIR/scripts/train_residual_step.py" ;;
+    chunk) TRAINING_SCRIPT="$LIBERO_DIR/scripts/train_residual_chunk.py" ;;
+    processor) TRAINING_SCRIPT="$LIBERO_DIR/scripts/train_residual_processor.py" ;;
+    *) die "--mode must be one of step, chunk, processor" ;;
 esac
 
 if [[ -n "$CONFIG_FILE" && -n "$CONFIG_NAME" ]]; then
@@ -541,6 +646,14 @@ elif [[ "$CONFIG_FILE" == "$CONFIGS_ROOT/"* ]]; then
 else
     CONFIG_SEARCH_DIR="$CONFIG_DIR"
     CONFIG_COMPOSE_NAME="$CONFIG_STEM"
+fi
+
+CONFIG_TRAINING_MODE="$(infer_config_training_mode "$CONFIG_COMPOSE_NAME")"
+if [[ -z "$CONFIG_TRAINING_MODE" ]]; then
+    die "cannot infer training mode from config name '$CONFIG_COMPOSE_NAME'; use a residual config named with step, chunk, or processor"
+fi
+if [[ "$CONFIG_TRAINING_MODE" != "$TRAINING_MODE" ]]; then
+    die "--mode $TRAINING_MODE does not match config '$CONFIG_COMPOSE_NAME' (expected --mode $CONFIG_TRAINING_MODE)"
 fi
 
 if [[ "$CONFIG_FILE" == "$CONFIGS_ROOT/"* ]]; then
@@ -663,7 +776,7 @@ elif [[ "$CFG_ASYNC_EVAL_ENABLED" == "1" && "$CFG_ASYNC_EVAL_ENV_BACKEND" == "re
 fi
 
 START_PROCESSOR=0
-if [[ "$SCRIPT_ID" == "3" || "$SCRIPT_ID" == "4" || "$SCRIPT_ID" == "5" ]]; then
+if [[ "$TRAINING_MODE" == "processor" ]]; then
     START_PROCESSOR=1
 fi
 
@@ -675,14 +788,14 @@ fi
 if [[ "$CFG_POLICY_TYPE" != "openpi" ]]; then
     die "launcher currently supports policy.type=openpi only; got $CFG_POLICY_TYPE"
 fi
-if [[ "$START_BACKFILL_POLICY" == "1" && "$SCRIPT_ID" == "5" && -z "$BACKFILL_GPU" ]]; then
+if [[ "$START_BACKFILL_POLICY" == "1" && "$TRAINING_MODE" == "processor" && -z "$BACKFILL_GPU" ]]; then
     die "backfill policy is enabled; provide --backfill-gpu (or --policy-gpu to reuse the same GPU)"
 fi
 if [[ -z "$POLICY_GPU" ]]; then
     die "launching the policy server requires --policy-gpu"
 fi
-if [[ "$SCRIPT_ID" == "5" && "$CFG_BACKFILL_ENABLED" != "1" ]]; then
-    die "script 5 requires backfill_policy.enabled=true in the config"
+if [[ "$TRAINING_MODE" == "processor" && "$CFG_BACKFILL_ENABLED" != "1" ]]; then
+    die "processor mode requires backfill_policy.enabled=true in the config"
 fi
 
 if [[ "$CFG_ENV_BACKEND" == "remote" ]]; then
@@ -717,7 +830,8 @@ cat >"$OUTPUT_ROOT/launch_manifest.txt" <<EOF
 config_file=$CONFIG_FILE
 config_dir=$CONFIG_SEARCH_DIR
 config_name=$CONFIG_COMPOSE_NAME
-script_id=$SCRIPT_ID
+training_mode=$TRAINING_MODE
+config_training_mode=$CONFIG_TRAINING_MODE
 training_script=$TRAINING_SCRIPT
 output_root=$OUTPUT_ROOT
 serl_conda_env=$SERL_CONDA_ENV
@@ -773,13 +887,22 @@ build_training_cmd() {
     cmd+=(
         bash -lc "$training_shell_cmd"
     )
-    printf '%s\0' "${cmd[@]}"
+    case "$role" in
+        learner) LEARNER_CMD=("${cmd[@]}") ;;
+        actor) ACTOR_CMD=("${cmd[@]}") ;;
+        processor) PROCESSOR_CMD=("${cmd[@]}") ;;
+        *) die "unknown runtime role for training command: $role" ;;
+    esac
 }
 
-readarray -d '' -t LEARNER_CMD < <(build_training_cmd learner "$OUTPUT_ROOT/learner" "$LEARNER_GPU")
-readarray -d '' -t ACTOR_CMD < <(build_training_cmd actor "$OUTPUT_ROOT/actor" "$ACTOR_GPU")
+declare -a LEARNER_CMD=()
+declare -a ACTOR_CMD=()
+declare -a PROCESSOR_CMD=()
+
+build_training_cmd learner "$OUTPUT_ROOT/learner" "$LEARNER_GPU"
+build_training_cmd actor "$OUTPUT_ROOT/actor" "$ACTOR_GPU"
 if (( START_PROCESSOR )); then
-    readarray -d '' -t PROCESSOR_CMD < <(build_training_cmd processor "$OUTPUT_ROOT/processor" "")
+    build_training_cmd processor "$OUTPUT_ROOT/processor" ""
 fi
 
 log_note "experiment root: $OUTPUT_ROOT"
@@ -930,7 +1053,7 @@ log_note "launcher mode   : attached (press Ctrl+C to stop all managed processes
 while true; do
     for name in "${STARTED_PROCESS_NAMES[@]}"; do
         process_completed "$name" && continue
-        pid="${STARTED_PROCESS_PIDS[$name]:-}"
+        pid="$(get_started_process_pid "$name")"
         if ! pid_is_running "$pid"; then
             record_process_exit "$name" "$pid"
             if (( TRAINING_DRAINING )); then

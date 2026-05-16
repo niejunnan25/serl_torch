@@ -1,0 +1,198 @@
+global_seed: 0
+libero_root: null
+libero_config_dir: null
+libero_datasets_root: null
+
+task:
+  suite_name: libero_10
+  task_id: 8
+
+runtime:
+  role: actor
+  trainer_host: 127.0.0.1
+  trainer_port: 5688
+  broadcast_port: 5689
+  data_store_queue_size: 2000
+  trainer_transport:
+    mode: async_commit
+    data_port: 5690
+    control_timeout_ms: 2000
+    data_queue_capacity: 8
+    data_socket_hwm: 8
+    commit_poll_ms: 20
+    wait_committed_on_episode_end: false
+    wait_committed_on_shutdown: true
+
+processor_transport:
+  host: 127.0.0.1
+  port: 5691
+  timeout_ms: 2000
+  queue_capacity: 4
+
+processor_batching:
+  enabled: true
+  max_batch_chunks: 4
+  max_batch_obs: 24
+  max_wait_ms: 3
+
+wandb:
+  project: libero
+  exp_name: ${task.suite_name}_task_${task.task_id}_residual_processor
+  group: residual_processor
+  mode: online
+  debug: false
+
+policy:
+  type: openpi
+  host: localhost
+  port: 30001
+
+backfill_policy:
+  enabled: true
+  host: ${policy.host}
+  port: 30002
+  max_pending_chunks: 2
+  mode: thread
+
+recycle:
+  enabled: true
+  output_root: raw_rollout_recycle
+
+env:
+  action_dim: 7
+  backend: remote
+  resolution: 256
+  num_steps_wait: 10
+  max_episode_steps: null
+  seed: 7
+  remote:
+    host: 127.0.0.1
+    port: 30000
+    timeout_sec: 180.0
+
+obs:
+  image_keys: [image, wrist_image]
+  vector_obs_keys: [robot_proprio, base_action_chunk, alpha]
+  stack_horizon: 1
+
+residual:
+  alpha: 0.1
+  action_mask: [true, true, true, true, true, true, true]
+  action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  clip_gripper: true
+  chunk_horizon: 5
+
+encoder:
+  type: resnet
+  shared: true
+  use_proprio: true
+  proprio_latent_dim: 64
+  resnet:
+    model_name: pretrained_models/microsoft--resnet-18
+    pretrained: true
+    freeze_backbone: true
+    pooling_method: spatial_learned_embeddings
+    num_spatial_blocks: 8
+    bottleneck_dim: 256
+
+network:
+  policy_hidden_dims: [256, 256, 256]
+  critic_hidden_dims: [256, 256, 256]
+  policy_activation: tanh
+  critic_activation: tanh
+  policy_layer_norm: true
+  critic_layer_norm: true
+
+sac:
+  learning_rate: 3.0e-4
+  std_min: 1.0e-5
+  std_max: 5.0
+  discount: 0.99
+  soft_target_update_rate: 0.005
+  temperature_init: 1.0
+  backup_entropy: true
+  critic_ensemble_size: 2
+  critic_subsample_size: 2
+  utd_ratio: 1
+  otf_num_samples: 1
+  cql_n_actions: 10
+  cql_temperature: 1.0
+  optimizer:
+    type: adamw
+    weight_decay: 1.0e-4
+    temperature_weight_decay: 0.0
+    warmup_steps: 0
+    cosine_decay_steps: null
+    grad_clip_norm: 1.0
+
+replay:
+  capacity: 250000
+  batch_size: 128
+
+offline:
+  enabled: false
+  prepared_path: data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
+  ratio: 0.5
+  capacity: 50000
+  load_max_episodes: null
+  load_max_transitions: null
+  pretrain_steps: 0
+
+  prepare:
+    raw_dataset_path: null
+    output_root: data/residual/offline_data
+    expert_reference_scale: 1.0
+    clip_residual_to_unit: true
+    filter_unrepresentable_steps: false
+
+training:
+  training_starts: 1000
+  steps_per_update: 30
+  critic_actor_ratio: 4
+  max_env_steps: 300000
+  max_update_steps: 300000
+  log_period: 100
+  mixed_precision:
+    enabled: true
+    dtype: bfloat16
+  torch_compile:
+    enabled: false
+    target: actor_critic
+    backend: inductor
+    mode: default
+    fullgraph: true
+    dynamic: false
+  checkpoint:
+    every_steps: 2500
+    keep: 0
+    dir: checkpoints
+  async_eval:
+    enabled: false
+    every_episodes: 20
+    episodes: 10
+    start_episode_idx: 0
+    max_env_steps_per_episode: null
+    deterministic: true
+    poll_interval_sec: 5.0
+    queue_file: async_eval_queue.jsonl
+    summary_jsonl: async_eval_results.jsonl
+    worker_log_file: async_eval_worker.log
+    checkpoint:
+      dir: async_eval_checkpoints
+      keep: 0
+    env:
+      backend: remote
+      remote:
+        host: 127.0.0.1
+        port: 30010
+        timeout_sec: 180.0
+
+logging:
+  summary_file: summary.json
+
+launch:
+  output_root: outputs/libero_processor
+
+hydra:
+  run:
+    dir: ${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}

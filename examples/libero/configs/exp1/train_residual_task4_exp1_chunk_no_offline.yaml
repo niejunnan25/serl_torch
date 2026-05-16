@@ -1,0 +1,38 @@
+ # @package _global_
+defaults:
+  - /exp1/train_residual_task4_exp1_chunk@_global_
+  - _self_
+
+runtime:
+  trainer_port: 50014
+  broadcast_port: 50015
+  trainer_transport:
+    data_port: 50016
+
+wandb:
+  exp_name: ${task.suite_name}_task_${task.task_id}_exp1_chunk_no_offline
+
+policy:
+  port: 50011
+
+backfill_policy:
+  port: 50012
+
+env:
+  remote:
+    port: 50010
+
+offline:
+  enabled: false
+  prepared_path: null
+  ratio: 0.0
+  pretrain_steps: 0
+
+training:
+  async_eval:
+    env:
+      remote:
+        port: 50013
+
+launch:
+  output_root: outputs/exp1/${task.suite_name}_task${task.task_id}/chunk_no_offline

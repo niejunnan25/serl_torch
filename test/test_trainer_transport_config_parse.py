@@ -9,9 +9,9 @@ from examples.agibot_real.config import parse_train_cfg as parse_agibot_train_cf
 from examples.libero.config import parse_train_cfg as parse_libero_train_cfg
 
 
-def test_libero_optimized_config_parses_async_commit_defaults() -> None:
+def test_libero_chunk_config_parses_async_commit_defaults() -> None:
     cfg = OmegaConf.load(
-        Path("examples/libero/configs/train_residual_optimized.yaml")
+        Path("examples/libero/configs/train_residual_chunk.yaml")
     )
     typed_cfg = parse_libero_train_cfg(cfg)
     assert typed_cfg.runtime.trainer_transport.mode == "async_commit"
@@ -32,7 +32,7 @@ def test_agibot_train_config_parses_async_commit_defaults() -> None:
 
 
 def test_legacy_transport_modes_are_rejected() -> None:
-    libero_cfg = OmegaConf.load(Path("examples/libero/configs/train_residual.yaml"))
+    libero_cfg = OmegaConf.load(Path("examples/libero/configs/train_residual_step.yaml"))
     libero_cfg.runtime.trainer_transport.mode = "legacy_reqrep"
     with pytest.raises(ValueError, match="runtime.trainer_transport.mode"):
         parse_libero_train_cfg(libero_cfg)

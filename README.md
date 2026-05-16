@@ -256,23 +256,23 @@ pretrained_models/microsoft--resnet-18
 
 ### LIBERO
 
-当前 LIBERO 文档默认从 reference baseline 讲起，但训练脚本本身已经按演化顺序编号。最常见的三个落点是：
+当前 LIBERO residual 训练入口按算法和运行模式命名。最常见的三个落点是：
 
 - reference baseline:
-  `examples/libero/scripts/run_residual_training_1_baseline.py`
+  `examples/libero/scripts/train_residual_step.py`
 - 当前最稳的优化线:
-  `examples/libero/scripts/run_residual_training_2_chunk_local.py`
+  `examples/libero/scripts/train_residual_chunk.py`
 - 最新的 split / pipeline 演化版本:
-  `examples/libero/scripts/run_residual_training_5_split_pipeline.py`
+  `examples/libero/scripts/train_residual_processor.py`
 
-其中 `1/2/3/4/5` 的数字表示演化顺序，不表示“当前推荐程度”。
+训练入口和配置文件都使用 `step` / `chunk` / `processor` 这组 mode 名称。
 
 当前 reference baseline LIBERO 主线包括：
 
 - config:
-  `examples/libero/configs/train_residual.yaml`
+  `examples/libero/configs/train_residual_step.yaml`
 - actor / learner entrypoint:
-  `examples/libero/scripts/run_residual_training_1_baseline.py`
+  `examples/libero/scripts/train_residual_step.py`
 - env server:
   `examples/libero/scripts/serve_env.py`
 - checkpoint eval:
