@@ -19,6 +19,20 @@ DEFAULT_EVAL_METRICS = (
     "eval/train_env_step",
     "eval/duration_sec",
     "eval/queue_backlog",
+    "eval/episodes_completed",
+    "eval/env_steps",
+    "eval/parallel_envs",
+    "eval/policy_batch_size",
+    "eval/policy_requests",
+    "eval/policy_batch_requests",
+    "eval/policy_samples",
+    "eval/policy_requests_per_env_step",
+    "eval/policy_samples_per_env_step",
+    "eval/mean_active_lanes",
+    "eval/policy_batch_infer_sec",
+    "eval/policy_infer_sec",
+    "eval/reset_env_sec",
+    "eval/step_env_sec",
 )
 
 DEFAULT_ROLLOUT_AXIS_METRIC = "rollout/episode_id"

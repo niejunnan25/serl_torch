@@ -162,6 +162,49 @@ class _CountingPolicyClient:
         self.chunk_horizon = int(chunk_horizon)
         self.action_dim = int(action_dim)
         self.infer_calls = 0
+        self.infer_many_calls = 0
+        self.batch_sizes: list[int] = []
+        self.close_calls = 0
+
+    def infer(self, policy_input: object) -> tuple[np.ndarray, dict[str, object]]:
+        del policy_input
+        self.infer_calls += 1
+        return (
+            np.full(
+                (self.chunk_horizon, self.action_dim),
+                0.25,
+                dtype=np.float32,
+            ),
+            {},
+        )
+
+    def infer_many(
+        self,
+        policy_inputs: list[object],
+    ) -> tuple[list[np.ndarray], dict[str, object]]:
+        self.infer_many_calls += 1
+        self.batch_sizes.append(len(policy_inputs))
+        return (
+            [
+                np.full(
+                    (self.chunk_horizon, self.action_dim),
+                    0.25,
+                    dtype=np.float32,
+                )
+                for _ in policy_inputs
+            ],
+            {},
+        )
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class _SerialOnlyPolicyClient:
+    def __init__(self, *, chunk_horizon: int, action_dim: int) -> None:
+        self.chunk_horizon = int(chunk_horizon)
+        self.action_dim = int(action_dim)
+        self.infer_calls = 0
         self.close_calls = 0
 
     def infer(self, policy_input: object) -> tuple[np.ndarray, dict[str, object]]:
@@ -185,6 +228,10 @@ def _fake_cfg(
     chunk_horizon: int = 5,
     action_dim: int = 1,
     max_env_steps_per_episode: int | None = None,
+    episodes: int = 1,
+    parallel_envs: int = 1,
+    policy_batch_size: int | None = None,
+    eval_ports: tuple[int, ...] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         global_seed=0,
@@ -197,6 +244,12 @@ def _fake_cfg(
             action_dim=int(action_dim),
             seed=7,
             backend="remote",
+            remote=SimpleNamespace(
+                host="127.0.0.1",
+                port=30010,
+                timeout_sec=1.0,
+                ports=eval_ports,
+            ),
         ),
         obs=SimpleNamespace(image_keys=("image",)),
         residual=SimpleNamespace(
@@ -215,12 +268,18 @@ def _fake_cfg(
             summary_file="summary.json",
         ),
         eval=SimpleNamespace(
-            episodes=1,
+            episodes=int(episodes),
             start_episode_idx=0,
             max_env_steps_per_episode=max_env_steps_per_episode,
             deterministic=True,
             checkpoint_path=None,
             checkpoint_step=None,
+            parallel_envs=int(parallel_envs),
+            policy_batch_size=(
+                int(policy_batch_size)
+                if policy_batch_size is not None
+                else int(parallel_envs)
+            ),
         ),
     )
 
@@ -299,6 +358,79 @@ class LiberoResidualEvalLoopTest(unittest.TestCase):
 
         return summary, env, policy_client
 
+    def _run_parallel_fake_eval(
+        self,
+        *,
+        policy_client: object,
+        episodes: int = 7,
+        parallel_envs: int = 3,
+        policy_batch_size: int = 3,
+        done_after: int = 5,
+    ) -> tuple[dict[str, object], list[_FakeChunkEnv]]:
+        assert eval_mod is not None
+        cfg = _fake_cfg(
+            chunk_horizon=5,
+            episodes=episodes,
+            parallel_envs=parallel_envs,
+            policy_batch_size=policy_batch_size,
+            eval_ports=tuple(range(30100, 30100 + parallel_envs)),
+        )
+        envs = [_FakeChunkEnv(done_after=done_after) for _ in range(parallel_envs)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(eval_mod, "cfg_to_log_payload", return_value={}),
+                mock.patch.object(eval_mod, "set_global_seeds"),
+                mock.patch.object(eval_mod, "create_env", side_effect=envs),
+                mock.patch.object(
+                    eval_mod,
+                    "build_policy_client",
+                    return_value=policy_client,
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "describe_policy_backend",
+                    return_value="fake",
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "resolve_policy_backend_type",
+                    return_value="fake",
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "resolve_policy_backend_id",
+                    return_value="fake",
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "build_libero_state",
+                    side_effect=lambda obs: np.asarray(
+                        [float(obs["step"])],
+                        dtype=np.float32,
+                    ),
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "extract_libero_images",
+                    return_value={
+                        "image": np.zeros((2, 2, 3), dtype=np.uint8),
+                    },
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "build_libero_policy_input",
+                    side_effect=lambda **kwargs: dict(kwargs),
+                ),
+            ):
+                summary = eval_mod.run_residual_eval(
+                    cfg,
+                    run_dir=Path(tmpdir),
+                    logger=logging.getLogger(__name__),
+                )
+
+        return summary, envs
+
     def test_eval_builds_policy_decision_once_per_chunk(self) -> None:
         summary, env, policy_client = self._run_fake_eval(done_after=25)
 
@@ -340,6 +472,116 @@ class LiberoResidualEvalLoopTest(unittest.TestCase):
             self.assertTrue(
                 np.allclose(action, np.asarray([0.25], dtype=np.float32))
             )
+
+    def test_parallel_eval_batches_policy_requests(self) -> None:
+        policy_client = _CountingPolicyClient(chunk_horizon=5, action_dim=1)
+
+        summary, envs = self._run_parallel_fake_eval(policy_client=policy_client)
+
+        self.assertEqual(summary["episodes_completed"], 7)
+        self.assertEqual(summary["env_steps"], 35)
+        self.assertEqual(summary["parallel_envs"], 3)
+        self.assertEqual(summary["policy_batch_size"], 3)
+        self.assertEqual(summary["policy_requests"], 3)
+        self.assertEqual(summary["policy_batch_requests"], 3)
+        self.assertEqual(summary["policy_samples"], 7)
+        self.assertEqual(policy_client.infer_calls, 0)
+        self.assertEqual(policy_client.infer_many_calls, 3)
+        self.assertEqual(policy_client.batch_sizes, [3, 3, 1])
+        self.assertEqual([env.close_calls for env in envs], [1, 1, 1])
+        self.assertAlmostEqual(summary["policy_samples_per_env_step"], 0.2)
+
+    def test_parallel_eval_falls_back_to_serial_policy_infer(self) -> None:
+        policy_client = _SerialOnlyPolicyClient(chunk_horizon=5, action_dim=1)
+
+        summary, envs = self._run_parallel_fake_eval(policy_client=policy_client)
+
+        self.assertEqual(summary["episodes_completed"], 7)
+        self.assertEqual(summary["env_steps"], 35)
+        self.assertEqual(summary["policy_requests"], 7)
+        self.assertEqual(summary["policy_batch_requests"], 0)
+        self.assertEqual(summary["policy_samples"], 7)
+        self.assertEqual(policy_client.infer_calls, 7)
+        self.assertEqual([env.close_calls for env in envs], [1, 1, 1])
+
+    def test_eval_closes_created_env_when_later_env_creation_fails(self) -> None:
+        assert eval_mod is not None
+        cfg = _fake_cfg(
+            episodes=2,
+            parallel_envs=2,
+            policy_batch_size=2,
+            eval_ports=(30100, 30101),
+        )
+        first_env = _FakeChunkEnv(done_after=5)
+        created_first_env = False
+
+        def _create_env(_cfg: object, _logger: logging.Logger) -> _FakeChunkEnv:
+            nonlocal created_first_env
+            del _cfg, _logger
+            if not created_first_env:
+                created_first_env = True
+                return first_env
+            raise RuntimeError("second env failed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(eval_mod, "cfg_to_log_payload", return_value={}),
+                mock.patch.object(eval_mod, "set_global_seeds"),
+                mock.patch.object(eval_mod, "create_env", side_effect=_create_env),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "second env failed"):
+                    eval_mod.run_residual_eval(
+                        cfg,
+                        run_dir=Path(tmpdir),
+                        logger=logging.getLogger(__name__),
+                    )
+
+        self.assertEqual(first_env.close_calls, 1)
+
+    def test_eval_closes_envs_when_policy_client_creation_fails(self) -> None:
+        assert eval_mod is not None
+        cfg = _fake_cfg(
+            episodes=2,
+            parallel_envs=2,
+            policy_batch_size=2,
+            eval_ports=(30100, 30101),
+        )
+        envs = [_FakeChunkEnv(done_after=5) for _ in range(2)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(eval_mod, "cfg_to_log_payload", return_value={}),
+                mock.patch.object(eval_mod, "set_global_seeds"),
+                mock.patch.object(eval_mod, "create_env", side_effect=envs),
+                mock.patch.object(
+                    eval_mod,
+                    "build_policy_client",
+                    side_effect=RuntimeError("policy client failed"),
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "describe_policy_backend",
+                    return_value="fake",
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "resolve_policy_backend_type",
+                    return_value="fake",
+                ),
+                mock.patch.object(
+                    eval_mod,
+                    "resolve_policy_backend_id",
+                    return_value="fake",
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "policy client failed"):
+                    eval_mod.run_residual_eval(
+                        cfg,
+                        run_dir=Path(tmpdir),
+                        logger=logging.getLogger(__name__),
+                    )
+
+        self.assertEqual([env.close_calls for env in envs], [1, 1])
 
 
 if __name__ == "__main__":

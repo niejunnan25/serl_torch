@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import importlib.util
 import os
 import sys
 from pathlib import Path
+import types
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +15,33 @@ for candidate in (REPO_PARENT, SERL_LAUNCHER_ROOT):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
+
+
+def _install_optional_import_stubs() -> None:
+    if importlib.util.find_spec("agentlace") is None:
+        transport_mod = types.ModuleType("serl_launcher.common.trainer_transport")
+
+        @dataclass(frozen=True, slots=True)
+        class _TrainerTransportConfig:
+            mode: str
+            data_port: int
+            control_timeout_ms: int
+            data_queue_capacity: int
+            data_socket_hwm: int
+            commit_poll_ms: int
+            wait_committed_on_episode_end: bool
+            wait_committed_on_shutdown: bool
+
+        def _validate_transport_mode(mode: object) -> str:
+            return str(mode)
+
+        transport_mod.SUPPORTED_TRANSPORT_MODES = ("sync_commit", "async_commit")
+        transport_mod.TrainerTransportConfig = _TrainerTransportConfig
+        transport_mod.validate_transport_mode = _validate_transport_mode
+        sys.modules["serl_launcher.common.trainer_transport"] = transport_mod
+
+
+_install_optional_import_stubs()
 
 try:
     from omegaconf import OmegaConf
@@ -23,6 +53,7 @@ if OmegaConf is not None:
     try:
         from serl_torch.examples.libero.config import parse_train_cfg_allow_processor
         from serl_torch.examples.libero.config import parse_train_cfg
+        from serl_torch.examples.libero.config import parse_eval_cfg
     except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
         _IMPORT_ERROR = exc
 else:
@@ -63,6 +94,9 @@ class LiberoConfigTest(unittest.TestCase):
             int(parsed.runtime.trainer_transport.control_timeout_ms),
         )
         self.assertEqual(parsed.runtime.processor_transport.queue_capacity, 4)
+        self.assertEqual(parsed.training.async_eval.parallel_envs, 1)
+        self.assertEqual(parsed.training.async_eval.policy_batch_size, 1)
+        self.assertIsNone(parsed.training.async_eval.env.remote.ports)
 
     def test_parse_train_cfg_requires_explicit_backfill_policy_block(self) -> None:
         cfg = OmegaConf.create(
@@ -241,6 +275,153 @@ class LiberoConfigTest(unittest.TestCase):
         parsed = parse_train_cfg(cfg)
 
         self.assertEqual(parsed.wandb.mode, "disabled")
+
+    def test_parse_train_cfg_rejects_parallel_async_eval_without_ports(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.training.async_eval.enabled = True
+        cfg.training.async_eval.parallel_envs = 2
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "training.async_eval.parallel_envs > 1 requires "
+            "training.async_eval.env.remote.ports",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_rejects_parallel_async_eval_port_count_mismatch(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.training.async_eval.enabled = True
+        cfg.training.async_eval.parallel_envs = 3
+        cfg.training.async_eval.env.remote.ports = [30110, 30111]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "training.async_eval.env.remote.ports length must equal "
+            "training.async_eval.parallel_envs",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_rejects_parallel_async_eval_duplicate_ports(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.training.async_eval.enabled = True
+        cfg.training.async_eval.parallel_envs = 2
+        cfg.training.async_eval.env.remote.ports = [30110, 30110]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "training.async_eval.env.remote.ports must not contain duplicate ports",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_rejects_parallel_async_eval_train_env_port(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.env.remote.port = 30110
+        cfg.training.async_eval.enabled = True
+        cfg.training.async_eval.parallel_envs = 2
+        cfg.training.async_eval.env.remote.ports = [30110, 30111]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "async eval requires dedicated eval env server ports",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_rejects_single_async_eval_train_env_port(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.env.remote.port = 30110
+        cfg.training.async_eval.enabled = True
+        cfg.training.async_eval.env.remote.port = 30110
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "async eval requires dedicated eval env server ports",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_accepts_parallel_async_eval_ports(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.training.async_eval.enabled = True
+        cfg.training.async_eval.parallel_envs = 3
+        cfg.training.async_eval.policy_batch_size = 2
+        cfg.training.async_eval.env.remote.ports = [30110, 30111, 30112]
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.training.async_eval.parallel_envs, 3)
+        self.assertEqual(parsed.training.async_eval.policy_batch_size, 2)
+        self.assertEqual(
+            parsed.training.async_eval.env.remote.ports,
+            (30110, 30111, 30112),
+        )
+
+    def test_parse_eval_cfg_rejects_parallel_eval_without_ports(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "eval_residual.yaml"
+        )
+        cfg.eval.parallel_envs = 2
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "eval.parallel_envs > 1 requires env.remote.ports",
+        ):
+            parse_eval_cfg(cfg)
+
+    def test_parse_eval_cfg_rejects_parallel_duplicate_ports(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "eval_residual.yaml"
+        )
+        cfg.eval.parallel_envs = 2
+        cfg.env.remote.ports = [30110, 30110]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "env.remote.ports must not contain duplicate ports",
+        ):
+            parse_eval_cfg(cfg)
 
 
 if __name__ == "__main__":

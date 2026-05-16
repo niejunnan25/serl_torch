@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-import unittest
+from dataclasses import dataclass
+import importlib.util
 from pathlib import Path
 import sys
+import types
+import unittest
 
 from omegaconf import OmegaConf
 
@@ -12,6 +15,33 @@ for candidate in (REPO_PARENT, SERL_LAUNCHER_ROOT):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
+
+
+def _install_optional_import_stubs() -> None:
+    if importlib.util.find_spec("agentlace") is None:
+        transport_mod = types.ModuleType("serl_launcher.common.trainer_transport")
+
+        @dataclass(frozen=True, slots=True)
+        class _TrainerTransportConfig:
+            mode: str
+            data_port: int
+            control_timeout_ms: int
+            data_queue_capacity: int
+            data_socket_hwm: int
+            commit_poll_ms: int
+            wait_committed_on_episode_end: bool
+            wait_committed_on_shutdown: bool
+
+        def _validate_transport_mode(mode: object) -> str:
+            return str(mode)
+
+        transport_mod.SUPPORTED_TRANSPORT_MODES = ("sync_commit", "async_commit")
+        transport_mod.TrainerTransportConfig = _TrainerTransportConfig
+        transport_mod.validate_transport_mode = _validate_transport_mode
+        sys.modules["serl_launcher.common.trainer_transport"] = transport_mod
+
+
+_install_optional_import_stubs()
 
 from serl_torch.examples.libero.config import EvalConfig
 from serl_torch.examples.libero.config import parse_train_cfg

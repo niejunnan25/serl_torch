@@ -66,6 +66,7 @@ class RemoteEnvConfig:
     host: str
     port: int
     timeout_sec: float
+    ports: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +248,8 @@ class AsyncEvalConfig:
     start_episode_idx: int
     max_env_steps_per_episode: int | None
     deterministic: bool
+    parallel_envs: int
+    policy_batch_size: int
     poll_interval_sec: float
     queue_file: str
     summary_jsonl: str
@@ -284,6 +287,8 @@ class EvalConfig:
     deterministic: bool
     checkpoint_path: str | None
     checkpoint_step: int | None
+    parallel_envs: int = 1
+    policy_batch_size: int = 1
     allow_random_policy: bool = False
 
 
@@ -732,6 +737,15 @@ def _parse_backfill_policy_cfg(
 
 
 def _parse_remote_env_cfg(remote_cfg: Any, *, field_prefix: str) -> RemoteEnvConfig:
+    ports_cfg = remote_cfg.get("ports", None)
+    ports = None
+    if ports_cfg is not None:
+        ports = tuple(
+            _positive_int(value, f"{field_prefix}.ports[]")
+            for value in ports_cfg
+        )
+        if not ports:
+            raise ValueError(f"{field_prefix}.ports must not be empty when set")
     return RemoteEnvConfig(
         host=_required_str(
             remote_cfg.get("host", "127.0.0.1"),
@@ -745,7 +759,49 @@ def _parse_remote_env_cfg(remote_cfg: Any, *, field_prefix: str) -> RemoteEnvCon
             remote_cfg.get("timeout_sec", 120.0),
             f"{field_prefix}.timeout_sec",
         ),
+        ports=ports,
     )
+
+
+def _normalized_remote_host(host: str) -> str:
+    host_text = str(host).strip()
+    if host_text in {"127.0.0.1", "localhost", "0.0.0.0"}:
+        return "local"
+    return host_text
+
+
+def _validate_unique_remote_ports(
+    ports: tuple[int, ...] | None,
+    *,
+    field_name: str,
+) -> None:
+    if ports is None:
+        return
+    duplicate_ports = sorted({int(port) for port in ports if ports.count(port) > 1})
+    if duplicate_ports:
+        raise ValueError(
+            f"{field_name} must not contain duplicate ports: {duplicate_ports}"
+        )
+
+
+def _validate_dedicated_remote_env_ports(
+    *,
+    train_remote: RemoteEnvConfig,
+    eval_remote: RemoteEnvConfig,
+    eval_ports: tuple[int, ...],
+    field_name: str,
+) -> None:
+    _validate_unique_remote_ports(eval_ports, field_name=field_name)
+    if _normalized_remote_host(train_remote.host) != _normalized_remote_host(
+        eval_remote.host
+    ):
+        return
+    train_port = int(train_remote.port)
+    if any(int(port) == train_port for port in eval_ports):
+        raise ValueError(
+            f"{field_name} must not include env.remote.port={train_port}; "
+            "async eval requires dedicated eval env server ports"
+        )
 
 
 def _parse_processor_batching_cfg(
@@ -1186,6 +1242,53 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
         raise ValueError(
             "training.async_eval.enabled=true requires training.async_eval.every_episodes > 0"
         )
+    parallel_envs = _positive_int(
+        async_eval_cfg.get("parallel_envs", 1),
+        "training.async_eval.parallel_envs",
+    )
+    policy_batch_size = _positive_int(
+        async_eval_cfg.get("policy_batch_size", parallel_envs),
+        "training.async_eval.policy_batch_size",
+    )
+    async_eval_env = _parse_async_eval_env_cfg(async_eval_cfg)
+    remote_ports = async_eval_env.remote.ports
+    if enabled and remote_ports is not None and len(remote_ports) != parallel_envs:
+        raise ValueError(
+            "training.async_eval.env.remote.ports length must equal "
+            "training.async_eval.parallel_envs: "
+            f"got {len(remote_ports)} ports for {parallel_envs} envs"
+        )
+    if enabled:
+        eval_ports = remote_ports
+        if eval_ports is None and async_eval_env.backend == "remote":
+            eval_ports = (int(async_eval_env.remote.port),)
+        if eval_ports is not None:
+            train_env = _parse_env_cfg(cfg)
+            field_name = (
+                "training.async_eval.env.remote.ports"
+                if remote_ports is not None
+                else "training.async_eval.env.remote.port"
+            )
+            if train_env.backend == "remote":
+                _validate_dedicated_remote_env_ports(
+                    train_remote=train_env.remote,
+                    eval_remote=async_eval_env.remote,
+                    eval_ports=eval_ports,
+                    field_name=field_name,
+                )
+            else:
+                _validate_unique_remote_ports(eval_ports, field_name=field_name)
+    if enabled and parallel_envs > 1:
+        if async_eval_env.backend != "remote":
+            raise ValueError(
+                "training.async_eval.parallel_envs > 1 requires "
+                "training.async_eval.env.backend=remote"
+            )
+        if remote_ports is None:
+            raise ValueError(
+                "training.async_eval.parallel_envs > 1 requires "
+                "training.async_eval.env.remote.ports"
+            )
     if not enabled:
         return AsyncEvalConfig(
             enabled=False,
@@ -1199,6 +1302,8 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
                 async_eval_cfg.get("max_env_steps_per_episode", None)
             ),
             deterministic=bool(async_eval_cfg.get("deterministic", True)),
+            parallel_envs=parallel_envs,
+            policy_batch_size=policy_batch_size,
             poll_interval_sec=_float_or_default(
                 async_eval_cfg.get("poll_interval_sec", 5.0),
                 5.0,
@@ -1248,6 +1353,7 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
                         .get("timeout_sec", 180.0),
                         180.0,
                     ),
+                    ports=async_eval_env.remote.ports,
                 ),
             ),
         )
@@ -1268,6 +1374,8 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
             "training.async_eval.max_env_steps_per_episode",
         ),
         deterministic=bool(async_eval_cfg.get("deterministic", True)),
+        parallel_envs=parallel_envs,
+        policy_batch_size=policy_batch_size,
         poll_interval_sec=_positive_float(
             async_eval_cfg.get("poll_interval_sec", 5.0),
             "training.async_eval.poll_interval_sec",
@@ -1294,7 +1402,7 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
                 "training.async_eval.checkpoint.keep",
             ),
         ),
-        env=_parse_async_eval_env_cfg(async_eval_cfg),
+        env=async_eval_env,
     )
 
 
@@ -1374,6 +1482,24 @@ def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
 
 def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
     eval_cfg = cfg.get("eval", {})
+    parallel_envs = _positive_int(eval_cfg.get("parallel_envs", 1), "eval.parallel_envs")
+    policy_batch_size = _positive_int(
+        eval_cfg.get("policy_batch_size", parallel_envs),
+        "eval.policy_batch_size",
+    )
+    env = _parse_env_cfg(cfg)
+    remote_ports = env.remote.ports
+    if remote_ports is not None and len(remote_ports) != parallel_envs:
+        raise ValueError(
+            "env.remote.ports length must equal eval.parallel_envs: "
+            f"got {len(remote_ports)} ports for {parallel_envs} envs"
+        )
+    _validate_unique_remote_ports(remote_ports, field_name="env.remote.ports")
+    if parallel_envs > 1:
+        if env.backend != "remote":
+            raise ValueError("eval.parallel_envs > 1 requires env.backend=remote")
+        if remote_ports is None:
+            raise ValueError("eval.parallel_envs > 1 requires env.remote.ports")
     return EvalConfig(
         episodes=_positive_int(eval_cfg.get("episodes", 10), "eval.episodes"),
         start_episode_idx=_nonnegative_int(
@@ -1390,6 +1516,8 @@ def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
             eval_cfg.get("checkpoint_step", None),
             "eval.checkpoint_step",
         ),
+        parallel_envs=parallel_envs,
+        policy_batch_size=policy_batch_size,
         allow_random_policy=bool(eval_cfg.get("allow_random_policy", False)),
     )
 

@@ -49,6 +49,8 @@ def _build_eval_cfg(
             deterministic=bool(async_eval_cfg.deterministic),
             checkpoint_path=str(request["checkpoint_path"]),
             checkpoint_step=int(request["checkpoint_step"]),
+            parallel_envs=int(async_eval_cfg.parallel_envs),
+            policy_batch_size=int(async_eval_cfg.policy_batch_size),
         ),
         env_override=async_eval_cfg.env,
         logging=LoggingConfig(

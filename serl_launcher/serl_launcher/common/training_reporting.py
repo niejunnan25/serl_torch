@@ -54,6 +54,32 @@ def sync_eval_results_to_wandb(
                 metrics["eval/success_rate"] = float(success_rate)
             if mean_return is not None:
                 metrics["eval/mean_return"] = float(mean_return)
+            for source_key, metric_key in (
+                ("episodes_completed", "eval/episodes_completed"),
+                ("env_steps", "eval/env_steps"),
+                ("parallel_envs", "eval/parallel_envs"),
+                ("policy_batch_size", "eval/policy_batch_size"),
+                ("policy_requests", "eval/policy_requests"),
+                ("policy_batch_requests", "eval/policy_batch_requests"),
+                ("policy_samples", "eval/policy_samples"),
+                ("policy_requests_per_env_step", "eval/policy_requests_per_env_step"),
+                ("policy_samples_per_env_step", "eval/policy_samples_per_env_step"),
+                ("mean_active_lanes", "eval/mean_active_lanes"),
+            ):
+                value = _maybe_float(summary, source_key)
+                if value is not None:
+                    metrics[metric_key] = float(value)
+            timer_metrics = summary.get("timer", None)
+            if isinstance(timer_metrics, Mapping):
+                for source_key, metric_key in (
+                    ("policy_batch_infer", "eval/policy_batch_infer_sec"),
+                    ("policy_infer", "eval/policy_infer_sec"),
+                    ("reset_env", "eval/reset_env_sec"),
+                    ("step_env", "eval/step_env_sec"),
+                ):
+                    value = _maybe_float(timer_metrics, source_key)
+                    if value is not None:
+                        metrics[metric_key] = float(value)
 
         wandb_logger.log(to_jsonable(metrics), step=int(train_episode_id))
         if isinstance(train_env_step, (int, float)):
@@ -132,6 +158,26 @@ def _build_eval_env_step_metrics(metrics: Mapping[str, Any]) -> dict[str, float]
         ("eval/train_env_step", "eval_by_env_steps/train_env_step"),
         ("eval/duration_sec", "eval_by_env_steps/duration_sec"),
         ("eval/queue_backlog", "eval_by_env_steps/queue_backlog"),
+        ("eval/episodes_completed", "eval_by_env_steps/episodes_completed"),
+        ("eval/env_steps", "eval_by_env_steps/env_steps"),
+        ("eval/parallel_envs", "eval_by_env_steps/parallel_envs"),
+        ("eval/policy_batch_size", "eval_by_env_steps/policy_batch_size"),
+        ("eval/policy_requests", "eval_by_env_steps/policy_requests"),
+        ("eval/policy_batch_requests", "eval_by_env_steps/policy_batch_requests"),
+        ("eval/policy_samples", "eval_by_env_steps/policy_samples"),
+        (
+            "eval/policy_requests_per_env_step",
+            "eval_by_env_steps/policy_requests_per_env_step",
+        ),
+        (
+            "eval/policy_samples_per_env_step",
+            "eval_by_env_steps/policy_samples_per_env_step",
+        ),
+        ("eval/mean_active_lanes", "eval_by_env_steps/mean_active_lanes"),
+        ("eval/policy_batch_infer_sec", "eval_by_env_steps/policy_batch_infer_sec"),
+        ("eval/policy_infer_sec", "eval_by_env_steps/policy_infer_sec"),
+        ("eval/reset_env_sec", "eval_by_env_steps/reset_env_sec"),
+        ("eval/step_env_sec", "eval_by_env_steps/step_env_sec"),
     )
     env_step_metrics: dict[str, float] = {}
     for source_key, metric_key in mapping:

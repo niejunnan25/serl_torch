@@ -36,81 +36,65 @@ CONDA_SH="${CONDA_SH:-$DEFAULT_CONDA_SH}"
 
 declare -a EXTRA_HYDRA_ARGS=()
 declare -a STARTED_PROCESS_NAMES=()
+declare -a STARTED_PROCESS_PID_NAMES=()
+declare -a STARTED_PROCESS_PID_VALUES=()
+declare -a COMPLETED_PROCESS_STATUS_NAMES=()
+declare -a COMPLETED_PROCESS_STATUS_VALUES=()
 CLEANUP_IN_PROGRESS=0
 TRAINING_DRAINING=0
 LEARNER_INTERRUPT_SENT=0
 PROCESS_EXIT_STATUS=0
-STARTED_PROCESS_PID_train_env=""
-STARTED_PROCESS_PID_eval_env=""
-STARTED_PROCESS_PID_policy=""
-STARTED_PROCESS_PID_backfill_policy=""
-STARTED_PROCESS_PID_learner=""
-STARTED_PROCESS_PID_processor=""
-STARTED_PROCESS_PID_actor=""
-COMPLETED_PROCESS_STATUS_train_env=""
-COMPLETED_PROCESS_STATUS_eval_env=""
-COMPLETED_PROCESS_STATUS_policy=""
-COMPLETED_PROCESS_STATUS_backfill_policy=""
-COMPLETED_PROCESS_STATUS_learner=""
-COMPLETED_PROCESS_STATUS_processor=""
-COMPLETED_PROCESS_STATUS_actor=""
 
 set_started_process_pid() {
     local name="$1"
     local pid="$2"
-    case "$name" in
-        train_env) STARTED_PROCESS_PID_train_env="$pid" ;;
-        eval_env) STARTED_PROCESS_PID_eval_env="$pid" ;;
-        policy) STARTED_PROCESS_PID_policy="$pid" ;;
-        backfill_policy) STARTED_PROCESS_PID_backfill_policy="$pid" ;;
-        learner) STARTED_PROCESS_PID_learner="$pid" ;;
-        processor) STARTED_PROCESS_PID_processor="$pid" ;;
-        actor) STARTED_PROCESS_PID_actor="$pid" ;;
-        *) die "unknown managed process name: $name" ;;
-    esac
+    local idx=""
+    for idx in "${!STARTED_PROCESS_PID_NAMES[@]}"; do
+        if [[ "${STARTED_PROCESS_PID_NAMES[$idx]}" == "$name" ]]; then
+            STARTED_PROCESS_PID_VALUES[$idx]="$pid"
+            return 0
+        fi
+    done
+    STARTED_PROCESS_PID_NAMES+=("$name")
+    STARTED_PROCESS_PID_VALUES+=("$pid")
 }
 
 get_started_process_pid() {
     local name="$1"
-    case "$name" in
-        train_env) printf "%s" "$STARTED_PROCESS_PID_train_env" ;;
-        eval_env) printf "%s" "$STARTED_PROCESS_PID_eval_env" ;;
-        policy) printf "%s" "$STARTED_PROCESS_PID_policy" ;;
-        backfill_policy) printf "%s" "$STARTED_PROCESS_PID_backfill_policy" ;;
-        learner) printf "%s" "$STARTED_PROCESS_PID_learner" ;;
-        processor) printf "%s" "$STARTED_PROCESS_PID_processor" ;;
-        actor) printf "%s" "$STARTED_PROCESS_PID_actor" ;;
-        *) printf "" ;;
-    esac
+    local idx=""
+    for idx in "${!STARTED_PROCESS_PID_NAMES[@]}"; do
+        if [[ "${STARTED_PROCESS_PID_NAMES[$idx]}" == "$name" ]]; then
+            printf "%s" "${STARTED_PROCESS_PID_VALUES[$idx]}"
+            return 0
+        fi
+    done
+    printf ""
 }
 
 set_completed_process_status() {
     local name="$1"
     local status="$2"
-    case "$name" in
-        train_env) COMPLETED_PROCESS_STATUS_train_env="$status" ;;
-        eval_env) COMPLETED_PROCESS_STATUS_eval_env="$status" ;;
-        policy) COMPLETED_PROCESS_STATUS_policy="$status" ;;
-        backfill_policy) COMPLETED_PROCESS_STATUS_backfill_policy="$status" ;;
-        learner) COMPLETED_PROCESS_STATUS_learner="$status" ;;
-        processor) COMPLETED_PROCESS_STATUS_processor="$status" ;;
-        actor) COMPLETED_PROCESS_STATUS_actor="$status" ;;
-        *) die "unknown managed process name: $name" ;;
-    esac
+    local idx=""
+    for idx in "${!COMPLETED_PROCESS_STATUS_NAMES[@]}"; do
+        if [[ "${COMPLETED_PROCESS_STATUS_NAMES[$idx]}" == "$name" ]]; then
+            COMPLETED_PROCESS_STATUS_VALUES[$idx]="$status"
+            return 0
+        fi
+    done
+    COMPLETED_PROCESS_STATUS_NAMES+=("$name")
+    COMPLETED_PROCESS_STATUS_VALUES+=("$status")
 }
 
 get_completed_process_status() {
     local name="$1"
-    case "$name" in
-        train_env) printf "%s" "$COMPLETED_PROCESS_STATUS_train_env" ;;
-        eval_env) printf "%s" "$COMPLETED_PROCESS_STATUS_eval_env" ;;
-        policy) printf "%s" "$COMPLETED_PROCESS_STATUS_policy" ;;
-        backfill_policy) printf "%s" "$COMPLETED_PROCESS_STATUS_backfill_policy" ;;
-        learner) printf "%s" "$COMPLETED_PROCESS_STATUS_learner" ;;
-        processor) printf "%s" "$COMPLETED_PROCESS_STATUS_processor" ;;
-        actor) printf "%s" "$COMPLETED_PROCESS_STATUS_actor" ;;
-        *) printf "" ;;
-    esac
+    local idx=""
+    for idx in "${!COMPLETED_PROCESS_STATUS_NAMES[@]}"; do
+        if [[ "${COMPLETED_PROCESS_STATUS_NAMES[$idx]}" == "$name" ]]; then
+            printf "%s" "${COMPLETED_PROCESS_STATUS_VALUES[$idx]}"
+            return 0
+        fi
+    done
+    printf ""
 }
 
 usage() {
@@ -704,13 +688,15 @@ cat >"$CONFIG_PARSER_SCRIPT" <<'PY'
 import shlex
 import sys
 from hydra import compose, initialize_config_dir
+from omegaconf import ListConfig
 
 config_file = sys.argv[1]
 config_dir = sys.argv[2]
 config_name = sys.argv[3]
+overrides = sys.argv[4:]
 
 with initialize_config_dir(version_base=None, config_dir=config_dir):
-    cfg = compose(config_name=config_name)
+    cfg = compose(config_name=config_name, overrides=overrides)
 
 def lookup(path, default=None):
     current = cfg
@@ -730,6 +716,8 @@ def emit(key, value):
         text = "1" if value else "0"
     elif value is None:
         text = ""
+    elif isinstance(value, (list, tuple, ListConfig)):
+        text = ",".join(str(item) for item in value)
     else:
         text = str(value)
     print(f"{key}={shlex.quote(text)}")
@@ -738,9 +726,12 @@ emit("CFG_ENV_BACKEND", lookup("env.backend", "remote"))
 emit("CFG_ENV_HOST", lookup("env.remote.host", "127.0.0.1"))
 emit("CFG_ENV_PORT", lookup("env.remote.port", "30000"))
 emit("CFG_ASYNC_EVAL_ENABLED", lookup("training.async_eval.enabled", False))
+emit("CFG_ASYNC_EVAL_PARALLEL_ENVS", lookup("training.async_eval.parallel_envs", 1))
+emit("CFG_ASYNC_EVAL_POLICY_BATCH_SIZE", lookup("training.async_eval.policy_batch_size", ""))
 emit("CFG_ASYNC_EVAL_ENV_BACKEND", lookup("training.async_eval.env.backend", "remote"))
 emit("CFG_ASYNC_EVAL_HOST", lookup("training.async_eval.env.remote.host", "127.0.0.1"))
 emit("CFG_ASYNC_EVAL_PORT", lookup("training.async_eval.env.remote.port", "30010"))
+emit("CFG_ASYNC_EVAL_PORTS", lookup("training.async_eval.env.remote.ports", None))
 emit("CFG_POLICY_TYPE", lookup("policy.type", "openpi"))
 emit("CFG_POLICY_HOST", lookup("policy.host", "127.0.0.1"))
 emit("CFG_POLICY_PORT", lookup("policy.port", "30001"))
@@ -751,13 +742,33 @@ emit("CFG_RECYCLE_ENABLED", lookup("recycle.enabled", False))
 PY
 CONFIG_EXPORTS="$(
     bash -lc "$(build_conda_shell_command \
-        python "$CONFIG_PARSER_SCRIPT" "$CONFIG_FILE" "$CONFIG_SEARCH_DIR" "$CONFIG_COMPOSE_NAME")"
+        python "$CONFIG_PARSER_SCRIPT" "$CONFIG_FILE" "$CONFIG_SEARCH_DIR" "$CONFIG_COMPOSE_NAME" "${EXTRA_HYDRA_ARGS[@]}")"
 )"
 while IFS= read -r line; do
     eval "$line"
 done <<< "$CONFIG_EXPORTS"
 
 [[ -n "$CFG_POLICY_TYPE" ]] || die "failed to parse policy.type from config"
+if [[ ! "${CFG_ASYNC_EVAL_PARALLEL_ENVS:-1}" =~ ^[0-9]+$ ]]; then
+    die "training.async_eval.parallel_envs must be a positive integer, got ${CFG_ASYNC_EVAL_PARALLEL_ENVS:-}"
+fi
+CFG_ASYNC_EVAL_PARALLEL_ENVS=$((CFG_ASYNC_EVAL_PARALLEL_ENVS))
+if (( CFG_ASYNC_EVAL_PARALLEL_ENVS <= 0 )); then
+    die "training.async_eval.parallel_envs must be positive, got $CFG_ASYNC_EVAL_PARALLEL_ENVS"
+fi
+if [[ -n "${CFG_ASYNC_EVAL_POLICY_BATCH_SIZE:-}" && ! "$CFG_ASYNC_EVAL_POLICY_BATCH_SIZE" =~ ^[0-9]+$ ]]; then
+    die "training.async_eval.policy_batch_size must be a positive integer, got $CFG_ASYNC_EVAL_POLICY_BATCH_SIZE"
+fi
+if [[ -n "${CFG_ASYNC_EVAL_POLICY_BATCH_SIZE:-}" ]] && (( CFG_ASYNC_EVAL_POLICY_BATCH_SIZE <= 0 )); then
+    die "training.async_eval.policy_batch_size must be positive, got $CFG_ASYNC_EVAL_POLICY_BATCH_SIZE"
+fi
+
+declare -a CFG_ASYNC_EVAL_PORT_LIST=()
+if [[ -n "${CFG_ASYNC_EVAL_PORTS:-}" ]]; then
+    IFS=',' read -r -a CFG_ASYNC_EVAL_PORT_LIST <<< "$CFG_ASYNC_EVAL_PORTS"
+else
+    CFG_ASYNC_EVAL_PORT_LIST=("$CFG_ASYNC_EVAL_PORT")
+fi
 
 if [[ -z "$ACTOR_GPU" && -n "$POLICY_GPU" ]]; then
     ACTOR_GPU="$POLICY_GPU"
@@ -803,6 +814,18 @@ if [[ "$CFG_ENV_BACKEND" == "remote" ]]; then
 fi
 if (( START_EVAL_ENV )) && [[ "$CFG_ASYNC_EVAL_ENV_BACKEND" == "remote" ]]; then
     is_local_host "$CFG_ASYNC_EVAL_HOST" || die "eval env host must be local for launcher-managed eval env server; got $CFG_ASYNC_EVAL_HOST"
+    if (( CFG_ASYNC_EVAL_PARALLEL_ENVS > 1 )); then
+        if ((${#CFG_ASYNC_EVAL_PORT_LIST[@]} != CFG_ASYNC_EVAL_PARALLEL_ENVS)); then
+            die "training.async_eval.env.remote.ports must contain $CFG_ASYNC_EVAL_PARALLEL_ENVS ports; got ${#CFG_ASYNC_EVAL_PORT_LIST[@]}"
+        fi
+    elif ((${#CFG_ASYNC_EVAL_PORT_LIST[@]} != 1)); then
+        die "single eval env launch expects exactly one eval port; got ${#CFG_ASYNC_EVAL_PORT_LIST[@]}"
+    fi
+    for eval_port in "${CFG_ASYNC_EVAL_PORT_LIST[@]}"; do
+        if [[ ! "$eval_port" =~ ^[0-9]+$ || "$eval_port" == "0" ]]; then
+            die "eval env port must be a positive integer, got $eval_port"
+        fi
+    done
 fi
 if [[ -n "$ENV_GPU" && ! "$ENV_GPU" =~ ^[0-9]+$ ]]; then
     die "--env-gpu must be a single non-negative integer, got $ENV_GPU"
@@ -849,6 +872,8 @@ train_env_port=$CFG_ENV_PORT
 async_eval_enabled=$CFG_ASYNC_EVAL_ENABLED
 async_eval_host=$CFG_ASYNC_EVAL_HOST
 async_eval_port=$CFG_ASYNC_EVAL_PORT
+async_eval_parallel_envs=$CFG_ASYNC_EVAL_PARALLEL_ENVS
+async_eval_ports=${CFG_ASYNC_EVAL_PORT_LIST[*]}
 EOF
 cp "$CONFIG_FILE" "$OUTPUT_ROOT/config_source.yaml"
 
@@ -928,24 +953,43 @@ if [[ "$CFG_ENV_BACKEND" == "remote" ]]; then
 fi
 
 if (( START_EVAL_ENV )) && [[ "$CFG_ASYNC_EVAL_ENV_BACKEND" == "remote" ]]; then
-    if [[ "$CFG_ASYNC_EVAL_PORT" == "$CFG_ENV_PORT" && "$CFG_ASYNC_EVAL_HOST" == "$CFG_ENV_HOST" ]]; then
-        die "eval env port must differ from train env port"
-    fi
-    assert_port_unused "$CFG_ASYNC_EVAL_HOST" "$CFG_ASYNC_EVAL_PORT" "eval env"
-    declare -a EVAL_ENV_CMD
-    EVAL_ENV_CMD=(
-        bash "$LIBERO_DIR/tools/serve_env.sh"
-        --host "$CFG_ASYNC_EVAL_HOST"
-        --port "$CFG_ASYNC_EVAL_PORT"
-    )
-    if [[ -n "$EVAL_ENV_GPU" ]]; then
-        EVAL_ENV_CMD+=(--gpu-id "$EVAL_ENV_GPU")
-    fi
-    start_logged_process \
-        "eval_env" \
-        "$SERVICES_DIR/eval_env.log" \
-        "${EVAL_ENV_CMD[@]}"
-    wait_for_port "$CFG_ASYNC_EVAL_HOST" "$CFG_ASYNC_EVAL_PORT" "eval env" "$WAIT_TIMEOUT_SEC"
+    declare -a USED_EVAL_ENV_PORTS=()
+    for eval_idx in "${!CFG_ASYNC_EVAL_PORT_LIST[@]}"; do
+        eval_port="${CFG_ASYNC_EVAL_PORT_LIST[$eval_idx]}"
+        if [[ "$eval_port" == "$CFG_ENV_PORT" && "$CFG_ASYNC_EVAL_HOST" == "$CFG_ENV_HOST" ]]; then
+            die "eval env port must differ from train env port"
+        fi
+        for used_port in "${USED_EVAL_ENV_PORTS[@]}"; do
+            if [[ "$eval_port" == "$used_port" ]]; then
+                die "duplicate eval env port configured: $eval_port"
+            fi
+        done
+        USED_EVAL_ENV_PORTS+=("$eval_port")
+
+        eval_name="eval_env"
+        eval_log="$SERVICES_DIR/eval_env.log"
+        eval_label="eval env"
+        if ((${#CFG_ASYNC_EVAL_PORT_LIST[@]} > 1)); then
+            eval_name="eval_env_${eval_idx}"
+            eval_log="$SERVICES_DIR/${eval_name}.log"
+            eval_label="eval env ${eval_idx}"
+        fi
+        assert_port_unused "$CFG_ASYNC_EVAL_HOST" "$eval_port" "$eval_label"
+        declare -a EVAL_ENV_CMD
+        EVAL_ENV_CMD=(
+            bash "$LIBERO_DIR/tools/serve_env.sh"
+            --host "$CFG_ASYNC_EVAL_HOST"
+            --port "$eval_port"
+        )
+        if [[ -n "$EVAL_ENV_GPU" ]]; then
+            EVAL_ENV_CMD+=(--gpu-id "$EVAL_ENV_GPU")
+        fi
+        start_logged_process \
+            "$eval_name" \
+            "$eval_log" \
+            "${EVAL_ENV_CMD[@]}"
+        wait_for_port "$CFG_ASYNC_EVAL_HOST" "$eval_port" "$eval_label" "$WAIT_TIMEOUT_SEC"
+    done
 fi
 
 assert_port_unused "$CFG_POLICY_HOST" "$CFG_POLICY_PORT" "policy"
@@ -1042,7 +1086,15 @@ if [[ "$CFG_ENV_BACKEND" == "remote" ]]; then
     log_note "watch train env : $(format_cmd tail -f "$SERVICES_DIR/train_env.log")"
 fi
 if (( START_EVAL_ENV )) && [[ "$CFG_ASYNC_EVAL_ENV_BACKEND" == "remote" ]]; then
-    log_note "watch eval env  : $(format_cmd tail -f "$SERVICES_DIR/eval_env.log")"
+    for eval_idx in "${!CFG_ASYNC_EVAL_PORT_LIST[@]}"; do
+        eval_log="$SERVICES_DIR/eval_env.log"
+        eval_label="eval env"
+        if ((${#CFG_ASYNC_EVAL_PORT_LIST[@]} > 1)); then
+            eval_log="$SERVICES_DIR/eval_env_${eval_idx}.log"
+            eval_label="eval env ${eval_idx}"
+        fi
+        log_note "watch $eval_label : $(format_cmd tail -f "$eval_log")"
+    done
 fi
 log_note "watch policy    : $(format_cmd tail -f "$SERVICES_DIR/policy.log")"
 if (( START_BACKFILL_POLICY )); then
