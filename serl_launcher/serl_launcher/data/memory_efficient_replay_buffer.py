@@ -1,9 +1,11 @@
 import copy
 from typing import Iterable, Optional, Tuple
 
-import gym
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
 import numpy as np
-from gym.spaces import Box
 
 from serl_launcher.data.dataset import DatasetDict, _sample
 from serl_launcher.data.replay_buffer import ReplayBuffer
@@ -30,7 +32,11 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
 
             low = pixel_obs_space.low[0]
             high = pixel_obs_space.high[0]
-            unstacked_pixel_obs_space = Box(low=low, high=high, dtype=pixel_obs_space.dtype)
+            unstacked_pixel_obs_space = gym.spaces.Box(
+                low=low,
+                high=high,
+                dtype=pixel_obs_space.dtype,
+            )
             observation_space.spaces[pixel_key] = unstacked_pixel_obs_space
 
         next_observation_space_dict = copy.deepcopy(observation_space.spaces)

@@ -6,16 +6,31 @@ cd "$ROOT_DIR"
 
 HOST="127.0.0.1"
 PORT="30000"
+GPU_ID="${LIBERO_ENV_GPU_ID:-}"
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            cat <<'EOF'
+Usage:
+  bash examples/libero/tools/serve_env.sh [--host HOST] [--port PORT] [--gpu-id N]
+
+Options:
+  --gpu-id N   GPU id for LIBERO / MuJoCo EGL offscreen rendering.
+EOF
+            exit 0
+            ;;
         --host)
             HOST="$2"
             shift 2
             ;;
         --port)
             PORT="$2"
+            shift 2
+            ;;
+        --gpu-id)
+            GPU_ID="$2"
             shift 2
             ;;
         *)
@@ -25,11 +40,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -n "$GPU_ID" ]]; then
+    if [[ ! "$GPU_ID" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: --gpu-id must be a single non-negative integer, got: $GPU_ID"
+        exit 1
+    fi
+    export CUDA_VISIBLE_DEVICES="$GPU_ID"
+    export MUJOCO_EGL_DEVICE_ID="$GPU_ID"
+fi
+
 echo "=========================================="
 echo "  LIBERO Remote Env Server"
 echo "=========================================="
 echo "  Working dir : $ROOT_DIR"
 echo "  Address     : http://${HOST}:${PORT}"
+echo "  CUDA GPUs   : ${CUDA_VISIBLE_DEVICES:-<unset>}"
+echo "  EGL device  : ${MUJOCO_EGL_DEVICE_ID:-<unset>}"
 echo "=========================================="
 
 CONDA_SH="/vla/miniconda3/etc/profile.d/conda.sh"

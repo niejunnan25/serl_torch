@@ -13,6 +13,9 @@ from serl_torch.examples.agibot_real.env.controller import TERMINAL_HOOK
 from serl_torch.examples.agibot_real.env.controller import TERMINAL_RESET
 from serl_torch.examples.agibot_real.env.controller import TERMINAL_SUCCESS
 from serl_torch.examples.agibot_real.env.controller import TERMINAL_TIMEOUT
+from serl_torch.examples.agibot_real.env.controller import ManualEpisodeController
+from serl_torch.examples.agibot_real.env.controller import STATE_EPISODE_DONE
+from serl_torch.examples.agibot_real.env.controller import STATE_WAIT_READY
 from serl_torch.examples.agibot_real.env.task_env import AgiBotTaskEnv
 
 
@@ -42,6 +45,9 @@ def _make_env(*, terminal_signal: str | None = None) -> AgiBotTaskEnv:
     env._controller_cfg = {"poll_interval_sec": 0.05}
     env._last_obs = {"dummy": 1}
     env._success_hook_spec = "fake:success_hook"
+    env._arm_layout = "dual_arm"
+    env._action_dim = 14
+    env._robot_action_dim = 14
     return env
 
 
@@ -105,6 +111,23 @@ class AgiBotTaskEnvContractTest(unittest.TestCase):
         self.assertFalse(result["truncated"])
         self.assertFalse(result["success"])
 
+    def test_right_arm_logical_action_embeds_with_current_left_state(self) -> None:
+        env = _make_env(terminal_signal=None)
+        env._arm_layout = "right_arm"
+        env._action_dim = 7
+        env._robot_action_dim = 14
+        current_pose = list(range(14))
+        env._get_obs = lambda: {"state/pose": current_pose}  # type: ignore[method-assign]
+
+        robot_action = env._logical_action_to_robot_action(
+            [70, 71, 72, 73, 74, 75, 76]
+        )
+
+        self.assertEqual(
+            robot_action.tolist(),
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 70.0, 71.0, 72.0, 73.0, 74.0, 75.0, 76.0],
+        )
+
     def test_late_terminal_override_keeps_controller_terminal_signal(self) -> None:
         env = _make_env(terminal_signal=None)
         transition = {
@@ -127,6 +150,36 @@ class AgiBotTaskEnvContractTest(unittest.TestCase):
         )
         self.assertTrue(overridden["info"]["human_success"])
         self.assertTrue(overridden["info"]["success"])
+
+
+class ManualEpisodeControllerContractTest(unittest.TestCase):
+    def test_terminal_grace_ignores_immediate_reset_after_success(self) -> None:
+        controller = ManualEpisodeController(
+            enabled=True,
+            terminal_grace_sec=10.0,
+        )
+        controller.start_episode()
+        controller.mark_success()
+
+        controller._dispatch_key(controller.keys["reset"])
+
+        meta = controller.get_meta()
+        self.assertEqual(meta["state"], STATE_EPISODE_DONE)
+        self.assertTrue(meta["terminal_grace_active"])
+        self.assertEqual(meta["terminal_signal"], TERMINAL_SUCCESS)
+
+    def test_zero_terminal_grace_preserves_previous_reset_rearm_behavior(self) -> None:
+        controller = ManualEpisodeController(
+            enabled=True,
+            terminal_grace_sec=0.0,
+        )
+        controller.start_episode()
+        controller.mark_success()
+
+        controller._dispatch_key(controller.keys["reset"])
+
+        meta = controller.get_meta()
+        self.assertEqual(meta["state"], STATE_WAIT_READY)
 
 
 if __name__ == "__main__":

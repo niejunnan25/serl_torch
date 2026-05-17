@@ -5,7 +5,8 @@
 适用文件：
 - `examples/RoboTwin/scripts/train_residual_sac.py`
 - `examples/RoboTwin/scripts/eval_residual_fast.py`
-- `examples/RoboTwin/core/common.py`
+- `examples/RoboTwin/env_wrappers/`
+- `examples/RoboTwin/policy/`
 - `serl_launcher/serl_launcher/agents/continuous/{drq.py,sac.py}`
 
 ## 1. 记号
@@ -161,4 +162,3 @@ flowchart LR
 - `residual.chunk_horizon`：改变 `Hc`
 - `sac.use_proprio`：影响状态分支是否参与编码
 - `sac.encoder_type`：影响视觉编码器结构和特征维
-

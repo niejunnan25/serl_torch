@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 from ..config import AgiBotEvalConfig
 from ..config import AgiBotRunConfig
 from ..config import AgiBotTrainConfig
+from .fake_task_env import AgiBotFakeTaskEnv
 from .task_env import AgiBotTaskEnv
 
 
@@ -22,7 +23,9 @@ def _build_common_kwargs(
         return {
             "task_name": str(cfg.task.name),
             "prompt": str(cfg.task.prompt),
+            "arm_layout": str(cfg.env.arm_layout),
             "action_dim": int(cfg.env.action_dim),
+            "robot_action_dim": int(cfg.env.robot_action_dim),
             "control_mode": str(cfg.task.control_mode),
             "hz": float(cfg.task.hz),
             "use_smooth_trajectory": bool(cfg.task.use_smooth_trajectory),
@@ -39,11 +42,14 @@ def _build_common_kwargs(
 
     task_cfg = cfg.get("task", {})
     robot_cfg = cfg.get("robot", {})
+    env_cfg = cfg.get("env", {})
     controller_cfg = cfg.get("controller", {})
     return {
         "task_name": str(task_cfg.get("name", "agibot_real_task")),
         "prompt": str(task_cfg.get("prompt", task_cfg.get("name", "agibot_real_task"))),
-        "action_dim": int(cfg.get("env", {}).get("action_dim", 14)),
+        "arm_layout": str(env_cfg.get("arm_layout", "dual_arm")),
+        "action_dim": int(env_cfg.get("action_dim", 14)),
+        "robot_action_dim": int(env_cfg.get("robot_action_dim", 14)),
         "control_mode": str(task_cfg.get("control_mode", "camera_position")),
         "hz": float(task_cfg.get("hz", 20.0)),
         "use_smooth_trajectory": bool(task_cfg.get("use_smooth_trajectory", False)),
@@ -75,16 +81,21 @@ def _resolve_controller_enabled(cfg: DictConfig | AgiBotRunConfig) -> bool:
 
 def create_env(cfg: DictConfig | AgiBotRunConfig, logger: logging.Logger):
     env_backend = _resolve_env_backend(cfg)
-    if env_backend != "local":
+    if env_backend not in {"local", "fake"}:
         raise ValueError(
-            "AgiBot real env is local-only; remote support has been removed, "
+            "AgiBot env backend must be 'local' or 'fake'; remote support has been removed, "
             f"got env.backend={env_backend!r}"
         )
     if not _resolve_controller_enabled(cfg):
         raise ValueError(
             "AgiBot canonical train/eval flow requires controller.enabled=true"
         )
-    return AgiBotTaskEnv(**_build_common_kwargs(cfg, logger))
+    kwargs = _build_common_kwargs(cfg, logger)
+    if env_backend == "fake":
+        kwargs["reset_hook"] = None
+        kwargs["success_hook"] = None
+        return AgiBotFakeTaskEnv(**kwargs)
+    return AgiBotTaskEnv(**kwargs)
 
 
 def _create_env(cfg: DictConfig | AgiBotRunConfig, logger: logging.Logger):

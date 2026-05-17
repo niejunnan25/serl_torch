@@ -1,7 +1,7 @@
 """Helpers for building JoyRA requests from canonical policy inputs."""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 import numpy as np
 from PIL import Image
@@ -81,4 +81,14 @@ def build_joyra_request(policy_input: PolicyInput) -> Dict[str, Any]:
         ),
         "observation/state": np.asarray(joyra_state, dtype=np.float32),
         "prompt": str(policy_input.prompt),
+    }
+
+
+def build_joyra_batch_request(
+    policy_inputs: Sequence[PolicyInput],
+) -> Dict[str, Any]:
+    if not policy_inputs:
+        raise ValueError("policy_inputs must be non-empty for JoyRA batch infer")
+    return {
+        "examples": [build_joyra_request(policy_input) for policy_input in policy_inputs]
     }

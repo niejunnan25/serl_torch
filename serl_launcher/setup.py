@@ -11,11 +11,10 @@ setup(
         "typing",
         "typing_extensions",
         "hydra-core>=1.3.2",
+        "numpy>=1.24.3,<1.27",
         "torch>=2.0",
         "torchvision>=0.15",
-        # agentlace is not declared here so `pip install` does not run git against GitHub.
-        # Install manually, e.g. clone https://github.com/youliangtan/agentlace.git and:
-        #   git checkout cf2c337c5e3694cdbfc14831b239bd657bc4894d && pip install -e .
+        "agentlace @ git+https://github.com/niejunnan25/agentlace.git@885f5fc",
     ],
     packages=find_packages(),
     zip_safe=False,

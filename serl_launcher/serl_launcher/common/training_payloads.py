@@ -26,6 +26,13 @@ class RolloutStatsPayload(TypedDict):
     env_steps: int
     rollout: RolloutPayload
     env_info: dict[str, Any]
+    residual: dict[str, Any]
+
+
+class ActorProgressPayload(TypedDict):
+    env_steps: int
+    episode_id: int
+    actor_done: bool
 
 
 def build_rollout_payload(
@@ -58,6 +65,7 @@ def build_rollout_stats_payload(
     env_steps: int,
     rollout: RolloutPayload,
     env_info: Mapping[str, Any] | None = None,
+    residual: Mapping[str, Any] | None = None,
 ) -> RolloutStatsPayload:
     """Build a transport-safe actor->learner rollout stats payload."""
 
@@ -67,10 +75,32 @@ def build_rollout_stats_payload(
         if isinstance(serialized_env_info, Mapping):
             env_info_payload = dict(serialized_env_info)
 
+    residual_payload: dict[str, Any] = {}
+    if residual is not None:
+        serialized_residual = to_jsonable(dict(residual))
+        if isinstance(serialized_residual, Mapping):
+            residual_payload = dict(serialized_residual)
+
     return {
         "env_steps": int(env_steps),
         "rollout": dict(rollout),
         "env_info": env_info_payload,
+        "residual": residual_payload,
+    }
+
+
+def build_actor_progress_payload(
+    *,
+    env_steps: int,
+    episode_id: int,
+    actor_done: bool,
+) -> ActorProgressPayload:
+    """Build a normalized actor progress payload for coordinated shutdown."""
+
+    return {
+        "env_steps": int(env_steps),
+        "episode_id": int(episode_id),
+        "actor_done": bool(actor_done),
     }
 
 
@@ -93,10 +123,33 @@ def parse_rollout_stats_payload(
     if isinstance(env_info, Mapping):
         env_info_payload = dict(env_info)
 
+    residual_payload: dict[str, Any] = {}
+    residual = payload.get("residual", None)
+    if isinstance(residual, Mapping):
+        residual_payload = dict(residual)
+
     return {
         "env_steps": int(env_steps),
         "rollout": rollout,
         "env_info": env_info_payload,
+        "residual": residual_payload,
+    }
+
+
+def parse_actor_progress_payload(
+    payload: Mapping[str, Any],
+) -> ActorProgressPayload | None:
+    """Parse and normalize an actor progress payload from transport."""
+
+    env_steps = _maybe_int(payload.get("env_steps", None))
+    episode_id = _maybe_int(payload.get("episode_id", None))
+    actor_done = _maybe_bool(payload.get("actor_done", None))
+    if env_steps is None or episode_id is None or actor_done is None:
+        return None
+    return {
+        "env_steps": int(env_steps),
+        "episode_id": int(episode_id),
+        "actor_done": bool(actor_done),
     }
 
 

@@ -10,7 +10,11 @@ except ModuleNotFoundError:
     import gymnasium as gym
 
 from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
+from serl_launcher.residual.chunk_window_replay import BatchPrefetcher
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
+from serl_launcher.residual.chunk_window_replay import (
+    PreparedStepWindowReplayBufferSampler,
+)
 from serl_launcher.residual.chunk_window_replay import reshape_chunk_batch_for_training
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
 
@@ -34,6 +38,68 @@ class _FakeReplayBuffer:
 
 
 class ChunkReplayTest(unittest.TestCase):
+    def _make_step_replay(self):
+        observation_space = gym.spaces.Dict(
+            {
+                "state": gym.spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(2,),
+                    dtype=np.float32,
+                )
+            }
+        )
+        replay_buffer = create_chunk_replay_buffer(
+            observation_space=observation_space,
+            action_dim=2,
+            chunk_horizon=3,
+            discount=0.99,
+            image_keys=tuple(),
+            capacity=32,
+        )
+        for step in range(10):
+            replay_buffer.insert(
+                {
+                    "episode_id": 0,
+                    "episode_step": step,
+                    "observations": {
+                        "state": np.asarray([step, step + 1], dtype=np.float32),
+                    },
+                    "actions": np.asarray([step, -step], dtype=np.float32),
+                    "next_observations": {
+                        "state": np.asarray([step + 1, step + 2], dtype=np.float32),
+                    },
+                    "rewards": np.float32(1.0),
+                    "masks": np.float32(1.0),
+                    "dones": False,
+                }
+            )
+        return replay_buffer
+
+    def test_batch_prefetcher_returns_ordered_results(self) -> None:
+        calls: list[int] = []
+
+        def _sample() -> int:
+            calls.append(len(calls) + 1)
+            return calls[-1]
+
+        prefetcher = BatchPrefetcher(_sample)
+        try:
+            self.assertEqual(prefetcher.get(), 1)
+            self.assertEqual(prefetcher.get(), 2)
+        finally:
+            prefetcher.close()
+
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_batch_prefetcher_propagates_sample_errors(self) -> None:
+        def _sample() -> int:
+            raise RuntimeError("sample failed")
+
+        prefetcher = BatchPrefetcher(_sample)
+        with self.assertRaisesRegex(RuntimeError, "sample failed"):
+            prefetcher.get()
+
     def test_create_chunk_replay_buffer_smoke(self) -> None:
         observation_space = gym.spaces.Dict(
             {
@@ -120,6 +186,42 @@ class ChunkReplayTest(unittest.TestCase):
 
         self.assertEqual(batch_mix, {"online_batch_size": 2, "offline_batch_size": 2})
         self.assertEqual(batch["actions"].shape, (4, 2, 3))
+
+    def test_prepared_sampler_matches_dynamic_explicit_windows(self) -> None:
+        replay_buffer = self._make_step_replay()
+        prepared = PreparedStepWindowReplayBufferSampler(replay_buffer)
+        indices = np.asarray([0, 1, 2, 3], dtype=np.int64)
+
+        dynamic_profile: dict[str, float] = {}
+        prepared_profile: dict[str, float] = {}
+        dynamic = replay_buffer.sample(
+            len(indices),
+            indx=indices,
+            profile=dynamic_profile,
+        )
+        cached = prepared.sample(
+            len(indices),
+            indx=indices,
+            profile=prepared_profile,
+        )
+
+        self.assertEqual(prepared.num_windows, replay_buffer.num_windows)
+        self.assertGreater(prepared.prepare_profile["prepare_window_sec"], 0.0)
+        self.assertIn("prepared_cache_take_sec", prepared_profile)
+        for key in ("actions", "action_mask", "rewards", "masks", "dones"):
+            self.assertTrue(np.allclose(dynamic[key], cached[key]), key)
+        self.assertTrue(
+            np.allclose(
+                dynamic["observations"]["state"],
+                cached["observations"]["state"],
+            )
+        )
+        self.assertTrue(
+            np.allclose(
+                dynamic["next_observations"]["state"],
+                cached["next_observations"]["state"],
+            )
+        )
 
 
 if __name__ == "__main__":

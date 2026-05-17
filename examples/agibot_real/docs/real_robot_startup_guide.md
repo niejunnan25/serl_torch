@@ -9,7 +9,7 @@
 - actor wrapper：[../tools/run_actor.sh](../tools/run_actor.sh)
 - learner wrapper：[../tools/run_learner.sh](../tools/run_learner.sh)
 - robot-service wrapper：[../tools/start_robot_service.sh](../tools/start_robot_service.sh)
-- eval 入口：[../scripts/evaluate_checkpoint.py](../scripts/evaluate_checkpoint.py)
+- eval 入口：[../scripts/run_residual_eval.py](../scripts/run_residual_eval.py)
 
 ## 1. 当前主线的运行语义
 
@@ -53,7 +53,7 @@
 ### 3.1 安装 `serl_torch`
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
@@ -66,7 +66,7 @@ pip install -e ./serl_launcher
 如果 `examples/agibot_real/vendor/` 下的 runtime 还没准备好，先执行：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/prepare_robot_runtime.sh --from-dir /path/to/forwarder
 ```
 
@@ -117,7 +117,7 @@ export AGIBOT_NO_ROS=1
 ### 6.1 OpenPI
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 OPENPI_ROOT=/path/to/openpi \
 POLICY_DIR=/path/to/policy/checkpoint \
 bash tools/serve_openpi.sh --port 30001
@@ -136,7 +136,7 @@ bash tools/serve_openpi.sh --port 30001
 ### 6.2 JoyRA
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 JOYRA_ROOT=/path/to/JoyRA \
 JOYRA_CKPT_PATH=/path/to/checkpoints/steps_xxx.pt \
 bash tools/serve_joyra.sh --port 9001
@@ -153,7 +153,7 @@ policy.type=joyra policy.port=9001
 标准方式：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/start_robot_service.sh
 ```
 
@@ -175,14 +175,14 @@ bash tools/start_robot_service.sh --help
 最小命令：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 bash tools/run_learner.sh
 ```
 
 等价直跑：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 python scripts/run_residual_training.py runtime.role=learner
 ```
 
@@ -210,7 +210,7 @@ bash tools/run_learner.sh \
 actor 终端必须先加载真机 runtime 环境：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
 ```
 
@@ -335,13 +335,13 @@ bash tools/run_actor.sh policy.type=joyra policy.port=9001
 默认 Hydra 输出根目录是：
 
 ```text
-outputs/agibot_real
+output
 ```
 
 训练 run 默认落在：
 
 ```text
-outputs/agibot_real/train_residual/<timestamp>/
+output/train_residual/<timestamp>/
 ```
 
 常见文件包括：
@@ -408,9 +408,9 @@ outputs/agibot_real/train_residual/<timestamp>/
 最小命令：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch/examples/agibot_real
+cd /home/hello/codebase/serl_torch/examples/agibot_real
 source robot/service/env.sh
-python scripts/evaluate_checkpoint.py \
+python scripts/run_residual_eval.py \
   eval.checkpoint_path=/path/to/checkpoints \
   eval.checkpoint_step=10000
 ```
@@ -418,18 +418,14 @@ python scripts/evaluate_checkpoint.py \
 也可以直接传单个 checkpoint 文件：
 
 ```bash
-python scripts/evaluate_checkpoint.py \
+python scripts/run_residual_eval.py \
   eval.checkpoint_path=/path/to/checkpoints/checkpoint_10000
 ```
 
-## 18. 当前主线和实验脚本的区别
+## 18. 当前主线
 
 你现在真正准备上真机的主线是：
 
 - [../scripts/run_residual_training.py](../scripts/run_residual_training.py)
 
-实验性 chunk-boundary 脚本是：
-
-- [../scripts/run_residual_training_chunk_boundary.py](../scripts/run_residual_training_chunk_boundary.py)
-
-当前真机 README 和 wrapper 命令，默认都以主线脚本为准，不以实验脚本为准。
+旧的 optimized / copy / chunk-boundary 独立启动说明已经清理掉；这些行为现在都收敛到主配置和主入口上，用 Hydra overrides 控制即可。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import replace
@@ -11,11 +12,15 @@ from typing import cast
 
 from omegaconf import DictConfig
 
+from serl_launcher.common.trainer_transport import SUPPORTED_TRANSPORT_MODES
+from serl_launcher.common.trainer_transport import TrainerTransportConfig
+from serl_launcher.common.trainer_transport import validate_transport_mode
+from serl_launcher.rollout import ProcessorTransportConfig
 from serl_launcher.utils.serialization import to_jsonable
 
 from .env.observation import resolve_libero_image_keys
 
-RuntimeRole = Literal["actor", "learner"]
+RuntimeRole = Literal["actor", "learner", "processor"]
 EnvBackend = Literal["local", "remote"]
 PolicyBackend = Literal["openpi", "joyra"]
 OptimizerType = Literal["adam", "adamw"]
@@ -34,13 +39,17 @@ class RuntimeConfig:
     trainer_port: int
     broadcast_port: int
     data_store_queue_size: int
+    trainer_transport: TrainerTransportConfig
+    processor_transport: ProcessorTransportConfig
 
 
 @dataclass(frozen=True, slots=True)
 class WandbConfig:
     project: str
+    entity: str | None
     exp_name: str
     group: str | None
+    mode: str
     debug: bool
 
 
@@ -57,6 +66,7 @@ class RemoteEnvConfig:
     host: str
     port: int
     timeout_sec: float
+    ports: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +110,7 @@ class ResnetConfig:
 class EncoderConfig:
     type: str
     shared: bool
+    fuse_views: str
     use_proprio: bool
     proprio_latent_dim: int
     resnet: ResnetConfig | None
@@ -145,9 +156,16 @@ class SacConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplayPreparedChunkConfig:
+    offline_enabled: bool
+    online_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayConfig:
     capacity: int
     batch_size: int
+    prepared_chunk: ReplayPreparedChunkConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +174,7 @@ class OfflinePrepareConfig:
     output_root: str
     expert_reference_scale: float
     clip_residual_to_unit: bool
+    filter_unrepresentable_steps: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,9 +190,42 @@ class OfflineConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BackfillPolicyConfig:
+    enabled: bool
+    host: str
+    port: int
+    max_pending_chunks: int
+    mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessorBatchingConfig:
+    enabled: bool
+    max_batch_chunks: int
+    max_batch_obs: int
+    max_wait_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class RecycleConfig:
+    enabled: bool
+    output_root: str
+
+
+@dataclass(frozen=True, slots=True)
 class MixedPrecisionConfig:
     enabled: bool
     dtype: str
+
+
+@dataclass(frozen=True, slots=True)
+class TorchCompileConfig:
+    enabled: bool
+    target: str
+    backend: str
+    mode: str
+    fullgraph: bool
+    dynamic: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +255,8 @@ class AsyncEvalConfig:
     start_episode_idx: int
     max_env_steps_per_episode: int | None
     deterministic: bool
+    parallel_envs: int
+    policy_batch_size: int
     poll_interval_sec: float
     queue_file: str
     summary_jsonl: str
@@ -214,12 +268,14 @@ class AsyncEvalConfig:
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
     training_starts: int
+    random_steps: int
     steps_per_update: int
     critic_actor_ratio: int
     max_env_steps: int
     max_update_steps: int
     log_period: int
     mixed_precision: MixedPrecisionConfig
+    torch_compile: TorchCompileConfig
     checkpoint: CheckpointConfig
     async_eval: AsyncEvalConfig
 
@@ -227,6 +283,7 @@ class TrainingConfig:
 @dataclass(frozen=True, slots=True)
 class EvalTrainingConfig:
     mixed_precision: MixedPrecisionConfig
+    torch_compile: TorchCompileConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +294,9 @@ class EvalConfig:
     deterministic: bool
     checkpoint_path: str | None
     checkpoint_step: int | None
+    parallel_envs: int = 1
+    policy_batch_size: int = 1
+    allow_random_policy: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +315,9 @@ class LiberoTrainConfig:
     runtime: RuntimeConfig
     wandb: WandbConfig
     policy: PolicyConfig
+    backfill_policy: BackfillPolicyConfig
+    processor_batching: ProcessorBatchingConfig
+    recycle: RecycleConfig
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
@@ -308,6 +371,24 @@ def _required_str(value: Any, field_name: str) -> str:
     if resolved is None:
         raise ValueError(f"{field_name} must be a non-empty string")
     return resolved
+
+
+def _required_mapping(value: Any, field_name: str) -> DictConfig | dict[str, Any]:
+    if value is None:
+        raise ValueError(f"{field_name} must be declared explicitly in the train yaml")
+    if not isinstance(value, (DictConfig, dict)):
+        raise ValueError(f"{field_name} must be a mapping, got {type(value).__name__}")
+    return value
+
+
+def _required_mapping_key(
+    mapping: DictConfig | dict[str, Any],
+    key: str,
+    field_name: str,
+) -> Any:
+    if key not in mapping:
+        raise ValueError(f"{field_name} must be declared explicitly in the train yaml")
+    return mapping[key]
 
 
 def _int_value(value: Any, field_name: str) -> int:
@@ -458,7 +539,19 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
     role = _parse_choice(
         runtime_cfg.get("role", "actor"),
         "runtime.role",
-        allowed=("actor", "learner"),
+        allowed=("actor", "learner", "processor"),
+    )
+    trainer_port = _positive_int(
+        runtime_cfg.get("trainer_port", 5688),
+        "runtime.trainer_port",
+    )
+    transport_cfg = _parse_trainer_transport_cfg(
+        runtime_cfg=runtime_cfg,
+        default_data_port=int(trainer_port + 2),
+    )
+    processor_transport_cfg = _parse_processor_transport_cfg(
+        cfg,
+        trainer_transport_cfg=transport_cfg,
     )
     return RuntimeConfig(
         role=cast(RuntimeRole, role),
@@ -466,10 +559,7 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
             runtime_cfg.get("trainer_host", "127.0.0.1"),
             "runtime.trainer_host",
         ),
-        trainer_port=_positive_int(
-            runtime_cfg.get("trainer_port", 5688),
-            "runtime.trainer_port",
-        ),
+        trainer_port=int(trainer_port),
         broadcast_port=_positive_int(
             runtime_cfg.get("broadcast_port", 5689),
             "runtime.broadcast_port",
@@ -478,20 +568,111 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
             runtime_cfg.get("data_store_queue_size", 2000),
             "runtime.data_store_queue_size",
         ),
+        trainer_transport=transport_cfg,
+        processor_transport=processor_transport_cfg,
+    )
+
+
+def _parse_trainer_transport_cfg(
+    *,
+    runtime_cfg: DictConfig | dict[str, Any],
+    default_data_port: int,
+) -> TrainerTransportConfig:
+    raw_cfg = runtime_cfg.get("trainer_transport", {})
+    raw_mode = _parse_choice(
+        raw_cfg.get("mode", "sync_commit"),
+        "runtime.trainer_transport.mode",
+        allowed=SUPPORTED_TRANSPORT_MODES,
+    )
+    mode = validate_transport_mode(raw_mode)
+    return TrainerTransportConfig(
+        mode=mode,
+        data_port=_positive_int(
+            raw_cfg.get("data_port", default_data_port),
+            "runtime.trainer_transport.data_port",
+        ),
+        control_timeout_ms=_positive_int(
+            raw_cfg.get("control_timeout_ms", 800),
+            "runtime.trainer_transport.control_timeout_ms",
+        ),
+        data_queue_capacity=_positive_int(
+            raw_cfg.get("data_queue_capacity", 8),
+            "runtime.trainer_transport.data_queue_capacity",
+        ),
+        data_socket_hwm=_positive_int(
+            raw_cfg.get("data_socket_hwm", 8),
+            "runtime.trainer_transport.data_socket_hwm",
+        ),
+        commit_poll_ms=_positive_int(
+            raw_cfg.get("commit_poll_ms", 20),
+            "runtime.trainer_transport.commit_poll_ms",
+        ),
+        wait_committed_on_episode_end=bool(
+            raw_cfg.get("wait_committed_on_episode_end", False)
+        ),
+        wait_committed_on_shutdown=bool(
+            raw_cfg.get("wait_committed_on_shutdown", True)
+        ),
+    )
+
+
+def _parse_processor_transport_cfg(
+    cfg: DictConfig,
+    *,
+    trainer_transport_cfg: TrainerTransportConfig,
+) -> ProcessorTransportConfig:
+    processor_cfg = cfg.get("processor_transport", {})
+    port = _positive_int(
+        processor_cfg.get("port", int(trainer_transport_cfg.data_port) + 10),
+        "processor_transport.port",
+    )
+    timeout_ms = _positive_int(
+        processor_cfg.get(
+            "timeout_ms",
+            int(trainer_transport_cfg.control_timeout_ms),
+        ),
+        "processor_transport.timeout_ms",
+    )
+    queue_capacity = _positive_int(
+        processor_cfg.get("queue_capacity", 4),
+        "processor_transport.queue_capacity",
+    )
+    return ProcessorTransportConfig(
+        host=_required_str(
+            processor_cfg.get("host", "127.0.0.1"),
+            "processor_transport.host",
+        ),
+        port=int(port),
+        timeout_ms=int(timeout_ms),
+        queue_capacity=int(queue_capacity),
     )
 
 
 def _parse_wandb_cfg(cfg: DictConfig, *, task: TaskConfig) -> WandbConfig:
     wandb_cfg = cfg.get("wandb", {})
     default_exp_name = f"{task.suite_name}_task_{task.task_id}_residual"
+    debug = bool(wandb_cfg.get("debug", False))
+    mode_value = wandb_cfg.get("mode", None)
+    if mode_value is None:
+        resolved_mode = "online"
+    else:
+        resolved_mode = _parse_choice(
+            mode_value,
+            "wandb.mode",
+            allowed=("online", "offline", "disabled"),
+        )
+    if debug:
+        resolved_mode = "disabled"
     return WandbConfig(
         project=_required_str(wandb_cfg.get("project", "libero"), "wandb.project"),
+        entity=_optional_str(wandb_cfg.get("entity", os.environ.get("WANDB_ENTITY"))),
         exp_name=_required_str(
             wandb_cfg.get("exp_name", default_exp_name),
             "wandb.exp_name",
         ),
         group=_optional_str(wandb_cfg.get("group", None)),
-        debug=bool(wandb_cfg.get("debug", False)),
+        mode=str(resolved_mode),
+        debug=debug,
     )
 
 
@@ -510,7 +691,68 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
     )
 
 
+def _parse_backfill_policy_cfg(
+    cfg: DictConfig,
+) -> BackfillPolicyConfig:
+    backfill_cfg = _required_mapping(
+        cfg.get("backfill_policy", None),
+        "backfill_policy",
+    )
+    mode = _parse_choice(
+        _required_mapping_key(
+            backfill_cfg,
+            "mode",
+            "backfill_policy.mode",
+        ),
+        "backfill_policy.mode",
+        allowed=("thread",),
+    )
+    return BackfillPolicyConfig(
+        enabled=bool(
+            _required_mapping_key(
+                backfill_cfg,
+                "enabled",
+                "backfill_policy.enabled",
+            )
+        ),
+        host=_required_str(
+            _required_mapping_key(
+                backfill_cfg,
+                "host",
+                "backfill_policy.host",
+            ),
+            "backfill_policy.host",
+        ),
+        port=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "port",
+                "backfill_policy.port",
+            ),
+            "backfill_policy.port",
+        ),
+        max_pending_chunks=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "max_pending_chunks",
+                "backfill_policy.max_pending_chunks",
+            ),
+            "backfill_policy.max_pending_chunks",
+        ),
+        mode=mode,
+    )
+
+
 def _parse_remote_env_cfg(remote_cfg: Any, *, field_prefix: str) -> RemoteEnvConfig:
+    ports_cfg = remote_cfg.get("ports", None)
+    ports = None
+    if ports_cfg is not None:
+        ports = tuple(
+            _positive_int(value, f"{field_prefix}.ports[]")
+            for value in ports_cfg
+        )
+        if not ports:
+            raise ValueError(f"{field_prefix}.ports must not be empty when set")
     return RemoteEnvConfig(
         host=_required_str(
             remote_cfg.get("host", "127.0.0.1"),
@@ -523,6 +765,82 @@ def _parse_remote_env_cfg(remote_cfg: Any, *, field_prefix: str) -> RemoteEnvCon
         timeout_sec=_positive_float(
             remote_cfg.get("timeout_sec", 120.0),
             f"{field_prefix}.timeout_sec",
+        ),
+        ports=ports,
+    )
+
+
+def _normalized_remote_host(host: str) -> str:
+    host_text = str(host).strip()
+    if host_text in {"127.0.0.1", "localhost", "0.0.0.0"}:
+        return "local"
+    return host_text
+
+
+def _validate_unique_remote_ports(
+    ports: tuple[int, ...] | None,
+    *,
+    field_name: str,
+) -> None:
+    if ports is None:
+        return
+    duplicate_ports = sorted({int(port) for port in ports if ports.count(port) > 1})
+    if duplicate_ports:
+        raise ValueError(
+            f"{field_name} must not contain duplicate ports: {duplicate_ports}"
+        )
+
+
+def _validate_dedicated_remote_env_ports(
+    *,
+    train_remote: RemoteEnvConfig,
+    eval_remote: RemoteEnvConfig,
+    eval_ports: tuple[int, ...],
+    field_name: str,
+) -> None:
+    _validate_unique_remote_ports(eval_ports, field_name=field_name)
+    if _normalized_remote_host(train_remote.host) != _normalized_remote_host(
+        eval_remote.host
+    ):
+        return
+    train_port = int(train_remote.port)
+    if any(int(port) == train_port for port in eval_ports):
+        raise ValueError(
+            f"{field_name} must not include env.remote.port={train_port}; "
+            "async eval requires dedicated eval env server ports"
+        )
+
+
+def _parse_processor_batching_cfg(
+    cfg: DictConfig,
+) -> ProcessorBatchingConfig:
+    batching_cfg = cfg.get("processor_batching", {})
+    return ProcessorBatchingConfig(
+        enabled=bool(batching_cfg.get("enabled", False)),
+        max_batch_chunks=_positive_int(
+            batching_cfg.get("max_batch_chunks", 4),
+            "processor_batching.max_batch_chunks",
+        ),
+        max_batch_obs=_positive_int(
+            batching_cfg.get("max_batch_obs", 24),
+            "processor_batching.max_batch_obs",
+        ),
+        max_wait_ms=_nonnegative_int(
+            batching_cfg.get("max_wait_ms", 3),
+            "processor_batching.max_wait_ms",
+        ),
+    )
+
+
+def _parse_recycle_cfg(
+    cfg: DictConfig,
+) -> RecycleConfig:
+    recycle_cfg = cfg.get("recycle", {})
+    return RecycleConfig(
+        enabled=bool(recycle_cfg.get("enabled", False)),
+        output_root=_required_str(
+            recycle_cfg.get("output_root", "raw_rollout_recycle"),
+            "recycle.output_root",
         ),
     )
 
@@ -655,6 +973,11 @@ def _parse_encoder_cfg(cfg: DictConfig) -> EncoderConfig:
     return EncoderConfig(
         type=_required_str(encoder_cfg.get("type", "small"), "encoder.type"),
         shared=bool(encoder_cfg.get("shared", True)),
+        fuse_views=_parse_choice(
+            encoder_cfg.get("fuse_views", "auto"),
+            "encoder.fuse_views",
+            allowed=("auto", "true", "false"),
+        ),
         use_proprio=bool(encoder_cfg.get("use_proprio", False)),
         proprio_latent_dim=_positive_int(
             encoder_cfg.get("proprio_latent_dim", 64),
@@ -778,11 +1101,20 @@ def _parse_sac_cfg(cfg: DictConfig) -> SacConfig:
 
 def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
     replay_cfg = cfg.get("replay", {})
+    prepared_chunk_cfg = replay_cfg.get("prepared_chunk", {}) or {}
     return ReplayConfig(
         capacity=_positive_int(replay_cfg.get("capacity", 250000), "replay.capacity"),
         batch_size=_positive_int(
             replay_cfg.get("batch_size", 128),
             "replay.batch_size",
+        ),
+        prepared_chunk=ReplayPreparedChunkConfig(
+            offline_enabled=bool(
+                prepared_chunk_cfg.get("offline_enabled", False)
+            ),
+            online_enabled=bool(
+                prepared_chunk_cfg.get("online_enabled", False)
+            ),
         ),
     )
 
@@ -793,8 +1125,7 @@ def _parse_prepared_path(values: Any) -> str | None:
     if isinstance(values, str):
         return _optional_str(values)
     resolved_values = [
-        _required_str(value, "offline.prepared_path")
-        for value in values
+        _required_str(value, "offline.prepared_path") for value in values
     ]
     if not resolved_values:
         return None
@@ -824,8 +1155,9 @@ def _parse_offline_prepare_cfg(cfg: DictConfig) -> OfflinePrepareConfig:
             prepare_cfg.get("expert_reference_scale", 1.0),
             "offline.prepare.expert_reference_scale",
         ),
-        clip_residual_to_unit=bool(
-            prepare_cfg.get("clip_residual_to_unit", True)
+        clip_residual_to_unit=bool(prepare_cfg.get("clip_residual_to_unit", True)),
+        filter_unrepresentable_steps=bool(
+            prepare_cfg.get("filter_unrepresentable_steps", False)
         ),
     )
 
@@ -883,6 +1215,32 @@ def _parse_mixed_precision_cfg(
     )
 
 
+def _parse_torch_compile_cfg(
+    torch_compile_cfg: Any,
+    *,
+    field_prefix: str,
+) -> TorchCompileConfig:
+    target = _parse_choice(
+        torch_compile_cfg.get("target", "actor_critic"),
+        f"{field_prefix}.target",
+        allowed=("critic", "actor_critic"),
+    )
+    return TorchCompileConfig(
+        enabled=bool(torch_compile_cfg.get("enabled", False)),
+        target=target,
+        backend=_required_str(
+            torch_compile_cfg.get("backend", "inductor"),
+            f"{field_prefix}.backend",
+        ),
+        mode=_required_str(
+            torch_compile_cfg.get("mode", "default"),
+            f"{field_prefix}.mode",
+        ),
+        fullgraph=bool(torch_compile_cfg.get("fullgraph", True)),
+        dynamic=bool(torch_compile_cfg.get("dynamic", False)),
+    )
+
+
 def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
     training_cfg = cfg.get("training", {})
     async_eval_cfg = training_cfg.get("async_eval", {})
@@ -900,6 +1258,53 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
         raise ValueError(
             "training.async_eval.enabled=true requires training.async_eval.every_episodes > 0"
         )
+    parallel_envs = _positive_int(
+        async_eval_cfg.get("parallel_envs", 1),
+        "training.async_eval.parallel_envs",
+    )
+    policy_batch_size = _positive_int(
+        async_eval_cfg.get("policy_batch_size", parallel_envs),
+        "training.async_eval.policy_batch_size",
+    )
+    async_eval_env = _parse_async_eval_env_cfg(async_eval_cfg)
+    remote_ports = async_eval_env.remote.ports
+    if enabled and remote_ports is not None and len(remote_ports) != parallel_envs:
+        raise ValueError(
+            "training.async_eval.env.remote.ports length must equal "
+            "training.async_eval.parallel_envs: "
+            f"got {len(remote_ports)} ports for {parallel_envs} envs"
+        )
+    if enabled:
+        eval_ports = remote_ports
+        if eval_ports is None and async_eval_env.backend == "remote":
+            eval_ports = (int(async_eval_env.remote.port),)
+        if eval_ports is not None:
+            train_env = _parse_env_cfg(cfg)
+            field_name = (
+                "training.async_eval.env.remote.ports"
+                if remote_ports is not None
+                else "training.async_eval.env.remote.port"
+            )
+            if train_env.backend == "remote":
+                _validate_dedicated_remote_env_ports(
+                    train_remote=train_env.remote,
+                    eval_remote=async_eval_env.remote,
+                    eval_ports=eval_ports,
+                    field_name=field_name,
+                )
+            else:
+                _validate_unique_remote_ports(eval_ports, field_name=field_name)
+    if enabled and parallel_envs > 1:
+        if async_eval_env.backend != "remote":
+            raise ValueError(
+                "training.async_eval.parallel_envs > 1 requires "
+                "training.async_eval.env.backend=remote"
+            )
+        if remote_ports is None:
+            raise ValueError(
+                "training.async_eval.parallel_envs > 1 requires "
+                "training.async_eval.env.remote.ports"
+            )
     if not enabled:
         return AsyncEvalConfig(
             enabled=False,
@@ -913,6 +1318,8 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
                 async_eval_cfg.get("max_env_steps_per_episode", None)
             ),
             deterministic=bool(async_eval_cfg.get("deterministic", True)),
+            parallel_envs=parallel_envs,
+            policy_batch_size=policy_batch_size,
             poll_interval_sec=_float_or_default(
                 async_eval_cfg.get("poll_interval_sec", 5.0),
                 5.0,
@@ -945,23 +1352,24 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
                 backend="remote",
                 remote=RemoteEnvConfig(
                     host=_str_or_default(
-                        async_eval_cfg.get("env", {}).get("remote", {}).get(
-                            "host", "127.0.0.1"
-                        ),
+                        async_eval_cfg.get("env", {})
+                        .get("remote", {})
+                        .get("host", "127.0.0.1"),
                         "127.0.0.1",
                     ),
                     port=_int_or_default(
-                        async_eval_cfg.get("env", {}).get("remote", {}).get(
-                            "port", 30010
-                        ),
+                        async_eval_cfg.get("env", {})
+                        .get("remote", {})
+                        .get("port", 30010),
                         30010,
                     ),
                     timeout_sec=_float_or_default(
-                        async_eval_cfg.get("env", {}).get("remote", {}).get(
-                            "timeout_sec", 180.0
-                        ),
+                        async_eval_cfg.get("env", {})
+                        .get("remote", {})
+                        .get("timeout_sec", 180.0),
                         180.0,
                     ),
+                    ports=async_eval_env.remote.ports,
                 ),
             ),
         )
@@ -982,6 +1390,8 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
             "training.async_eval.max_env_steps_per_episode",
         ),
         deterministic=bool(async_eval_cfg.get("deterministic", True)),
+        parallel_envs=parallel_envs,
+        policy_batch_size=policy_batch_size,
         poll_interval_sec=_positive_float(
             async_eval_cfg.get("poll_interval_sec", 5.0),
             "training.async_eval.poll_interval_sec",
@@ -1008,18 +1418,23 @@ def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
                 "training.async_eval.checkpoint.keep",
             ),
         ),
-        env=_parse_async_eval_env_cfg(async_eval_cfg),
+        env=async_eval_env,
     )
 
 
 def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", {})
+    torch_compile_cfg = training_cfg.get("torch_compile", {})
     checkpoint_cfg = training_cfg.get("checkpoint", {})
     return TrainingConfig(
         training_starts=_nonnegative_int(
             training_cfg.get("training_starts", 0),
             "training.training_starts",
+        ),
+        random_steps=_nonnegative_int(
+            training_cfg.get("random_steps", 0),
+            "training.random_steps",
         ),
         steps_per_update=_positive_int(
             training_cfg.get("steps_per_update", 1),
@@ -1045,6 +1460,10 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
             mixed_precision_cfg,
             field_prefix="training.mixed_precision",
         ),
+        torch_compile=_parse_torch_compile_cfg(
+            torch_compile_cfg,
+            field_prefix="training.torch_compile",
+        ),
         checkpoint=CheckpointConfig(
             every_steps=_nonnegative_int(
                 checkpoint_cfg.get("every_steps", 0),
@@ -1069,12 +1488,34 @@ def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
         mixed_precision=_parse_mixed_precision_cfg(
             training_cfg.get("mixed_precision", {}),
             field_prefix="training.mixed_precision",
-        )
+        ),
+        torch_compile=_parse_torch_compile_cfg(
+            training_cfg.get("torch_compile", {}),
+            field_prefix="training.torch_compile",
+        ),
     )
 
 
 def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
     eval_cfg = cfg.get("eval", {})
+    parallel_envs = _positive_int(eval_cfg.get("parallel_envs", 1), "eval.parallel_envs")
+    policy_batch_size = _positive_int(
+        eval_cfg.get("policy_batch_size", parallel_envs),
+        "eval.policy_batch_size",
+    )
+    env = _parse_env_cfg(cfg)
+    remote_ports = env.remote.ports
+    if remote_ports is not None and len(remote_ports) != parallel_envs:
+        raise ValueError(
+            "env.remote.ports length must equal eval.parallel_envs: "
+            f"got {len(remote_ports)} ports for {parallel_envs} envs"
+        )
+    _validate_unique_remote_ports(remote_ports, field_name="env.remote.ports")
+    if parallel_envs > 1:
+        if env.backend != "remote":
+            raise ValueError("eval.parallel_envs > 1 requires env.backend=remote")
+        if remote_ports is None:
+            raise ValueError("eval.parallel_envs > 1 requires env.remote.ports")
     return EvalConfig(
         episodes=_positive_int(eval_cfg.get("episodes", 10), "eval.episodes"),
         start_episode_idx=_nonnegative_int(
@@ -1091,6 +1532,9 @@ def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
             eval_cfg.get("checkpoint_step", None),
             "eval.checkpoint_step",
         ),
+        parallel_envs=parallel_envs,
+        policy_batch_size=policy_batch_size,
+        allow_random_policy=bool(eval_cfg.get("allow_random_policy", False)),
     )
 
 
@@ -1119,6 +1563,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
     encoder = _parse_encoder_cfg(cfg)
     offline = _parse_offline_cfg(cfg)
+    policy = _parse_policy_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
         raise ValueError(
@@ -1133,7 +1578,10 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         task=task,
         runtime=runtime,
         wandb=_parse_wandb_cfg(cfg, task=task),
-        policy=_parse_policy_cfg(cfg),
+        policy=policy,
+        backfill_policy=_parse_backfill_policy_cfg(cfg),
+        processor_batching=_parse_processor_batching_cfg(cfg),
+        recycle=_parse_recycle_cfg(cfg),
         env=env,
         obs=obs,
         residual=residual,
@@ -1145,6 +1593,15 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         training=_parse_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg),
     )
+
+
+def get_runtime_role(cfg: DictConfig) -> str:
+    runtime_cfg = cfg.get("runtime", {})
+    return str(runtime_cfg.get("role", "actor"))
+
+
+def parse_train_cfg_allow_processor(cfg: DictConfig) -> LiberoTrainConfig:
+    return parse_train_cfg(cfg)
 
 
 def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:
@@ -1216,7 +1673,10 @@ def train_cfg_to_eval_cfg(
         encoder=train_cfg.encoder,
         network=train_cfg.network,
         sac=train_cfg.sac,
-        training=EvalTrainingConfig(mixed_precision=train_cfg.training.mixed_precision),
+        training=EvalTrainingConfig(
+            mixed_precision=train_cfg.training.mixed_precision,
+            torch_compile=train_cfg.training.torch_compile,
+        ),
         logging=eval_logging,
         eval=eval_cfg,
     )
@@ -1226,6 +1686,7 @@ __all__ = [
     "AsyncEvalCheckpointConfig",
     "AsyncEvalConfig",
     "AsyncEvalEnvConfig",
+    "BackfillPolicyConfig",
     "CheckpointConfig",
     "EncoderConfig",
     "EnvBackend",
@@ -1245,8 +1706,11 @@ __all__ = [
     "OptimizerType",
     "PolicyBackend",
     "PolicyConfig",
+    "ProcessorBatchingConfig",
+    "RecycleConfig",
     "RemoteEnvConfig",
     "ReplayConfig",
+    "ReplayPreparedChunkConfig",
     "ResidualConfig",
     "ResnetConfig",
     "RuntimeConfig",
@@ -1256,7 +1720,9 @@ __all__ = [
     "TrainingConfig",
     "WandbConfig",
     "cfg_to_log_payload",
+    "get_runtime_role",
     "parse_eval_cfg",
     "parse_train_cfg",
+    "parse_train_cfg_allow_processor",
     "train_cfg_to_eval_cfg",
 ]

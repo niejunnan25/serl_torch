@@ -40,10 +40,11 @@ residual:
 encoder:
   type: resnet
   shared: true
+  fuse_views: auto
   use_proprio: true
   proprio_latent_dim: 64
   resnet:
-    model_name: /vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+    model_name: pretrained_models/microsoft--resnet-18
     pretrained: true
     freeze_backbone: true
     pooling_method: spatial_learned_embeddings

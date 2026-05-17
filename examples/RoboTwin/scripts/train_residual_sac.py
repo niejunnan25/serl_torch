@@ -35,6 +35,7 @@ import sys
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -88,6 +89,13 @@ from serl_launcher.agents.continuous.drq import DrQAgent
 from serl_launcher.data.replay_buffer import ReplayBuffer
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.train_utils import concat_batches
+
+
+@dataclass
+class _OfflineLoadResult:
+    payload: Optional[Dict[str, Any]]
+    projected_values: int = 0
+    dropped_for_projection: bool = False
 
 
 def _obs_space_from_sample(sample_obs: Dict[str, np.ndarray]) -> gym.spaces.Dict:
@@ -204,6 +212,51 @@ def _resolve_offline_paths(dataset_paths: Any, base_dir: Path) -> List[Path]:
         else:
             paths.append(p)
     return paths
+
+
+def _count_projected_values(values: np.ndarray, *, epsilon: float) -> int:
+    arr = np.asarray(values, dtype=np.float32)
+    projected = (arr < (-1.0 - float(epsilon))) | (arr > (1.0 + float(epsilon)))
+    return int(np.count_nonzero(projected))
+
+
+def _collect_offline_manifest_stats(offline_paths: List[Path]) -> Dict[str, int]:
+    """聚合离线目录中的 manifest 统计（若存在）。"""
+    stats = {
+        "manifest_files": 0,
+        "manifest_episodes": 0,
+        "manifest_source_transitions": 0,
+        "manifest_saved_transitions": 0,
+        "manifest_dropped_transitions": 0,
+    }
+    seen_dirs: set[Path] = set()
+    for path in offline_paths:
+        parent = path.parent.resolve()
+        if parent in seen_dirs:
+            continue
+        seen_dirs.add(parent)
+        manifest_path = parent / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        stats["manifest_files"] += 1
+        stats["manifest_episodes"] += int(manifest.get("num_episodes", 0) or 0)
+        stats["manifest_source_transitions"] += int(
+            manifest.get("source_total_transitions", manifest.get("total_transitions", 0)) or 0
+        )
+        stats["manifest_saved_transitions"] += int(
+            manifest.get("saved_total_transitions", manifest.get("total_transitions", 0)) or 0
+        )
+        stats["manifest_dropped_transitions"] += int(
+            manifest.get("dropped_total_transitions", 0) or 0
+        )
+    return stats
 
 
 def _to_action_sequence(action_like: Any, full_action_dim: int) -> np.ndarray:
@@ -419,7 +472,9 @@ def _prepare_preconverted_transition(
     chunk_horizon: int,
     accept_plain_preconverted: bool,
     clip_residual_to_unit: bool,
-) -> Optional[Dict[str, Any]]:
+    drop_projected_transitions: bool,
+    projection_epsilon: float,
+) -> Optional[_OfflineLoadResult]:
     """
     尝试将“已是 residual 格式”的 transition 规范化后直接写入。
 
@@ -486,10 +541,17 @@ def _prepare_preconverted_transition(
         if seq.shape[0] > 1 and not has_step_key:
             return None
         row = seq[min(step_idx, seq.shape[0] - 1)]
-        if clip_residual_to_unit:
-            row = np.clip(row, -1.0, 1.0)
         if row.shape[0] == full_action_dim and action_dim != full_action_dim:
             row = row[control_indices]
+        projected_values = _count_projected_values(row, epsilon=projection_epsilon)
+        if projected_values > 0 and drop_projected_transitions:
+            return _OfflineLoadResult(
+                payload=None,
+                projected_values=int(projected_values),
+                dropped_for_projection=True,
+            )
+        if clip_residual_to_unit:
+            row = np.clip(row, -1.0, 1.0)
         if row.shape[0] != action_dim:
             return None
     except Exception:  # noqa: BLE001
@@ -505,14 +567,18 @@ def _prepare_preconverted_transition(
         transition.get("rewards", transition.get("reward", 0.0)), default=0.0
     )
 
-    return {
-        "observations": obs,
-        "actions": np.asarray(row, dtype=np.float32),
-        "next_observations": next_obs,
-        "rewards": np.float32(reward),
-        "masks": np.float32(mask),
-        "dones": bool(done),
-    }
+    return _OfflineLoadResult(
+        payload={
+            "observations": obs,
+            "actions": np.asarray(row, dtype=np.float32),
+            "next_observations": next_obs,
+            "rewards": np.float32(reward),
+            "masks": np.float32(mask),
+            "dones": bool(done),
+        },
+        projected_values=int(projected_values),
+        dropped_for_projection=False,
+    )
 
 
 def _convert_expert_transition_to_residual(
@@ -527,6 +593,8 @@ def _convert_expert_transition_to_residual(
     residual_xi: float,
     expert_reference_scale: float,
     clip_residual_to_unit: bool,
+    drop_projected_transitions: bool,
+    projection_epsilon: float,
     require_next_obs: bool,
     prompt: str,
     openpi_client: OpenPIChunkClient,
@@ -534,7 +602,7 @@ def _convert_expert_transition_to_residual(
     stack_horizon: int,
     debug_logger: Optional[logging.Logger] = None,
     debug_log_counter: Optional[List[int]] = None,
-) -> Optional[Tuple[Dict[str, Any], int]]:
+) -> Optional[_OfflineLoadResult]:
     """
     将专家 transition 转成残差 transition。
     关键公式：a_res_raw = (a_expert - a_base) / (limits * xi * expert_reference_scale)。
@@ -624,7 +692,13 @@ def _convert_expert_transition_to_residual(
         expert_action[control_indices] - base_action[control_indices]
     ) / denom
 
-    clipped_values = int(np.count_nonzero((raw_residual < -1.0) | (raw_residual > 1.0)))
+    clipped_values = _count_projected_values(raw_residual, epsilon=projection_epsilon)
+    if clipped_values > 0 and drop_projected_transitions:
+        return _OfflineLoadResult(
+            payload=None,
+            projected_values=int(clipped_values),
+            dropped_for_projection=True,
+        )
     if clip_residual_to_unit:
         raw_residual = np.clip(raw_residual, -1.0, 1.0)
 
@@ -702,8 +776,8 @@ def _convert_expert_transition_to_residual(
     if mask_value is not None:
         mask = _safe_float(mask_value, default=mask)
 
-    return (
-        {
+    return _OfflineLoadResult(
+        payload={
             "observations": obs_input,
             "actions": residual_step_action,
             "next_observations": _clone_obs_dict(next_obs_input),
@@ -711,7 +785,8 @@ def _convert_expert_transition_to_residual(
             "masks": np.float32(mask),
             "dones": bool(done),
         },
-        clipped_values,
+        projected_values=int(clipped_values),
+        dropped_for_projection=False,
     )
 
 
@@ -736,10 +811,17 @@ def _load_offline_residual_buffer(
         "files_total": 0,
         "files_loaded": 0,
         "files_missing": 0,
+        "manifest_files": 0,
+        "manifest_episodes": 0,
+        "manifest_source_transitions": 0,
+        "manifest_saved_transitions": 0,
+        "manifest_dropped_transitions": 0,
         "candidates": 0,
         "inserted": 0,
         "skipped": 0,
         "clipped_values": 0,
+        "projected_transitions": 0,
+        "dropped_projected_transitions": 0,
         "errors": 0,
     }
     max_error_logs = 20
@@ -748,12 +830,18 @@ def _load_offline_residual_buffer(
 
     offline_paths = _resolve_offline_paths(cfg.offline.dataset_paths, Path.cwd())
     stats["files_total"] = len(offline_paths)
+    stats.update(_collect_offline_manifest_stats(offline_paths))
     logger.info(
         "offline dataset_paths resolved: %d pkl files found", len(offline_paths)
     )
     if not offline_paths:
         logger.warning("offline.enabled=true but offline.dataset_paths is empty")
         return stats
+
+    drop_projected_transitions = bool(
+        cfg.offline.get("drop_projected_transitions", False)
+    )
+    projection_epsilon = float(cfg.offline.get("projection_epsilon", 1.0e-6))
 
     max_transitions = (
         int(cfg.offline.max_transitions)
@@ -828,6 +916,8 @@ def _load_offline_residual_buffer(
                         cfg.offline.accept_plain_preconverted
                     ),
                     clip_residual_to_unit=bool(cfg.offline.clip_residual_to_unit),
+                    drop_projected_transitions=drop_projected_transitions,
+                    projection_epsilon=projection_epsilon,
                 )
             except Exception as exc:  # noqa: BLE001
                 stats["skipped"] += 1
@@ -842,7 +932,15 @@ def _load_offline_residual_buffer(
                     logged_errors += 1
                 continue
             if prepared is not None:
-                offline_buffer.insert(prepared)
+                stats["clipped_values"] += int(prepared.projected_values)
+                if prepared.projected_values > 0:
+                    stats["projected_transitions"] += 1
+                if prepared.dropped_for_projection:
+                    stats["dropped_projected_transitions"] += 1
+                    stats["skipped"] += 1
+                    continue
+                assert prepared.payload is not None
+                offline_buffer.insert(prepared.payload)
                 stats["inserted"] += 1
                 continue
 
@@ -858,6 +956,8 @@ def _load_offline_residual_buffer(
                     residual_xi=residual_xi,
                     expert_reference_scale=float(cfg.offline.expert_reference_scale),
                     clip_residual_to_unit=bool(cfg.offline.clip_residual_to_unit),
+                    drop_projected_transitions=drop_projected_transitions,
+                    projection_epsilon=projection_epsilon,
                     require_next_obs=bool(cfg.offline.require_next_obs),
                     prompt=str(cfg.task.prompt),
                     openpi_client=openpi_client,
@@ -882,12 +982,34 @@ def _load_offline_residual_buffer(
                 stats["skipped"] += 1
                 continue
 
-            payload_dict, clipped_values = converted
-            stats["clipped_values"] += int(clipped_values)
-            offline_buffer.insert(payload_dict)
+            stats["clipped_values"] += int(converted.projected_values)
+            if converted.projected_values > 0:
+                stats["projected_transitions"] += 1
+            if converted.dropped_for_projection:
+                stats["dropped_projected_transitions"] += 1
+                stats["skipped"] += 1
+                continue
+            assert converted.payload is not None
+            offline_buffer.insert(converted.payload)
             stats["inserted"] += 1
 
     pbar.close()
+    logger.info(
+        (
+            "offline residual load summary: source=%s projected_transitions=%s "
+            "dropped_projected=%s inserted=%s skipped_other=%s manifests=%s"
+        ),
+        (
+            stats["manifest_saved_transitions"]
+            if stats["manifest_saved_transitions"] > 0
+            else stats["candidates"]
+        ),
+        stats["projected_transitions"],
+        stats["dropped_projected_transitions"],
+        stats["inserted"],
+        max(0, stats["skipped"] - stats["dropped_projected_transitions"]),
+        stats["manifest_files"],
+    )
     return stats
 
 

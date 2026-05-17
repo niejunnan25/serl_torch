@@ -1,636 +1,352 @@
-# LIBERO Example
+## LIBERO — Residual RL with OpenPI Base Policy
 
-这份 README 只描述当前 `examples/libero/` 目录里真实存在、还能对上的主流程。
+在 [LIBERO](https://github.com/Lifelong-Robot-Learning/LIBERO) 仿真基准上，以 OpenPI (pi0) 作为 frozen base policy，用 DRQ 学习残差强化学习：`final_action = base_action + alpha × residual_action`。
 
-如果你想先看仓库整体结构，请回到：
+### 前置条件
 
-- [../../README.md](../../README.md)
-
-## 这个目录现在负责什么
-
-`examples/libero/` 当前主要负责：
-
-- LIBERO 环境适配
-- local env 和 remote env server / client
-- residual offline data 准备与加载
-- residual RL 训练入口
-- 独立 residual checkpoint 评估入口
-- 训练期 eval
-- residual observation schema 和 typed config
-
-当前真正的主入口有五个：
-
-- [scripts/run_residual_training.py](scripts/run_residual_training.py)
-- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
-- [scripts/serve_env.py](scripts/serve_env.py)
-- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
-- [tools/serve_env.sh](tools/serve_env.sh)
-
-`scripts/process_eval_queue.py` 是训练期 eval worker，通常不需要手工启动；learner 在 `training.async_eval.enabled=true` 时会自动拉起它。
-
-## 目录结构
-
-- [configs/train_residual.yaml](configs/train_residual.yaml)
-  当前 canonical 训练配置
-- [configs/eval_residual.yaml](configs/eval_residual.yaml)
-  当前 canonical 评估配置
-- [config.py](config.py)
-  typed config 定义与解析
-- [scripts/run_residual_training.py](scripts/run_residual_training.py)
-  actor / learner 共用训练入口，通过 `runtime.role=actor|learner` 切角色
-- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
-  离线数据准备入口，默认也读取 `configs/train_residual.yaml`
-- [scripts/serve_env.py](scripts/serve_env.py)
-  LIBERO HTTP RPC env server
-- [offline_data.py](offline_data.py)
-  prepared offline dataset 的生成、manifest 校验和 replay 加载
-- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
-  checkpoint eval 入口
-- [scripts/process_eval_queue.py](scripts/process_eval_queue.py)
-  训练期 eval worker
-- [eval_runner.py](eval_runner.py)
-  评估主循环
-- [async_eval.py](async_eval.py)
-  训练期 eval runtime
-- [env/](env/)
-  本地 env、remote env、观测解析、LIBERO 路径 bootstrap
-- [residual_observation.py](residual_observation.py)
-  residual observation 构造和 observation space
-- [tools/serve_env.sh](tools/serve_env.sh)
-  env server shell wrapper
-- `outputs/`
-  历史运行产物，不是当前实现说明
-
-## 当前训练链路
-
-当前实现是一条 `base chunk policy + residual DRQ-SAC` 的异步 actor / learner 流程：
-
-1. actor 从 base policy backend 拉一个 `chunk_horizon` 长度的 `base_action_chunk`
-2. actor 用当前 observation 构造 residual observation：
-   - 图像
-   - `robot_proprio`
-   - `base_action`
-   - `base_action_chunk`
-   - `alpha`
-3. residual agent 输出 residual action chunk
-4. `ResidualActionSpec` 把 base chunk 和 residual chunk 组合成最终动作
-5. actor 与环境交互，把 transition 发给 learner
-6. learner 从 replay 采样，更新 DRQ-SAC，再通过 agentlace 广播参数给 actor
-
-当前 actor 在每次环境 step 后都会重新计算下一次 decision 的 `base_action_chunk`，所以它是：
-
-- step-wise receding-horizon residual training
-
-相关讨论可以看：
-
-- [docs/chunk_residual_mdp_discussion.md](docs/chunk_residual_mdp_discussion.md)
-
-## 支持的 backend
-
-### policy backend
-
-当前代码支持两种 chunk policy backend：
-
-- `policy.type=openpi`
-- `policy.type=joyra`
-
-对应 client 在：
-
-- [../../serl_launcher/serl_launcher/policy/openpi/client.py](../../serl_launcher/serl_launcher/policy/openpi/client.py)
-- [../../serl_launcher/serl_launcher/policy/joyra/client.py](../../serl_launcher/serl_launcher/policy/joyra/client.py)
-
-### env backend
-
-当前代码支持两种环境模式：
-
-- `env.backend=local`
-  actor 直接在本进程创建 `LiberoTaskEnv`
-- `env.backend=remote`
-  actor 通过 HTTP RPC 连接 env server
-
-当前默认主线仍然是 `env.backend=remote`。
-
-## 依赖和安装
-
-最常见的环境拆分是：
-
-- `serl_torch`
-  actor / learner / eval
-- `libero`
-  env server
-- 你自己的 policy server 环境
-  OpenPI 或 JoyRA
-
-最小安装通常至少包括：
+- NVIDIA GPU（至少 2 张，推荐 4 张）
+- Python ≥ 3.10，CUDA ≥ 12.0
+- LIBERO 数据集
+- OpenPI 模型权重（pi0_libero 或 pi0_10000）
+- 仓库已安装：`pip install -e ./serl_launcher && pip install -e .`
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
+CODE_ROOT=/path/to/serl_torch
+cd $CODE_ROOT
+source /path/to/conda/etc/profile.d/conda.sh
 conda activate serl_torch
-pip install -r serl_launcher/requirements.txt
-pip install -e ./serl_launcher
 ```
 
-`agentlace` 需要手工安装。
-
-如果你使用 `policy.type=openpi`，还需要：
+运行前必须登录实验管理平台（二选一）：
 
 ```bash
-pip install -e ./third_party/openpi-client
+swanlab login --relogin     # 默认，已全面转向 SwanLab
+wandb login                 # 可选，仍支持
 ```
 
-这只安装 vendored 的 client 包。  
-如果你还要启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并设置 `OPENPI_ROOT`。
+### 配置文件
 
-如果不是 editable install，可以补：
+配置文件位于 `examples/libero/configs/`，使用 Hydra YAML，文件名编码实验参数。训练模式直接写入配置名，并与 launcher 的 `--mode` 保持一致：
 
-```bash
-export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
+```
+{task}_{mode}_{alpha}_{data}_{entropy}_{std}_ports{prefix}.yaml
 ```
 
-## LIBERO 路径怎么解析
+| 字段 | 含义 |
+|------|------|
+| `spatial4` / `long3` | 任务 |
+| `chunk` / `processor` | residual 训练模式，对应 `--mode chunk` / `--mode processor` |
+| `alpha0p1` / `alpha0p2` / `alpha0p5` | 残差缩放系数 |
+| `unfiltered_offline` | 离线数据过滤策略 |
+| `noent` | backup_entropy=false |
+| `std0p5` / `std1p0` / `std5p0` | SAC std_max |
+| `ports53100` | 端口前缀（多实验共存） |
 
-[env/setup.py](env/setup.py) 会自动处理 LIBERO 相关路径。
-
-### `libero_root`
-
-优先级：
-
-1. 命令行传 `libero_root=...`
-2. 仓库内默认候选：
-   - `<repo>/third_party/LIBERO`
-   - 邻近 repo candidate
-
-要求这个目录必须是完整的 LIBERO checkout，至少包含：
-
-- `libero/libero/bddl_files`
-- `libero/libero/init_files`
-- `libero/libero/assets/scenes/libero_tabletop_base_style.xml`
-
-### `libero_config_dir`
-
-优先级：
-
-1. 命令行传 `libero_config_dir=...`
-2. 环境变量 `LIBERO_CONFIG_PATH`
-3. 默认缓存目录：
-   - `$XDG_CACHE_HOME/serl_torch/libero_config`
-   - 或 `~/.cache/serl_torch/libero_config`
-
-运行时会自动写 `config.yaml` 到这个目录，并设置 `LIBERO_CONFIG_PATH`。
-
-### `libero_datasets_root`
-
-优先级：
-
-1. 命令行传 `libero_datasets_root=...`
-2. 环境变量 `LIBERO_DATASETS_ROOT`
-3. 仓库邻近的默认候选目录
-
-## 当前默认配置
-
-canonical 训练配置是：
-
-- [configs/train_residual.yaml](configs/train_residual.yaml)
-
-当前 `scripts/run_residual_training.py` 和 `scripts/prepare_offline_data.py` 都默认读取这份配置；也就是说，prepare / train 共用同一套 `task`、`policy`、`obs`、`residual` 默认值。
-
-当前默认关键参数：
-
-- `task.suite_name=libero_10`
-- `task.task_id=8`
-- `runtime.role=actor`
-- `policy.type=openpi`
-- `policy.host=localhost`
-- `policy.port=30001`
-- `env.backend=remote`
-- `env.remote.host=127.0.0.1`
-- `env.remote.port=30000`
-- `env.action_dim=7`
-- `residual.alpha=0.1`
-- `residual.chunk_horizon=5`
-- `offline.prepared_path=data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1`
-- `offline.prepare.output_root=data/residual/offline_data`
-- `training.training_starts=1000`
-- `training.steps_per_update=30`
-- `training.critic_actor_ratio=4`
-- `training.max_env_steps=300000`
-- `training.max_update_steps=300000`
-
-当前配置解析还有两个显式约束：
-
-- `obs.stack_horizon` 目前必须是 `1`
-- `encoder.use_proprio=true` 时，`obs.vector_obs_keys` 不能为空
-
-## 推荐启动顺序
-
-最常见的主线至少会开 4 个终端：
-
-1. LIBERO env server
-2. base policy server
-3. 可选：offline data prepare
-4. learner
-5. actor
-
-如果开训练期 async eval，再额外起一个独立的 eval env server。
-
-## 1. 启动 LIBERO env server
-
-从 repo root：
+CLI 覆盖：
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
-bash examples/libero/tools/serve_env.sh \
-  --host 127.0.0.1 \
-  --port 30000
+policy.type=joyra
+policy.port=9001
+task.suite_name=libero_10
+residual.alpha=0.3
 ```
 
-`tools/serve_env.sh` 会：
+### 关键超参数
 
-- 切到 `examples/libero/`
-- 尝试初始化 conda
-- 优先使用你显式指定的 Python / env
-- 默认尝试激活 `/vla/users/niejunnan/envs/libero`
-- 最终执行 `scripts/serve_env.py`
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `residual.alpha` | 0.1 | 残差缩放系数 |
+| `residual.chunk_horizon` | 5 | 每次决策预测的动作块长度 |
+| `sac.learning_rate` | 3e-4 | 学习率 |
+| `sac.std_max` | 5.0 | 策略标准差上限，常用 1.0 或 0.5 |
+| `sac.backup_entropy` | true | TD target 中是否包含熵项 |
+| `sac.utd_ratio` | 1 | 每步更新次数，常用 4 |
+| `training.training_starts` | 1000 | 收集多少步后开始训练 |
+| `training.max_env_steps` | 300000 | 最大环境交互步数 |
+| `offline.enabled` | false | 是否混入离线专家数据 |
+| `offline.ratio` | 0.5 | 每个 batch 中离线数据占比 |
+| `offline.prepared_path` | null | 预处理离线数据目录 |
 
-常见可覆盖环境变量：
+### 准备离线数据
 
-- `LIBERO_CONDA_ENV`
-- `LIBERO_CONDA_PREFIX`
-- `LIBERO_PYTHON_BIN`
+离线数据本质上是**残差 MDP 的 replay buffer**：对 LIBERO 专家演示的每一帧，用 base policy 推理出 `base_action_chunk`，将专家动作投影为残差动作 `residual = (expert - base) / alpha`，再构建残差 observation（robot state + 图像 + base_action_chunk + alpha），写入 `(obs, residual_action, next_obs, reward, mask)` 的 transition 序列。
 
-例如：
+**哪些参数变化后需要重新生成？** 以下任一参数变了，离线数据就不可复用（训练启动时 `manifest.json` 会校验，不匹配直接报错）：
 
-```bash
-LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30000
-```
+| 类别 | 参数 | 为什么影响数据 |
+|------|------|---------------|
+| 任务 | `task.suite_name` + `task.task_id` | 不同的专家演示数据 |
+| Base policy | `policy.type` + 具体 checkpoint | 不同 checkpoint 输出的 base_action_chunk 不同，残差 observation 里的 base 部分就不同 |
+| 残差 | `residual.alpha` | 残差 observation 中包含 alpha |
+| 残差 | `residual.chunk_horizon` | base_action_chunk 的长度 |
+| 残差 | `residual.action_mask` | 哪些动作维度被残差控制 |
+| 残差 | `residual.action_limits` | 投影时每维的幅度上限 |
+| 残差 | `residual.clip_gripper` | 夹爪维度是否裁剪 |
+| 观测 | `obs.image_keys` | 哪些摄像头图像被编码 |
+| 观测 | `obs.vector_obs_keys` | 哪些本体感受状态被编码 |
+| 离线准备 | `offline.prepare.expert_reference_scale` | 专家动作投影公式中的缩放系数 |
+| 离线准备 | `offline.prepare.clip_residual_to_unit` | 投影后是否裁剪到 [-1, 1] |
+| 离线准备 | `offline.prepare.filter_unrepresentable_steps` | 是否过滤掉 base policy 无法表示的步骤 |
 
-如果你启用 async eval，还需要单独起一个 eval env server，例如：
+目录名只编码了其中 5 个维度（task、backend、chunk、alpha），其余通过 `manifest.json` 的兼容性指纹校验。
 
-```bash
-LIBERO_CONDA_ENV=libero bash examples/libero/tools/serve_env.sh --port 30010
-```
-
-这个端口必须和 `training.async_eval.env.remote.port` 对齐，并且不能和训练 actor 的 `env.remote.port` 相同。
-
-## 2. 启动 base policy server
-
-如果你使用 `policy.type=openpi`，当前目录已经提供了两个常用 wrapper：
-
-- [tools/serve_openpi_policy.sh](tools/serve_openpi_policy.sh)
-  默认启动 `pi0_libero`
-- [tools/serve_openpi_10000_policy.sh](tools/serve_openpi_10000_policy.sh)
-  默认启动 `pi0_10000`
-
-最常见的启动方式：
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch
-bash examples/libero/tools/serve_openpi_policy.sh \
-  --gpu-id 0 \
-  --port 30001
-```
-
-如果你更想用 `pi0_10000`，可以换成：
+**终端 1 — 启动 Policy Server：**
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch
 bash examples/libero/tools/serve_openpi_10000_policy.sh \
+  --port 55101 \
+  --gpu-id 6
+```
+
+**终端 2 — 运行 prepare：**
+
+```bash
+python examples/libero/scripts/run_residual_offline_prepare.py \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
+  policy.host=127.0.0.1 \
+  policy.port=55101 \
+  offline.prepare.output_root=data/residual/offline_data
+```
+
+以 spatial task 4、alpha=0.1、pi0_10000、chunk_horizon=5 为例，生成后目录树：
+
+```
+data/residual/offline_data/
+└── libero_spatial_task_4/
+    └── openpi_pi0_10000_chunk5_alpha0p1/
+        ├── manifest.json           # 上述所有 12 项参数的兼容性指纹
+        ├── episode_000000.pkl      # 每个 episode 的 transition 列表
+        ├── episode_000001.pkl
+        └── ...
+```
+
+每个 `.pkl` 是 `list[dict]`，每条 transition 包含 `observations`、`actions`（残差动作）、`next_observations`、`rewards`、`masks`、`dones`。
+
+prepare 完成后，将生成的目录路径（`manifest.json` 所在的父目录）填入训练配置：
+
+```yaml
+offline:
+  enabled: true
+  ratio: 0.5
+  prepared_path: data/residual/offline_data/libero_spatial_task_4/openpi_pi0_10000_chunk5_alpha0p1
+```
+
+### 启动训练
+
+提供两种方式：一键脚本（推荐日常使用）和手动多终端（适合调试）。
+
+#### 方式一：一键启动
+
+```bash
+bash examples/libero/tools/launch_residual_training.sh \
+  --mode chunk \
+  --config-file examples/libero/configs/spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100.yaml \
+  --output-root examples/libero/outputs/my_first_experiment \
+  --learner-gpu 1 \
+  --actor-gpu 0 \
+  --env-gpu 0 \
+  --policy-gpu 0 \
+  --libero-root third_party/LIBERO \
+  --libero-datasets-root /path/to/libero/datasets \
+  --openpi-root /path/to/openpi \
+  --policy-dir /path/to/openpi/checkpoint \
+  --with-eval-env \
+  --clean-output-dir
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--mode` | residual 训练模式：`step` / `chunk` / `processor`（必须与配置名中的 mode 一致，日常最常用 `chunk`） |
+| `--config-file` | Hydra YAML 配置文件路径 |
+| `--output-root` | 输出目录（日志、checkpoint、结果） |
+| `--learner-gpu` / `--actor-gpu` / `--env-gpu` / `--policy-gpu` | 各进程 GPU 分配 |
+| `--libero-root` / `--libero-datasets-root` | LIBERO 安装和数据路径 |
+| `--openpi-root` / `--policy-dir` | OpenPI 仓库和模型权重路径 |
+| `--with-eval-env` | 启用异步评估 |
+| `--clean-output-dir` | 重跑时清空旧输出目录 |
+
+#### 方式二：手动多终端
+
+适合调试、单步验证，每个进程在独立终端中运行。
+
+默认 Hydra 输出路径由 `train_residual_step.yaml` 中的 `hydra.run.dir` 决定：
+
+```
+${launch.output_root}/${hydra:job.config_name}/${now:%Y-%m-%d_%H-%M-%S}
+```
+
+以下示例使用端口前缀 31000，手动覆盖 `hydra.run.dir` 使输出结构与一键启动一致。
+
+**终端 1 — Train Env：**
+
+```bash
+python examples/libero/scripts/serve_env.py \
+  task.suite_name=libero_spatial \
+  task.task_id=4 \
+  env.remote.port=31000
+```
+
+**终端 2 — Eval Env（异步评估，可选）：**
+
+```bash
+python examples/libero/scripts/serve_env.py \
+  task.suite_name=libero_spatial \
+  task.task_id=4 \
+  env.remote.port=31003
+```
+
+**终端 3 — Policy Server：**
+
+```bash
+bash examples/libero/tools/serve_openpi_policy.sh \
+  --port 31001 \
   --gpu-id 0 \
-  --port 30001
+  --policy-dir /path/to/openpi/checkpoint
 ```
 
-当然，你也可以自己准备一个兼容当前 client 协议的服务，并让它监听：
-
-- `policy.host`
-- `policy.port`
-
-默认配置下是：
-
-- `localhost:30001`
-
-切到 JoyRA 时，最常见的是：
+**终端 4 — Learner：**
 
 ```bash
-policy.type=joyra policy.port=9001
-```
-
-## 3. 准备 offline data（可选）
-
-如果你想使用 residual offline data，当前 canonical 入口是：
-
-- [scripts/prepare_offline_data.py](scripts/prepare_offline_data.py)
-
-它默认也读取：
-
-- [configs/train_residual.yaml](configs/train_residual.yaml)
-
-也就是说，如果你不额外 override，prepare 会直接使用当前训练默认配置里的：
-
-- `task.suite_name`
-- `task.task_id`
-- `policy.host`
-- `policy.port`
-- `residual.alpha`
-- `residual.chunk_horizon`
-- `offline.prepare.output_root`
-
-最常见的准备方式：
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/prepare_offline_data.py \
-  offline.enabled=true \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets
-```
-
-这一步依赖：
-
-- LIBERO demo 数据可被 `libero_datasets_root` 找到
-- base policy server 已经在 `policy.host:policy.port` 上启动
-
-默认配置下，prepared 数据会生成到：
-
-```text
-data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1
-```
-
-prepare 完成后，脚本会在终端打印下一步 learner 命令。
-
-## 4. 启动 learner
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
+python examples/libero/scripts/train_residual_chunk.py \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
   runtime.role=learner \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
-```
-
-如果你要加载 prepared offline data，最常见的 learner 命令是：
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
-  runtime.role=learner \
-  offline.enabled=true \
-  offline.prepared_path=data/residual/offline_data/libero_10_task_8/openpi_chunk5_alpha0p1 \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
-```
-
-如果你希望结果写到固定目录，可以加：
-
-```bash
-hydra.run.dir=/abs/path/to/run_dir
-```
-
-## 5. 启动 actor
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
-  runtime.role=actor \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
-```
-
-## 6. actor / learner 必须对齐的配置
-
-至少下面这些字段需要一致：
-
-- `runtime.trainer_host`
-- `runtime.trainer_port`
-- `runtime.broadcast_port`
-- `policy.type`
-- `policy.host`
-- `policy.port`
-- `residual.chunk_horizon`
-- `env.action_dim`
-
-如果用 remote env，还需要对齐：
-
-- `env.remote.host`
-- `env.remote.port`
-
-## 7. 启用训练期 eval
-
-当前训练期 eval 由 learner 自动拉起 worker，内部仍然通过 async worker 实现。
-
-已知的 episode 触发语义风险说明见：
-
-- [docs/async_eval_episode_trigger_risk.md](docs/async_eval_episode_trigger_risk.md)
-
-最小要求：
-
-- `training.async_eval.enabled=true`
-- 单独起一个 dedicated eval env server
-- `training.async_eval.env.backend=remote`
-- `training.async_eval.env.remote.host/port` 不得和训练 env 相同
-
-最常见的启动方式：
-
-```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/run_residual_training.py \
-  runtime.role=learner \
+  runtime.trainer_port=31004 \
+  runtime.broadcast_port=31005 \
+  runtime.data_port=31006 \
+  task.suite_name=libero_spatial \
+  task.task_id=4 \
+  policy.port=31001 \
+  env.backend=remote \
+  env.remote.port=31000 \
   training.async_eval.enabled=true \
-  training.async_eval.env.remote.host=127.0.0.1 \
-  training.async_eval.env.remote.port=30010
+  training.async_eval.env.backend=remote \
+  training.async_eval.env.remote.port=31003 \
+  launch.output_root=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0 \
+  hydra.run.dir=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0/learner
 ```
 
-训练期 eval 相关产物默认会写在当前 Hydra run dir 下，例如：
-
-- `async_eval_queue.jsonl`
-- `async_eval_results.jsonl`
-- `async_eval_worker.log`
-- `async_eval_checkpoints/`
-- `async_eval_runs/`
-
-### `libero_spatial task4` 完整启动示例
-
-如果你要直接运行：
-
-- `configs/train_residual_libero_spatial_task4.yaml`
-
-可以按下面这 5 个终端分别启动。这个例子使用：
-
-- `train env`: `127.0.0.1:30100`
-- `policy`: `127.0.0.1:30101`
-- `eval env`: `127.0.0.1:30110`
-- `learner`: `GPU 5`
-- `actor + policy`: `GPU 6`
-
-1. `pi0_10000` policy server
+**终端 5 — Actor：**
 
 ```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate openpi-modified
-export CUDA_VISIBLE_DEVICES=6
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
-export PYTHONPATH=/vla/users/niejunnan/codebase/openpi/src:${PYTHONPATH}
-cd /vla/users/niejunnan/codebase/openpi
-uv run scripts/serve_policy.py \
-  --port 30101 \
-  policy:checkpoint \
-  --policy.config=pi0_libero_baseline_10_bs32_150000 \
-  --policy.dir=/vla/users/niejunnan/assets/openpi-assets/serl_torch_ckpt/pi0_10000
-```
-
-2. 训练 env server
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate /vla/users/niejunnan/envs/libero
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-python scripts/serve_env.py --host 127.0.0.1 --port 30100
-```
-
-3. eval env server
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate /vla/users/niejunnan/envs/libero
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-python scripts/serve_env.py --host 127.0.0.1 --port 30110
-```
-
-4. learner
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate serl_torch
-export CUDA_VISIBLE_DEVICES=5
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-python scripts/run_residual_training.py \
-  --config-name train_residual_libero_spatial_task4 \
-  runtime.role=learner \
-  policy.port=30101 \
-  env.remote.port=30100 \
-  training.async_eval.env.remote.port=30110 \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets
-```
-
-5. actor
-
-```bash
-source /vla/miniconda3/etc/profile.d/conda.sh
-conda activate serl_torch
-export CUDA_VISIBLE_DEVICES=6
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-python scripts/run_residual_training.py \
-  --config-name train_residual_libero_spatial_task4 \
+python examples/libero/scripts/train_residual_chunk.py \
+  --config-name spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0_ports53100 \
   runtime.role=actor \
-  policy.port=30101 \
-  env.remote.port=30100 \
-  training.async_eval.env.remote.port=30110 \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets
+  runtime.trainer_port=31004 \
+  runtime.broadcast_port=31005 \
+  runtime.data_port=31006 \
+  task.suite_name=libero_spatial \
+  task.task_id=4 \
+  policy.port=31001 \
+  env.backend=remote \
+  env.remote.port=31000 \
+  launch.output_root=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0 \
+  hydra.run.dir=examples/libero/outputs/spatial_4_0514/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std1p0/actor
 ```
 
-## 8. 跑 checkpoint eval
+### 单独评估 Checkpoint
 
-评估和训练 actor 一样，仍然依赖两个外部服务先启动好：
-
-- LIBERO env server
-- base policy server
-
-当前 canonical eval 配置是：
-
-- [configs/eval_residual.yaml](configs/eval_residual.yaml)
-
-最常见的评估命令：
+**终端 1 — Env Server：**
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/libero
-conda run -n serl_torch python scripts/evaluate_checkpoint.py \
-  eval.checkpoint_path=/abs/path/to/checkpoints \
-  eval.episodes=20 \
+python examples/libero/scripts/serve_env.py \
+  task.suite_name=libero_spatial \
+  task.task_id=4 \
+  env.remote.port=41000
+```
+
+**终端 2 — Policy Server：**
+
+```bash
+bash examples/libero/tools/serve_openpi_policy.sh \
+  --port 41001 \
+  --gpu-id 0 \
+  --policy-dir /path/to/openpi/checkpoint
+```
+
+**终端 3 — 评估 residual checkpoint：**
+
+```bash
+python examples/libero/scripts/run_residual_eval.py \
+  --config-name eval_residual \
+  eval.checkpoint_path=/path/to/checkpoint \
+  eval.episodes=50 \
   eval.deterministic=true \
-  libero_root=/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO \
-  libero_datasets_root=/vla/users/niejunnan/datasets \
-  encoder.resnet.model_name=/vla/users/niejunnan/codebase/serl_torch/pretrained_models/microsoft--resnet-18
+  task.suite_name=libero_spatial \
+  task.task_id=4 \
+  policy.host=127.0.0.1 \
+  policy.port=41001 \
+  env.remote.host=127.0.0.1 \
+  env.remote.port=41000 \
+  hydra.run.dir=examples/libero/outputs/eval/spatial_4/checkpoint_$(basename /path/to/checkpoint)
 ```
 
-`eval.checkpoint_path` 支持两种输入：
-
-- 单个 checkpoint 文件，例如 `checkpoint_25000.pt`
-- checkpoint 目录，此时会自动选最新的 `checkpoint_*.pt`
-
-如果你想指定目录里的某个 step，可以再传：
+**只评估 base policy（不加载 residual）：**
 
 ```bash
-eval.checkpoint_step=25000
+python examples/libero/scripts/run_residual_eval.py \
+  --config-name eval_residual \
+  eval.checkpoint_path=null \
+  eval.episodes=50 \
+  eval.deterministic=true \
+  task.suite_name=libero_spatial \
+  task.task_id=4 \
+  policy.host=127.0.0.1 \
+  policy.port=41001 \
+  env.remote.host=127.0.0.1 \
+  env.remote.port=41000 \
+  hydra.run.dir=examples/libero/outputs/eval/spatial_4/base_policy_only
 ```
 
-如果把 `eval.checkpoint_path=null`，脚本会退化成 base-policy-only eval，并把 residual action 置零。
+### 输出目录结构
 
-## 常见 overrides
-
-切 JoyRA：
-
-```bash
-policy.type=joyra policy.port=9001
+```
+${RUN_ROOT}/
+├── services/
+│   ├── train_env.log
+│   ├── eval_env.log
+│   └── policy.log
+├── learner/
+│   ├── train_residual_*.log
+│   ├── learner_timers.jsonl
+│   ├── async_eval_results.jsonl
+│   └── checkpoints/
+├── actor/
+│   ├── train_residual_*.log
+│   ├── actor_timers.jsonl
+│   └── episode_logs.jsonl
+└── .launcher/
+    ├── commands/
+    └── pids/
 ```
 
-改任务：
+### 日志与监控
 
-```bash
-task.suite_name=libero_10 task.task_id=0
-```
+训练指标通过 SwanLab 上传（也兼容 WandB）。
 
-改 remote env 地址：
+| 日志文件 | 内容 |
+|----------|------|
+| `actor/episode_logs.jsonl` | 每 episode 成功率、步数、奖励 |
+| `learner/async_eval_results.jsonl` | 异步评估确定性成功率 |
+| `learner/learner_timers.jsonl` | Learner 各阶段耗时 |
+| `actor/actor_timers.jsonl` | Actor 各阶段耗时 |
 
-```bash
-env.remote.host=127.0.0.1 env.remote.port=30000
-```
+### 常见问题
 
-改 ResNet 本地路径：
+**GPU 显存不足** — 降低 `replay.batch_size`（如 64），或减少 encoder bottleneck_dim（如 128）。
 
-```bash
-encoder.resnet.model_name=/abs/path/to/microsoft--resnet-18
-```
+**端口冲突** — 每个实验使用唯一的端口前缀，如 `ports53100` 和 `ports53300` 可同时运行。
 
-## 输出目录
+**训练不收敛** — 排查顺序：
+1. 确认 base policy 单独评估成功率（`eval.checkpoint_path=null`）
+2. 查看 `entropy_per_dim` 是否持续下降
+3. 调高 `residual.alpha`（0.2 → 0.3 → 0.5）
+4. 确保 `offline.enabled=true` 且 `offline.ratio=0.5`
+5. 降低 `sac.std_max`（1.0 或 0.5）
 
-默认 Hydra 输出目录来自配置：
+**异步评估没有输出** — 检查 `training.async_eval.enabled=true`，确认 `services/eval_env.log` 正常。
 
-- `launch.output_root=outputs/libero`
+### 相关文档
 
-训练默认写到：
-
-```text
-outputs/libero/train_residual/<timestamp>/
-```
-
-评估默认写到：
-
-```text
-outputs/libero/eval_residual/<suite>_task_<id>/<timestamp>/
-```
-
-典型内容包括：
-
-- `summary.json`
-- `episode_logs.jsonl`
-- `checkpoints/`
-- `wandb/`
-- async eval 相关 JSONL / worker log / eval run 子目录
-
-## 实现上的当前边界
-
-当前这条主线已经不再依赖很多旧入口。新的 LIBERO 工作最好围绕下面这些文件展开：
-
-- [config.py](config.py)
-- [scripts/run_residual_training.py](scripts/run_residual_training.py)
-- [scripts/evaluate_checkpoint.py](scripts/evaluate_checkpoint.py)
-- [env/](env/)
-- [residual_observation.py](residual_observation.py)
-- `serl_launcher/serl_launcher/policy/*`
-- `serl_launcher/serl_launcher/residual/*`
-
-如果你在旧笔记里看到已经不存在的脚本名，请以当前目录树和这份 README 为准。
+- [个人训练备忘](commands.md)
+- [Chunk Residual MDP 讨论](docs/chunk_residual_mdp_discussion.md)
+- [SERL Launcher 库文档](../../serl_launcher/README.md)

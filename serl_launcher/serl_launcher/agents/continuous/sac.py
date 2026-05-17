@@ -1,6 +1,7 @@
 import copy
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+import time
 from typing import Any, FrozenSet, Mapping, Optional, Tuple
 
 import numpy as np
@@ -25,6 +26,16 @@ _AUTOCAST_TORCH_DTYPES = {
 }
 
 
+def _profile_add(profile: Optional[dict[str, float]], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+def _profile_count(profile: Optional[dict[str, float]], key: str) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + 1.0
+
+
 def _clip_gripper_last_dim(actions: torch.Tensor) -> torch.Tensor:
     if actions.shape[-1] <= 0:
         return actions
@@ -39,7 +50,9 @@ def _coerce_single_action(actions: np.ndarray) -> np.ndarray:
     if action.ndim == 2 and action.shape[0] == 1:
         action = action[0]
     if action.ndim != 1:
-        raise ValueError(f"Expected single action shape (A,) or (1, A), got {action.shape}")
+        raise ValueError(
+            f"Expected single action shape (A,) or (1, A), got {action.shape}"
+        )
     return np.asarray(action, dtype=np.float32)
 
 
@@ -116,7 +129,9 @@ class _LegacyResidualCombinedActionTransform:
                     f"{action_mask.shape[-1]} != {expected_critic_dim}"
                 )
             projected = action_mask.reshape(
-                *action_mask.shape[:-1], int(self.chunk_horizon), int(self.full_action_dim)
+                *action_mask.shape[:-1],
+                int(self.chunk_horizon),
+                int(self.full_action_dim),
             )
             projected = projected.index_select(dim=-1, index=control_indices)
             projected = projected.reshape(*projected.shape[:-2], -1)
@@ -189,9 +204,8 @@ class _LegacyResidualCombinedActionTransform:
     ) -> torch.Tensor:
         if base_chunk.ndim != 3:
             raise ValueError(f"Unexpected base action chunk shape: {base_chunk.shape}")
-        if (
-            base_chunk.shape[1] != int(self.chunk_horizon)
-            or base_chunk.shape[2] != int(self.full_action_dim)
+        if base_chunk.shape[1] != int(self.chunk_horizon) or base_chunk.shape[2] != int(
+            self.full_action_dim
         ):
             raise ValueError(
                 "Unexpected base action chunk dims: "
@@ -225,7 +239,9 @@ class _LegacyResidualCombinedActionTransform:
             )
             if self.clip_gripper and final_chunk.shape[-1] > 0:
                 final_chunk = _clip_gripper_last_dim(final_chunk)
-            return final_chunk.reshape(-1, int(self.chunk_horizon * self.full_action_dim))
+            return final_chunk.reshape(
+                -1, int(self.chunk_horizon * self.full_action_dim)
+            )
 
         if clipped.ndim == 3:
             residual_chunk = clipped.reshape(
@@ -297,13 +313,43 @@ def _to_torch(data, device: torch.device):
     return tensor
 
 
+def _detach_metric(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach()
+    return value
+
+
+def _metric_mean(value):
+    if isinstance(value, torch.Tensor):
+        return value.mean().detach()
+    return value
+
+
+def _metric_active_dims(mask, fallback: int):
+    if mask is None:
+        return float(fallback)
+    return mask.to(dtype=torch.float32).sum(dim=-1).mean().detach()
+
+
 def _tree_mean(values):
     out = {}
     for key in values[0].keys():
         valid = [v[key] for v in values if key in v]
         if not valid:
             continue
-        out[key] = float(np.mean(valid))
+        if any(isinstance(value, torch.Tensor) for value in valid):
+            metric_device = next(
+                value.device for value in valid if isinstance(value, torch.Tensor)
+            )
+            tensors = []
+            for value in valid:
+                if isinstance(value, torch.Tensor):
+                    tensors.append(value.detach())
+                else:
+                    tensors.append(torch.as_tensor(value, device=metric_device))
+            out[key] = torch.stack(tensors).mean()
+        else:
+            out[key] = float(np.mean(valid))
     return out
 
 
@@ -414,6 +460,23 @@ class SACAgent:
             device_type="cuda",
             dtype=_AUTOCAST_TORCH_DTYPES[mixed_precision_cfg["dtype"]],
         )
+
+    @staticmethod
+    @contextmanager
+    def _temporarily_freeze_params(module: Optional[nn.Module]):
+        if module is None:
+            yield
+            return
+
+        params = list(module.parameters())
+        previous_requires_grad = [param.requires_grad for param in params]
+        for param in params:
+            param.requires_grad_(False)
+        try:
+            yield
+        finally:
+            for param, requires_grad in zip(params, previous_requires_grad):
+                param.requires_grad_(requires_grad)
 
     def forward_critic(
         self, observations: Data, actions: torch.Tensor, train: bool = True
@@ -788,15 +851,15 @@ class SACAgent:
             critic_loss = td_critic_loss + calql_alpha * cql_penalty
 
         info = {
-            "critic_loss": float(critic_loss.detach().cpu()),
-            "critic_td_loss": float(td_critic_loss.detach().cpu()),
-            "critic_cql_penalty": float(cql_penalty.detach().cpu()),
-            "predicted_qs": float(predicted_qs.mean().detach().cpu()),
-            "target_qs": float(target_qs.mean().detach().cpu()),
-            "predicted_q_min": float(predicted_q_min.mean().detach().cpu()),
-            "predicted_q_max": float(predicted_q_max.mean().detach().cpu()),
-            "predicted_q_std": float(predicted_q_std.mean().detach().cpu()),
-            "predicted_q_gap": float(predicted_q_gap.mean().detach().cpu()),
+            "critic_loss": _detach_metric(critic_loss),
+            "critic_td_loss": _detach_metric(td_critic_loss),
+            "critic_cql_penalty": _detach_metric(cql_penalty),
+            "predicted_qs": _metric_mean(predicted_qs),
+            "target_qs": _metric_mean(target_qs),
+            "predicted_q_min": _metric_mean(predicted_q_min),
+            "predicted_q_max": _metric_mean(predicted_q_max),
+            "predicted_q_std": _metric_mean(predicted_q_std),
+            "predicted_q_gap": _metric_mean(predicted_q_gap),
             "batch_size": int(batch_size),
             "otf_num_samples": int(self.config.get("otf_num_samples", 1)),
             "calql_alpha": float(calql_alpha),
@@ -841,22 +904,17 @@ class SACAgent:
         actor_loss = -torch.mean(actor_objective)
 
         info = {
-            "actor_loss": float(actor_loss.detach().cpu()),
-            "temperature": float(temperature.detach().cpu()),
-            "entropy": float((-log_probs.mean()).detach().cpu()),
-            "log_prob": float(log_probs.mean().detach().cpu()),
-            "policy_active_dims": float(
-                policy_action_mask.to(dtype=torch.float32)
-                .sum(dim=-1)
-                .mean()
-                .detach()
-                .cpu()
-            )
-            if policy_action_mask is not None
-            else float(policy_actions.shape[-1]),
-            "actor_predicted_q": float(predicted_q.mean().detach().cpu()),
-            "actor_predicted_q_min": float(predicted_q_min.mean().detach().cpu()),
-            "actor_predicted_q_std": float(predicted_q_std.mean().detach().cpu()),
+            "actor_loss": _detach_metric(actor_loss),
+            "temperature": _detach_metric(temperature),
+            "entropy": _detach_metric(-log_probs.mean()),
+            "log_prob": _metric_mean(log_probs),
+            "policy_active_dims": _metric_active_dims(
+                policy_action_mask,
+                fallback=int(policy_actions.shape[-1]),
+            ),
+            "actor_predicted_q": _metric_mean(predicted_q),
+            "actor_predicted_q_min": _metric_mean(predicted_q_min),
+            "actor_predicted_q_std": _metric_mean(predicted_q_std),
         }
 
         return actor_loss, info
@@ -891,23 +949,16 @@ class SACAgent:
         penalty = self.temperature_lagrange_penalty(entropy)
         temperature_loss = penalty.mean() if penalty.ndim > 0 else penalty
         return temperature_loss, {
-            "temperature_loss": float(temperature_loss.detach().cpu()),
-            "temperature_entropy": float(entropy.detach().cpu()),
-            "target_entropy": float(target_entropy.detach().cpu()),
-            "target_entropy_abs": float(target_entropy_abs.detach().cpu()),
-            "target_entropy_gap": float((entropy - target_entropy_abs).detach().cpu()),
-            "temperature_constraint_gap": float(
-                (entropy - target_entropy).detach().cpu()
+            "temperature_loss": _detach_metric(temperature_loss),
+            "temperature_entropy": _detach_metric(entropy),
+            "target_entropy": _detach_metric(target_entropy),
+            "target_entropy_abs": _detach_metric(target_entropy_abs),
+            "target_entropy_gap": _detach_metric(entropy - target_entropy_abs),
+            "temperature_constraint_gap": _detach_metric(entropy - target_entropy),
+            "temperature_policy_active_dims": _metric_active_dims(
+                policy_action_mask,
+                fallback=int(policy_actions.shape[-1]),
             ),
-            "temperature_policy_active_dims": float(
-                policy_action_mask.to(dtype=torch.float32)
-                .sum(dim=-1)
-                .mean()
-                .detach()
-                .cpu()
-            )
-            if policy_action_mask is not None
-            else float(policy_actions.shape[-1]),
         }
 
     def update(
@@ -918,34 +969,87 @@ class SACAgent:
         networks_to_update: FrozenSet[str] = frozenset(
             {"actor", "critic", "temperature"}
         ),
+        profile: Optional[dict[str, float]] = None,
+        batch_is_torch: bool = False,
     ) -> Tuple["SACAgent", dict]:
         del pmap_axis
-        batch = _to_torch(batch, self.device)
+        _profile_count(profile, "sac_update_calls")
+        if not bool(batch_is_torch):
+            start = time.perf_counter()
+            batch = _to_torch(batch, self.device)
+            _profile_add(profile, "sac_to_torch_sec", time.perf_counter() - start)
         info = {}
 
         if "critic" in networks_to_update:
+            _profile_count(profile, "critic_update_calls")
+            start = time.perf_counter()
             self.state.zero_grad(["critic"])
+            _profile_add(profile, "critic_zero_grad_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             with self._autocast_context():
                 critic_loss, critic_info = self.critic_loss_fn(batch)
+            _profile_add(profile, "critic_loss_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             critic_loss.backward()
+            _profile_add(profile, "critic_backward_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             self.state.optimizer_step("critic")
+            _profile_add(
+                profile, "critic_optimizer_step_sec", time.perf_counter() - start
+            )
+            start = time.perf_counter()
             self.state.target_update(self.config["soft_target_update_rate"])
+            _profile_add(profile, "target_update_sec", time.perf_counter() - start)
             info.update(critic_info)
 
         if "actor" in networks_to_update:
-            self.state.zero_grad(["actor"])
-            with self._autocast_context():
-                actor_loss, actor_info = self.policy_loss_fn(batch)
-            actor_loss.backward()
-            self.state.optimizer_step("actor")
-            info.update(actor_info)
+            _profile_count(profile, "actor_update_calls")
+            # Actor loss needs dQ/da through the critic, but critic parameters are
+            # not stepped by the actor optimizer. Freezing them avoids computing
+            # unused critic parameter gradients while keeping the action gradient.
+            with self._temporarily_freeze_params(self.state.modules.get("critic")):
+                start = time.perf_counter()
+                self.state.zero_grad(["actor"])
+                _profile_add(
+                    profile, "actor_zero_grad_sec", time.perf_counter() - start
+                )
+                start = time.perf_counter()
+                with self._autocast_context():
+                    actor_loss, actor_info = self.policy_loss_fn(batch)
+                _profile_add(profile, "actor_loss_sec", time.perf_counter() - start)
+                start = time.perf_counter()
+                actor_loss.backward()
+                _profile_add(profile, "actor_backward_sec", time.perf_counter() - start)
+                start = time.perf_counter()
+                self.state.optimizer_step("actor")
+                _profile_add(
+                    profile, "actor_optimizer_step_sec", time.perf_counter() - start
+                )
+                info.update(actor_info)
 
         if "temperature" in networks_to_update:
+            _profile_count(profile, "temperature_update_calls")
+            start = time.perf_counter()
             self.state.zero_grad(["temperature"])
+            _profile_add(
+                profile, "temperature_zero_grad_sec", time.perf_counter() - start
+            )
+            start = time.perf_counter()
             with self._autocast_context():
                 temperature_loss, temperature_info = self.temperature_loss_fn(batch)
+            _profile_add(profile, "temperature_loss_sec", time.perf_counter() - start)
+            start = time.perf_counter()
             temperature_loss.backward()
+            _profile_add(
+                profile, "temperature_backward_sec", time.perf_counter() - start
+            )
+            start = time.perf_counter()
             self.state.optimizer_step("temperature")
+            _profile_add(
+                profile,
+                "temperature_optimizer_step_sec",
+                time.perf_counter() - start,
+            )
             info.update(temperature_info)
 
         self.state.step += 1
@@ -1265,22 +1369,39 @@ class SACAgent:
         *,
         utd_ratio: int,
         pmap_axis: Optional[str] = None,
+        profile: Optional[dict[str, float]] = None,
+        batch_is_torch: bool = False,
     ) -> Tuple["SACAgent", dict]:
         del pmap_axis
-        batch_t = _to_torch(batch, self.device)
+        _profile_count(profile, "sac_high_utd_calls")
+        if bool(batch_is_torch):
+            batch_t = batch
+        else:
+            start = time.perf_counter()
+            batch_t = _to_torch(batch, self.device)
+            _profile_add(
+                profile, "sac_high_utd_to_torch_sec", time.perf_counter() - start
+            )
+        start = time.perf_counter()
         minibatches = _split_batch(batch_t, utd_ratio)
+        _profile_add(profile, "split_batch_sec", time.perf_counter() - start)
 
         critic_infos = []
         for i in range(utd_ratio):
             minibatch = _index_batch(minibatches, i)
             self, info = self.update(
-                minibatch, networks_to_update=frozenset({"critic"})
+                minibatch,
+                networks_to_update=frozenset({"critic"}),
+                profile=profile,
+                batch_is_torch=True,
             )
             critic_infos.append(info)
 
         _, actor_temp_info = self.update(
             batch_t,
             networks_to_update=frozenset({"actor", "temperature"}),
+            profile=profile,
+            batch_is_torch=True,
         )
 
         info = _tree_mean(critic_infos) if critic_infos else {}

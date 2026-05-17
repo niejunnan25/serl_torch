@@ -6,6 +6,8 @@ import numpy as np
 
 from serl_launcher.common.training_payloads import build_rollout_payload
 from serl_launcher.common.training_payloads import build_rollout_stats_payload
+from serl_launcher.common.training_payloads import build_actor_progress_payload
+from serl_launcher.common.training_payloads import parse_actor_progress_payload
 from serl_launcher.common.training_payloads import parse_rollout_stats_payload
 
 
@@ -27,11 +29,14 @@ class TrainingPayloadsTest(unittest.TestCase):
                 "success": True,
                 "reward_trace": np.asarray([1.0, 2.0], dtype=np.float32),
             },
+            residual={"mean_abs": np.float32(0.25), "value_count": 14},
         )
 
         self.assertEqual(payload["env_steps"], 123)
         self.assertEqual(payload["rollout"]["episode_id"], 7)
         self.assertEqual(payload["env_info"]["reward_trace"], [1.0, 2.0])
+        self.assertEqual(payload["residual"]["mean_abs"], 0.25)
+        self.assertEqual(payload["residual"]["value_count"], 14)
 
         parsed = parse_rollout_stats_payload(payload)
         self.assertIsNotNone(parsed)
@@ -40,6 +45,8 @@ class TrainingPayloadsTest(unittest.TestCase):
         self.assertEqual(parsed["rollout"]["episode_steps"], 31)
         self.assertTrue(parsed["rollout"]["success"])
         self.assertEqual(parsed["env_info"]["reward_trace"], [1.0, 2.0])
+        self.assertEqual(parsed["residual"]["mean_abs"], 0.25)
+        self.assertEqual(parsed["residual"]["value_count"], 14)
         self.assertEqual(parsed["rollout"]["init_episode_idx"], 2)
 
     def test_parse_rollout_payload_without_init_episode_idx(self) -> None:
@@ -66,6 +73,27 @@ class TrainingPayloadsTest(unittest.TestCase):
             },
         }
         self.assertIsNone(parse_rollout_stats_payload(payload))
+
+    def test_build_and_parse_actor_progress_payload(self) -> None:
+        payload = build_actor_progress_payload(
+            env_steps=321,
+            episode_id=9,
+            actor_done=True,
+        )
+        self.assertEqual(
+            payload,
+            {"env_steps": 321, "episode_id": 9, "actor_done": True},
+        )
+        parsed = parse_actor_progress_payload(payload)
+        self.assertEqual(parsed, payload)
+
+    def test_parse_invalid_actor_progress_payload_returns_none(self) -> None:
+        payload = {
+            "env_steps": 10,
+            "episode_id": "bad",
+            "actor_done": True,
+        }
+        self.assertIsNone(parse_actor_progress_payload(payload))
 
 
 if __name__ == "__main__":

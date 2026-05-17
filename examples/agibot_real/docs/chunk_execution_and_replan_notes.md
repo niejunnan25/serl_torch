@@ -4,10 +4,10 @@
 
 相关实现：
 
-- canonical 训练入口：[../scripts/run_residual_training.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
-- residual observation helper：[../residual_observation.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/residual_observation.py)
-- policy input helper：[../env/policy_input.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/env/policy_input.py)
-- local robot env：[../env/task_env.py](/vla/users/niejunnan/codebase/serl_torch/examples/agibot_real/env/task_env.py)
+- canonical 训练入口：[../scripts/run_residual_training.py](/home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_training.py)
+- residual observation helper：[../../../serl_launcher/serl_launcher/residual/observation.py](/home/hello/codebase/serl_torch/serl_launcher/serl_launcher/residual/observation.py)
+- policy input helper：[../env/policy_input.py](/home/hello/codebase/serl_torch/examples/agibot_real/env/policy_input.py)
+- local robot env：[../env/task_env.py](/home/hello/codebase/serl_torch/examples/agibot_real/env/task_env.py)
 
 ## 1. `mask` 的语义
 

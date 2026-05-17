@@ -42,7 +42,7 @@
 
 相关代码:
 
-- `examples/libero/scripts/run_residual_training.py:600`
+- `examples/libero/scripts/train_residual_step.py:600`
 
 当前 learner 并不是“每轮只调一次 `update_high_utd`”。它先做额外 critic update，再调一次 `update_high_utd`:
 
@@ -68,8 +68,8 @@ agent, update_info = agent.update_high_utd(
 
 相关配置:
 
-- `examples/libero/configs/train_residual.yaml:83`
-- `examples/libero/configs/train_residual.yaml:102`
+- `examples/libero/configs/train_residual_step.yaml:83`
+- `examples/libero/configs/train_residual_step.yaml:102`
 
 当前默认值是:
 

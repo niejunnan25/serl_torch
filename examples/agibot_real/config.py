@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import asdict
 from dataclasses import dataclass
 from typing import Any
@@ -10,15 +11,25 @@ from typing import cast
 
 from omegaconf import DictConfig
 
+from serl_launcher.common.trainer_transport import SUPPORTED_TRANSPORT_MODES
+from serl_launcher.common.trainer_transport import TrainerTransportConfig
+from serl_launcher.common.trainer_transport import validate_transport_mode
+from serl_launcher.rollout import ProcessorTransportConfig
 from serl_launcher.utils.serialization import to_jsonable
 
-from .schema import build_agibot_task_key
-from .schema import resolve_agibot_image_keys
+from .env.arm_layout import AGIBOT_ROBOT_ACTION_DIM
+from .env.arm_layout import ARM_LAYOUT_DUAL
+from .env.arm_layout import get_arm_layout_spec
+from .env.arm_layout import normalize_arm_layout
+from .env.arm_layout import validate_arm_layout_dims
+from .env.schema import build_agibot_task_key
+from .env.schema import resolve_agibot_image_keys
 
-RuntimeRole = Literal["actor", "learner"]
-EnvBackend = Literal["local"]
+RuntimeRole = Literal["actor", "learner", "processor"]
+EnvBackend = Literal["local", "fake"]
 PolicyBackend = Literal["openpi", "joyra"]
 OptimizerType = Literal["adam", "adamw"]
+ProcessorMode = Literal["in_process", "standalone"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,13 +53,17 @@ class RuntimeConfig:
     trainer_port: int
     broadcast_port: int
     data_store_queue_size: int
+    trainer_transport: TrainerTransportConfig
+    processor_transport: ProcessorTransportConfig
 
 
 @dataclass(frozen=True, slots=True)
 class WandbConfig:
     project: str
+    entity: str | None
     exp_name: str
     group: str | None
+    mode: str
     debug: bool
 
 
@@ -58,6 +73,16 @@ class PolicyConfig:
     host: str
     port: int
     id: str | None = None
+    action_layout: str = ARM_LAYOUT_DUAL
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillPolicyConfig:
+    enabled: bool
+    host: str
+    port: int
+    max_pending_chunks: int
+    mode: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +113,9 @@ class ControllerConfig:
 
 @dataclass(frozen=True, slots=True)
 class EnvConfig:
+    arm_layout: str
     action_dim: int
+    robot_action_dim: int
     backend: EnvBackend
 
 
@@ -109,6 +136,34 @@ class ResidualConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionFilterConfig:
+    enabled: bool
+    alpha: float
+    max_delta: float | None
+    warmup_steps: int
+    reset_each_episode: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessorConfig:
+    mode: ProcessorMode
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessorBatchingConfig:
+    enabled: bool
+    max_batch_chunks: int
+    max_batch_obs: int
+    max_wait_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class RecycleConfig:
+    enabled: bool
+    output_root: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResnetConfig:
     model_name: str
     pretrained: bool
@@ -122,6 +177,7 @@ class ResnetConfig:
 class EncoderConfig:
     type: str
     shared: bool
+    fuse_views: str
     use_proprio: bool
     proprio_latent_dim: int
     resnet: ResnetConfig | None
@@ -167,9 +223,16 @@ class SacConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplayPreparedChunkConfig:
+    offline_enabled: bool
+    online_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayConfig:
     capacity: int
     batch_size: int
+    prepared_chunk: ReplayPreparedChunkConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +241,8 @@ class OfflinePrepareConfig:
     output_root: str
     expert_reference_scale: float
     clip_residual_to_unit: bool
+    filter_unrepresentable_steps: bool
+    max_episodes: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,10 +264,53 @@ class MixedPrecisionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TorchCompileConfig:
+    enabled: bool
+    target: str
+    backend: str
+    mode: str
+    fullgraph: bool
+    dynamic: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CheckpointConfig:
     every_steps: int
     keep: int
     dir: str
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncEvalCheckpointConfig:
+    dir: str
+    keep: int
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncEvalConfig:
+    enabled: bool
+    every_episodes: int
+    episodes: int
+    start_episode_idx: int
+    max_env_steps_per_episode: int | None
+    deterministic: bool
+    poll_interval_sec: float
+    queue_file: str
+    summary_jsonl: str
+    worker_log_file: str
+    checkpoint: AsyncEvalCheckpointConfig
+
+
+@dataclass(frozen=True, slots=True)
+class EvalLoggingConfig:
+    enabled: bool
+    backend: str
+    project: str
+    entity: str | None
+    run_name: str
+    group: str | None
+    mode: str
+    debug: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,12 +323,15 @@ class TrainingConfig:
     max_episodes: int
     log_period: int
     mixed_precision: MixedPrecisionConfig
+    torch_compile: TorchCompileConfig
     checkpoint: CheckpointConfig
+    async_eval: AsyncEvalConfig
 
 
 @dataclass(frozen=True, slots=True)
 class EvalTrainingConfig:
     mixed_precision: MixedPrecisionConfig
+    torch_compile: TorchCompileConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +341,7 @@ class EvalConfig:
     deterministic: bool
     checkpoint_path: str | None
     checkpoint_step: int | None
+    logging: EvalLoggingConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,17 +351,32 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class VideoConfig:
+    enabled: bool
+    camera_key: str
+    fps: float
+    output_dir: str
+    max_pending_frames: int
+    drop_frames_when_busy: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AgiBotTrainConfig:
     global_seed: int
     task: TaskConfig
     runtime: RuntimeConfig
     wandb: WandbConfig
     policy: PolicyConfig
+    backfill_policy: BackfillPolicyConfig
+    processor: ProcessorConfig
+    processor_batching: ProcessorBatchingConfig
+    recycle: RecycleConfig
     robot: RobotConfig
     controller: ControllerConfig
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    action_filter: ActionFilterConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -257,6 +384,7 @@ class AgiBotTrainConfig:
     offline: OfflineConfig
     training: TrainingConfig
     logging: LoggingConfig
+    video: VideoConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,12 +397,14 @@ class AgiBotEvalConfig:
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    action_filter: ActionFilterConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
     training: EvalTrainingConfig
     logging: LoggingConfig
     eval: EvalConfig
+    video: VideoConfig
 
 
 AgiBotRunConfig = AgiBotTrainConfig | AgiBotEvalConfig
@@ -299,6 +429,30 @@ def _required_str(value: Any, field_name: str) -> str:
     if resolved is None:
         raise ValueError(f"{field_name} must be a non-empty string")
     return resolved
+
+
+def _required_mapping(value: Any, field_name: str) -> DictConfig | dict[str, Any]:
+    if value is None:
+        raise ValueError(
+            f"{field_name} must be declared explicitly in the train yaml"
+        )
+    if not isinstance(value, (DictConfig, dict)):
+        raise ValueError(
+            f"{field_name} must be a mapping, got {type(value).__name__}"
+        )
+    return value
+
+
+def _required_mapping_key(
+    mapping: DictConfig | dict[str, Any],
+    key: str,
+    field_name: str,
+) -> Any:
+    if key not in mapping:
+        raise ValueError(
+            f"{field_name} must be declared explicitly in the train yaml"
+        )
+    return mapping[key]
 
 
 def _int_value(value: Any, field_name: str) -> int:
@@ -487,7 +641,24 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
     role = _parse_choice(
         runtime_cfg.get("role", "actor"),
         "runtime.role",
-        allowed=("actor", "learner"),
+        allowed=("actor", "learner", "processor"),
+    )
+    trainer_port = _positive_int(
+        runtime_cfg.get("trainer_port", 5488),
+        "runtime.trainer_port",
+    )
+    transport_cfg = _parse_trainer_transport_cfg(
+        runtime_cfg=runtime_cfg,
+        default_data_port=int(trainer_port + 2),
+    )
+    processor_transport_cfg = _parse_processor_transport_cfg(
+        runtime_cfg=runtime_cfg,
+        default_host=_required_str(
+            runtime_cfg.get("trainer_host", "127.0.0.1"),
+            "runtime.trainer_host",
+        ),
+        default_port=int(trainer_port + 3),
+        default_timeout_ms=int(transport_cfg.control_timeout_ms),
     )
     return RuntimeConfig(
         role=cast(RuntimeRole, role),
@@ -495,10 +666,7 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
             runtime_cfg.get("trainer_host", "127.0.0.1"),
             "runtime.trainer_host",
         ),
-        trainer_port=_positive_int(
-            runtime_cfg.get("trainer_port", 5488),
-            "runtime.trainer_port",
-        ),
+        trainer_port=int(trainer_port),
         broadcast_port=_positive_int(
             runtime_cfg.get("broadcast_port", 5489),
             "runtime.broadcast_port",
@@ -507,27 +675,158 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
             runtime_cfg.get("data_store_queue_size", 2000),
             "runtime.data_store_queue_size",
         ),
+        trainer_transport=transport_cfg,
+        processor_transport=processor_transport_cfg,
+    )
+
+
+def _parse_processor_cfg(cfg: DictConfig) -> ProcessorConfig:
+    processor_cfg = cfg.get("processor", {}) or {}
+    return ProcessorConfig(
+        mode=cast(
+            ProcessorMode,
+            _parse_choice(
+                processor_cfg.get("mode", "in_process"),
+                "processor.mode",
+                allowed=("in_process", "standalone"),
+            ),
+        )
+    )
+
+
+def _parse_processor_batching_cfg(cfg: DictConfig) -> ProcessorBatchingConfig:
+    batching_cfg = cfg.get("processor_batching", {}) or {}
+    return ProcessorBatchingConfig(
+        enabled=bool(batching_cfg.get("enabled", False)),
+        max_batch_chunks=_positive_int(
+            batching_cfg.get("max_batch_chunks", 4),
+            "processor_batching.max_batch_chunks",
+        ),
+        max_batch_obs=_positive_int(
+            batching_cfg.get("max_batch_obs", 24),
+            "processor_batching.max_batch_obs",
+        ),
+        max_wait_ms=_nonnegative_int(
+            batching_cfg.get("max_wait_ms", 3),
+            "processor_batching.max_wait_ms",
+        ),
+    )
+
+
+def _parse_recycle_cfg(cfg: DictConfig) -> RecycleConfig:
+    recycle_cfg = cfg.get("recycle", {}) or {}
+    return RecycleConfig(
+        enabled=bool(recycle_cfg.get("enabled", False)),
+        output_root=_required_str(
+            recycle_cfg.get("output_root", "raw_rollout_recycle"),
+            "recycle.output_root",
+        ),
+    )
+
+
+def _parse_trainer_transport_cfg(
+    *,
+    runtime_cfg: DictConfig | dict[str, Any],
+    default_data_port: int,
+) -> TrainerTransportConfig:
+    raw_cfg = runtime_cfg.get("trainer_transport", {})
+    raw_mode = _parse_choice(
+        raw_cfg.get("mode", "sync_commit"),
+        "runtime.trainer_transport.mode",
+        allowed=SUPPORTED_TRANSPORT_MODES,
+    )
+    mode = validate_transport_mode(raw_mode)
+    return TrainerTransportConfig(
+        mode=mode,
+        data_port=_positive_int(
+            raw_cfg.get("data_port", default_data_port),
+            "runtime.trainer_transport.data_port",
+        ),
+        control_timeout_ms=_positive_int(
+            raw_cfg.get("control_timeout_ms", 800),
+            "runtime.trainer_transport.control_timeout_ms",
+        ),
+        data_queue_capacity=_positive_int(
+            raw_cfg.get("data_queue_capacity", 8),
+            "runtime.trainer_transport.data_queue_capacity",
+        ),
+        data_socket_hwm=_positive_int(
+            raw_cfg.get("data_socket_hwm", 8),
+            "runtime.trainer_transport.data_socket_hwm",
+        ),
+        commit_poll_ms=_positive_int(
+            raw_cfg.get("commit_poll_ms", 20),
+            "runtime.trainer_transport.commit_poll_ms",
+        ),
+        wait_committed_on_episode_end=bool(
+            raw_cfg.get("wait_committed_on_episode_end", False)
+        ),
+        wait_committed_on_shutdown=bool(
+            raw_cfg.get("wait_committed_on_shutdown", True)
+        ),
+    )
+
+
+def _parse_processor_transport_cfg(
+    *,
+    runtime_cfg: DictConfig | dict[str, Any],
+    default_host: str,
+    default_port: int,
+    default_timeout_ms: int,
+) -> ProcessorTransportConfig:
+    processor_cfg = runtime_cfg.get("processor_transport", {}) or {}
+    return ProcessorTransportConfig(
+        host=_required_str(
+            processor_cfg.get("host", default_host),
+            "runtime.processor_transport.host",
+        ),
+        port=_positive_int(
+            processor_cfg.get("port", default_port),
+            "runtime.processor_transport.port",
+        ),
+        timeout_ms=_positive_int(
+            processor_cfg.get("timeout_ms", default_timeout_ms),
+            "runtime.processor_transport.timeout_ms",
+        ),
+        queue_capacity=_positive_int(
+            processor_cfg.get("queue_capacity", 8),
+            "runtime.processor_transport.queue_capacity",
+        ),
     )
 
 
 def _parse_wandb_cfg(cfg: DictConfig, *, task: TaskConfig) -> WandbConfig:
     wandb_cfg = cfg.get("wandb", {})
     default_exp_name = f"{task.task_key}_residual"
+    debug = bool(wandb_cfg.get("debug", False))
+    mode_value = wandb_cfg.get("mode", None)
+    if mode_value is None:
+        resolved_mode = "online"
+    else:
+        resolved_mode = _parse_choice(
+            mode_value,
+            "wandb.mode",
+            allowed=("online", "offline", "disabled"),
+        )
+    if debug:
+        resolved_mode = "disabled"
     return WandbConfig(
         project=_required_str(
             wandb_cfg.get("project", "agibot_real"),
             "wandb.project",
         ),
+        entity=_optional_str(wandb_cfg.get("entity", os.environ.get("WANDB_ENTITY"))),
         exp_name=_required_str(
             wandb_cfg.get("exp_name", default_exp_name),
             "wandb.exp_name",
         ),
         group=_optional_str(wandb_cfg.get("group", None)),
-        debug=bool(wandb_cfg.get("debug", False)),
+        mode=str(resolved_mode),
+        debug=debug,
     )
 
 
-def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
+def _parse_policy_cfg(cfg: DictConfig, *, env: EnvConfig) -> PolicyConfig:
     policy_cfg = cfg.get("policy", {})
     policy_type = _parse_choice(
         policy_cfg.get("type", "openpi"),
@@ -535,6 +834,13 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
         allowed=("openpi", "joyra"),
     )
     legacy_policy_cfg = cfg.get(str(policy_type), {})
+    policy_layout_value = policy_cfg.get("action_layout", env.arm_layout)
+    policy_layout = normalize_arm_layout(policy_layout_value)
+    if policy_layout != env.arm_layout:
+        raise ValueError(
+            "policy.action_layout must match env.arm_layout: "
+            f"{policy_layout!r} != {env.arm_layout!r}"
+        )
     return PolicyConfig(
         type=cast(PolicyBackend, policy_type),
         host=_required_str(
@@ -546,6 +852,7 @@ def _parse_policy_cfg(cfg: DictConfig) -> PolicyConfig:
             "policy.port",
         ),
         id=_optional_str(policy_cfg.get("id", None)),
+        action_layout=policy_layout,
     )
 
 
@@ -559,6 +866,60 @@ def _parse_robot_cfg(cfg: DictConfig) -> RobotConfig:
         retargeter_camera_extrinsic_path=_optional_str(
             robot_cfg.get("retargeter_camera_extrinsic_path", None)
         ),
+    )
+
+
+def _parse_backfill_policy_cfg(
+    cfg: DictConfig,
+    *,
+    policy: PolicyConfig,
+) -> BackfillPolicyConfig:
+    backfill_cfg = _required_mapping(
+        cfg.get("backfill_policy", None),
+        "backfill_policy",
+    )
+    mode = _parse_choice(
+        _required_mapping_key(
+            backfill_cfg,
+            "mode",
+            "backfill_policy.mode",
+        ),
+        "backfill_policy.mode",
+        allowed=("thread",),
+    )
+    return BackfillPolicyConfig(
+        enabled=bool(
+            _required_mapping_key(
+                backfill_cfg,
+                "enabled",
+                "backfill_policy.enabled",
+            )
+        ),
+        host=_required_str(
+            _required_mapping_key(
+                backfill_cfg,
+                "host",
+                "backfill_policy.host",
+            ),
+            "backfill_policy.host",
+        ),
+        port=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "port",
+                "backfill_policy.port",
+            ),
+            "backfill_policy.port",
+        ),
+        max_pending_chunks=_positive_int(
+            _required_mapping_key(
+                backfill_cfg,
+                "max_pending_chunks",
+                "backfill_policy.max_pending_chunks",
+            ),
+            "backfill_policy.max_pending_chunks",
+        ),
+        mode=mode,
     )
 
 
@@ -609,15 +970,24 @@ def _parse_env_cfg(cfg: DictConfig) -> EnvConfig:
     backend = _parse_choice(
         env_cfg.get("backend", "local"),
         "env.backend",
-        allowed=("local",),
+        allowed=("local", "fake"),
     )
+    arm_layout = normalize_arm_layout(env_cfg.get("arm_layout", ARM_LAYOUT_DUAL))
+    spec = get_arm_layout_spec(arm_layout)
     action_dim = _positive_int(env_cfg.get("action_dim", None), "env.action_dim")
-    if action_dim != 14:
-        raise ValueError(
-            f"AgiBot v1 currently requires env.action_dim=14, got {action_dim}"
-        )
-    return EnvConfig(
+    robot_action_dim = _positive_int(
+        env_cfg.get("robot_action_dim", AGIBOT_ROBOT_ACTION_DIM),
+        "env.robot_action_dim",
+    )
+    validate_arm_layout_dims(
+        arm_layout=arm_layout,
         action_dim=action_dim,
+        robot_action_dim=robot_action_dim,
+    )
+    return EnvConfig(
+        arm_layout=spec.name,
+        action_dim=action_dim,
+        robot_action_dim=robot_action_dim,
         backend=cast(EnvBackend, backend),
     )
 
@@ -688,6 +1058,29 @@ def _parse_residual_cfg(cfg: DictConfig, *, action_dim: int) -> ResidualConfig:
     )
 
 
+def _parse_action_filter_cfg(cfg: DictConfig) -> ActionFilterConfig:
+    filter_cfg = cfg.get("action_filter", {}) or {}
+    alpha = _positive_float(
+        filter_cfg.get("alpha", 0.25),
+        "action_filter.alpha",
+    )
+    if alpha > 1.0:
+        raise ValueError(f"action_filter.alpha must be <= 1.0, got {alpha}")
+    return ActionFilterConfig(
+        enabled=bool(filter_cfg.get("enabled", False)),
+        alpha=alpha,
+        max_delta=_optional_positive_float(
+            filter_cfg.get("max_delta", None),
+            "action_filter.max_delta",
+        ),
+        warmup_steps=_nonnegative_int(
+            filter_cfg.get("warmup_steps", 0),
+            "action_filter.warmup_steps",
+        ),
+        reset_each_episode=bool(filter_cfg.get("reset_each_episode", True)),
+    )
+
+
 def _parse_encoder_cfg(cfg: DictConfig) -> EncoderConfig:
     encoder_cfg = cfg.get("encoder", {})
     resnet_cfg = encoder_cfg.get("resnet", None)
@@ -716,6 +1109,11 @@ def _parse_encoder_cfg(cfg: DictConfig) -> EncoderConfig:
     return EncoderConfig(
         type=_required_str(encoder_cfg.get("type", "resnet"), "encoder.type"),
         shared=bool(encoder_cfg.get("shared", True)),
+        fuse_views=_parse_choice(
+            encoder_cfg.get("fuse_views", "auto"),
+            "encoder.fuse_views",
+            allowed=("auto", "true", "false"),
+        ),
         use_proprio=bool(encoder_cfg.get("use_proprio", True)),
         proprio_latent_dim=_positive_int(
             encoder_cfg.get("proprio_latent_dim", 64),
@@ -839,11 +1237,20 @@ def _parse_sac_cfg(cfg: DictConfig) -> SacConfig:
 
 def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
     replay_cfg = cfg.get("replay", {})
+    prepared_chunk_cfg = replay_cfg.get("prepared_chunk", {}) or {}
     return ReplayConfig(
         capacity=_positive_int(replay_cfg.get("capacity", 250000), "replay.capacity"),
         batch_size=_positive_int(
             replay_cfg.get("batch_size", 128),
             "replay.batch_size",
+        ),
+        prepared_chunk=ReplayPreparedChunkConfig(
+            offline_enabled=bool(
+                prepared_chunk_cfg.get("offline_enabled", False)
+            ),
+            online_enabled=bool(
+                prepared_chunk_cfg.get("online_enabled", False)
+            ),
         ),
     )
 
@@ -863,6 +1270,13 @@ def _parse_offline_prepare_cfg(cfg: DictConfig) -> OfflinePrepareConfig:
         ),
         clip_residual_to_unit=bool(
             prepare_cfg.get("clip_residual_to_unit", True)
+        ),
+        filter_unrepresentable_steps=bool(
+            prepare_cfg.get("filter_unrepresentable_steps", False)
+        ),
+        max_episodes=_optional_nonnegative_int(
+            prepare_cfg.get("max_episodes", None),
+            "offline.prepare.max_episodes",
         ),
     )
 
@@ -905,9 +1319,36 @@ def _parse_offline_cfg(cfg: DictConfig) -> OfflineConfig:
     )
 
 
+def _parse_torch_compile_cfg(
+    torch_compile_cfg: Any,
+    *,
+    field_prefix: str,
+) -> TorchCompileConfig:
+    target = _parse_choice(
+        torch_compile_cfg.get("target", "actor_critic"),
+        f"{field_prefix}.target",
+        allowed=("critic", "actor_critic"),
+    )
+    return TorchCompileConfig(
+        enabled=bool(torch_compile_cfg.get("enabled", False)),
+        target=target,
+        backend=_required_str(
+            torch_compile_cfg.get("backend", "inductor"),
+            f"{field_prefix}.backend",
+        ),
+        mode=_required_str(
+            torch_compile_cfg.get("mode", "default"),
+            f"{field_prefix}.mode",
+        ),
+        fullgraph=bool(torch_compile_cfg.get("fullgraph", True)),
+        dynamic=bool(torch_compile_cfg.get("dynamic", False)),
+    )
+
+
 def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", {})
+    torch_compile_cfg = training_cfg.get("torch_compile", {})
     checkpoint_cfg = training_cfg.get("checkpoint", {})
     return TrainingConfig(
         training_starts=_nonnegative_int(
@@ -945,6 +1386,10 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
                 "training.mixed_precision.dtype",
             ),
         ),
+        torch_compile=_parse_torch_compile_cfg(
+            torch_compile_cfg,
+            field_prefix="training.torch_compile",
+        ),
         checkpoint=CheckpointConfig(
             every_steps=_nonnegative_int(
                 checkpoint_cfg.get("every_steps", 0),
@@ -959,12 +1404,73 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
                 "training.checkpoint.dir",
             ),
         ),
+        async_eval=_parse_async_eval_cfg(cfg),
+    )
+
+
+def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
+    training_cfg = cfg.get("training", {})
+    async_eval_cfg = training_cfg.get("async_eval", {}) or {}
+    checkpoint_cfg = async_eval_cfg.get("checkpoint", {}) or {}
+    enabled = bool(async_eval_cfg.get("enabled", False))
+    if enabled:
+        raise ValueError(
+            "AgiBot real robot training currently does not support async eval. "
+            "Use the standalone eval entrypoint examples/agibot_real/scripts/run_residual_eval.py. "
+            "LIBERO-style parallel env / checkpoint async eval is unsupported for AgiBot real robots."
+        )
+    return AsyncEvalConfig(
+        enabled=False,
+        every_episodes=_positive_int(
+            async_eval_cfg.get("every_episodes", 20),
+            "training.async_eval.every_episodes",
+        ),
+        episodes=_positive_int(
+            async_eval_cfg.get("episodes", 10),
+            "training.async_eval.episodes",
+        ),
+        start_episode_idx=_nonnegative_int(
+            async_eval_cfg.get("start_episode_idx", 0),
+            "training.async_eval.start_episode_idx",
+        ),
+        max_env_steps_per_episode=_optional_positive_int(
+            async_eval_cfg.get("max_env_steps_per_episode", None),
+            "training.async_eval.max_env_steps_per_episode",
+        ),
+        deterministic=bool(async_eval_cfg.get("deterministic", True)),
+        poll_interval_sec=_positive_float(
+            async_eval_cfg.get("poll_interval_sec", 5.0),
+            "training.async_eval.poll_interval_sec",
+        ),
+        queue_file=_required_str(
+            async_eval_cfg.get("queue_file", "async_eval_queue.jsonl"),
+            "training.async_eval.queue_file",
+        ),
+        summary_jsonl=_required_str(
+            async_eval_cfg.get("summary_jsonl", "async_eval_results.jsonl"),
+            "training.async_eval.summary_jsonl",
+        ),
+        worker_log_file=_required_str(
+            async_eval_cfg.get("worker_log_file", "async_eval_worker.log"),
+            "training.async_eval.worker_log_file",
+        ),
+        checkpoint=AsyncEvalCheckpointConfig(
+            dir=_required_str(
+                checkpoint_cfg.get("dir", "async_eval_checkpoints"),
+                "training.async_eval.checkpoint.dir",
+            ),
+            keep=_nonnegative_int(
+                checkpoint_cfg.get("keep", 0),
+                "training.async_eval.checkpoint.keep",
+            ),
+        ),
     )
 
 
 def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
     training_cfg = cfg.get("training", {})
     mixed_precision_cfg = training_cfg.get("mixed_precision", {})
+    torch_compile_cfg = training_cfg.get("torch_compile", {})
     return EvalTrainingConfig(
         mixed_precision=MixedPrecisionConfig(
             enabled=bool(mixed_precision_cfg.get("enabled", False)),
@@ -972,7 +1478,11 @@ def _parse_eval_training_cfg(cfg: DictConfig) -> EvalTrainingConfig:
                 mixed_precision_cfg.get("dtype", "bfloat16"),
                 "training.mixed_precision.dtype",
             ),
-        )
+        ),
+        torch_compile=_parse_torch_compile_cfg(
+            torch_compile_cfg,
+            field_prefix="training.torch_compile",
+        ),
     )
 
 
@@ -995,6 +1505,48 @@ def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
             eval_cfg.get("checkpoint_step", None),
             "eval.checkpoint_step",
         ),
+        logging=_parse_eval_logging_cfg(cfg),
+    )
+
+
+def _parse_eval_logging_cfg(cfg: DictConfig) -> EvalLoggingConfig:
+    eval_cfg = cfg.get("eval", {})
+    logging_cfg = eval_cfg.get("logging", {}) or {}
+    debug = bool(logging_cfg.get("debug", False))
+    mode_value = logging_cfg.get("mode", None)
+    if mode_value is None:
+        resolved_mode = "online"
+    else:
+        resolved_mode = _parse_choice(
+            mode_value,
+            "eval.logging.mode",
+            allowed=("online", "offline", "disabled"),
+        )
+    if debug:
+        resolved_mode = "disabled"
+    task = _parse_task_cfg(cfg)
+    default_run_name = f"{task.task_key}_eval"
+    return EvalLoggingConfig(
+        enabled=bool(logging_cfg.get("enabled", False)),
+        backend=_parse_choice(
+            logging_cfg.get("backend", "swanlab"),
+            "eval.logging.backend",
+            allowed=("wandb", "swanlab"),
+        ),
+        project=_required_str(
+            logging_cfg.get("project", "agibot_real"),
+            "eval.logging.project",
+        ),
+        entity=_optional_str(
+            logging_cfg.get("entity", os.environ.get("WANDB_ENTITY"))
+        ),
+        run_name=_required_str(
+            logging_cfg.get("run_name", default_run_name),
+            "eval.logging.run_name",
+        ),
+        group=_optional_str(logging_cfg.get("group", None)),
+        mode=str(resolved_mode),
+        debug=debug,
     )
 
 
@@ -1015,14 +1567,43 @@ def _parse_logging_cfg(
     )
 
 
+def _parse_video_cfg(cfg: DictConfig, *, default_fps: float) -> VideoConfig:
+    video_cfg = cfg.get("video", {})
+    return VideoConfig(
+        enabled=bool(video_cfg.get("enabled", False)),
+        camera_key=_required_str(
+            video_cfg.get("camera_key", "image/head"),
+            "video.camera_key",
+        ),
+        fps=_positive_float(video_cfg.get("fps", default_fps), "video.fps"),
+        output_dir=_required_str(
+            video_cfg.get("output_dir", "videos"),
+            "video.output_dir",
+        ),
+        max_pending_frames=_positive_int(
+            video_cfg.get("max_pending_frames", 64),
+            "video.max_pending_frames",
+        ),
+        drop_frames_when_busy=bool(video_cfg.get("drop_frames_when_busy", True)),
+    )
+
+
 def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
     runtime = _parse_runtime_cfg(cfg)
+    processor = _parse_processor_cfg(cfg)
+    if runtime.role == "processor" and processor.mode != "standalone":
+        raise ValueError(
+            "runtime.role=processor requires processor.mode=standalone"
+        )
+    policy = _parse_policy_cfg(cfg, env=env)
+    backfill_policy = _parse_backfill_policy_cfg(cfg, policy=policy)
     controller = _parse_controller_cfg(cfg)
     _validate_canonical_controller_cfg(controller, context="train")
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    action_filter = _parse_action_filter_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
@@ -1035,12 +1616,17 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         task=task,
         runtime=runtime,
         wandb=_parse_wandb_cfg(cfg, task=task),
-        policy=_parse_policy_cfg(cfg),
+        policy=policy,
+        backfill_policy=backfill_policy,
+        processor=processor,
+        processor_batching=_parse_processor_batching_cfg(cfg),
+        recycle=_parse_recycle_cfg(cfg),
         robot=_parse_robot_cfg(cfg),
         controller=controller,
         env=env,
         obs=obs,
         residual=residual,
+        action_filter=action_filter,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
@@ -1048,6 +1634,7 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         offline=_parse_offline_cfg(cfg),
         training=_parse_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
+        video=_parse_video_cfg(cfg, default_fps=task.hz),
     )
 
 
@@ -1058,6 +1645,7 @@ def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
     _validate_canonical_controller_cfg(controller, context="eval")
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    action_filter = _parse_action_filter_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
@@ -1068,18 +1656,20 @@ def parse_eval_cfg(cfg: DictConfig) -> AgiBotEvalConfig:
     return AgiBotEvalConfig(
         global_seed=_int_value(cfg.get("global_seed", cfg.get("seed", 0)), "global_seed"),
         task=task,
-        policy=_parse_policy_cfg(cfg),
+        policy=_parse_policy_cfg(cfg, env=env),
         robot=_parse_robot_cfg(cfg),
         controller=controller,
         env=env,
         obs=obs,
         residual=residual,
+        action_filter=action_filter,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
         training=_parse_eval_training_cfg(cfg),
         logging=_parse_logging_cfg(cfg, default_episode_log_file="episode_logs.jsonl"),
         eval=_parse_eval_cfg_block(cfg),
+        video=_parse_video_cfg(cfg, default_fps=task.hz),
     )
 
 
@@ -1115,6 +1705,10 @@ __all__ = [
     "AgiBotEvalConfig",
     "AgiBotRunConfig",
     "AgiBotTrainConfig",
+    "ActionFilterConfig",
+    "AsyncEvalCheckpointConfig",
+    "AsyncEvalConfig",
+    "BackfillPolicyConfig",
     "CheckpointConfig",
     "ControllerConfig",
     "ControllerKeysConfig",
@@ -1122,6 +1716,7 @@ __all__ = [
     "EnvBackend",
     "EnvConfig",
     "EvalConfig",
+    "EvalLoggingConfig",
     "EvalTrainingConfig",
     "LoggingConfig",
     "MixedPrecisionConfig",
@@ -1133,7 +1728,12 @@ __all__ = [
     "OptimizerType",
     "PolicyBackend",
     "PolicyConfig",
+    "ProcessorBatchingConfig",
+    "ProcessorConfig",
+    "ProcessorMode",
+    "RecycleConfig",
     "ReplayConfig",
+    "ReplayPreparedChunkConfig",
     "ResidualConfig",
     "ResnetConfig",
     "RobotConfig",
@@ -1141,7 +1741,9 @@ __all__ = [
     "RuntimeRole",
     "SacConfig",
     "TaskConfig",
+    "TorchCompileConfig",
     "TrainingConfig",
+    "VideoConfig",
     "WandbConfig",
     "cfg_to_log_payload",
     "parse_eval_cfg",

@@ -7,6 +7,34 @@ from collections.abc import Sequence
 from typing import Any
 
 
+def _as_float_or_none(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if hasattr(value, "detach") and callable(value.detach):
+        try:
+            value = value.detach()
+        except Exception:  # noqa: BLE001
+            return None
+    if hasattr(value, "numel") and callable(value.numel):
+        try:
+            if int(value.numel()) != 1:
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+    if hasattr(value, "item") and callable(value.item):
+        try:
+            item = value.item()
+        except Exception:  # noqa: BLE001
+            return None
+        if isinstance(item, bool):
+            return None
+        if isinstance(item, (int, float)):
+            return float(item)
+    return None
+
+
 def define_metric_group(
     run: Any,
     *,
@@ -41,8 +69,7 @@ def extract_numeric_metrics(
     metrics: dict[str, float] = {}
     for payload_key, metric_key in items:
         value = payload.get(payload_key, None)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, (int, float)):
-            metrics[str(metric_key)] = float(value)
+        numeric_value = _as_float_or_none(value)
+        if numeric_value is not None:
+            metrics[str(metric_key)] = float(numeric_value)
     return metrics

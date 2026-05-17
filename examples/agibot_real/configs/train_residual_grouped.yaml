@@ -1,0 +1,10 @@
+defaults:
+  - train_residual
+  - _self_
+
+launch:
+  run_group: ${now:%Y-%m-%d_%H-%M-%S}
+
+hydra:
+  run:
+    dir: ${launch.output_root}/${hydra:job.config_name}/${launch.run_group}/${runtime.role}

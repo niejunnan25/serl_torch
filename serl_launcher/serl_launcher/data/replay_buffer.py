@@ -1,7 +1,10 @@
 import collections
 from typing import Optional, Union
 
-import gym
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
 import numpy as np
 import torch
 

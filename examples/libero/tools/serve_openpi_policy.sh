@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OPENPI_ROOT="${OPENPI_ROOT:-/vla/users/niejunnan/codebase/openpi}"
+OPENPI_ROOT="${OPENPI_ROOT:-/vla/users/niejunnan/codebase/openpi-modified}"
 DEFAULT_POLICY_DIR="/vla/users/niejunnan/openpi-assets/checkpoints/pi0_libero"
 PORT="40001"
 GPU_ID="${GPU_ID:-0}"
@@ -86,6 +86,19 @@ conda activate openpi-modified
 if [[ ! -d "$OPENPI_ROOT" ]]; then
     echo "ERROR: OpenPI root not found: $OPENPI_ROOT"
     exit 1
+fi
+
+OPENPI_VENV_DIR="${OPENPI_ROOT}/.venv"
+if [[ -d "$OPENPI_VENV_DIR" ]]; then
+    OPENPI_NVIDIA_DIR="$(find "$OPENPI_VENV_DIR/lib" -path "*/site-packages/nvidia" -type d 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$OPENPI_NVIDIA_DIR" ]]; then
+        for cuda_lib in cudnn cublas cuda_runtime cuda_cupti cuda_nvrtc cufft curand cusolver cusparse nccl nvjitlink nvtx; do
+            cuda_lib_dir="${OPENPI_NVIDIA_DIR}/${cuda_lib}/lib"
+            if [[ -d "$cuda_lib_dir" ]]; then
+                export LD_LIBRARY_PATH="${cuda_lib_dir}:${LD_LIBRARY_PATH:-}"
+            fi
+        done
+    fi
 fi
 
 if ! command -v uv >/dev/null 2>&1; then

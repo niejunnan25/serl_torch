@@ -64,48 +64,56 @@
 最常见的 Python 环境是 `serl_torch`。
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 conda activate serl_torch
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
+pip install -e .
 ```
 
-这里两条命令的分工不同：
+这里三条命令的分工不同：
 
 - `pip install -r serl_launcher/requirements.txt`
   安装当前主线运行时真正需要的第三方依赖，例如 `gym`、`numpy`、`wandb`、`omegaconf`
 - `pip install -e ./serl_launcher`
   把本地源码目录 `serl_launcher/` 注册成当前环境里的一个 editable Python package
+- `pip install -e .`
+  把 repo 根注册成当前环境里的一个 editable Python package，让 `import serl_torch.examples...` 成立
 
 `-e` 是 editable install。它不是把源码复制进环境，而是让 Python 直接引用你工作区里的源码。这样你修改：
 
 - `serl_launcher/serl_launcher/agents/...`
 - `serl_launcher/serl_launcher/data/...`
 - `serl_launcher/serl_launcher/policy/...`
+- `examples/libero/...`
+- `examples/agibot_real/...`
 
 下次重新启动进程时就会直接生效，不需要重新安装一遍包。
 
-当前仓库里 `setup.py` 和 `requirements.txt` 同时存在，是因为它们解决的是两个不同问题：
+现在这套安装有两层本地包：
 
-- `setup.py`
-  负责声明“这是一个可以被 pip 安装的本地 Python 包”，让 `import serl_launcher.*` 成立
+- repo 根的 `pyproject.toml` / `setup.py`
+  负责声明“这是一个可以被 pip 安装的本地 Python 包”，让 `import serl_torch.examples.*` 成立
+- `serl_launcher/setup.py`
+  负责让 `import serl_launcher.*` 成立
 - `requirements.txt`
   负责声明“当前主线运行环境需要哪些第三方依赖”
 
-对这个仓库来说，`setup.py` 更像最小打包元数据，`requirements.txt` 才是当前主线环境清单。  
+对这个仓库来说，editable install 负责“本地源码可导入”，`requirements.txt` 负责“第三方依赖装齐”。
 所以新机器安装时，建议始终按这个顺序：
 
 ```bash
 pip install -r serl_launcher/requirements.txt
 pip install -e ./serl_launcher
+pip install -e .
 ```
 
-`agentlace` 目前没有写进 `serl_launcher/setup.py`，需要手工安装。仓库里的注释给出的参考做法是：
+当前默认会从 `niejunnan25/agentlace` 的 `885f5fc` 提交安装 `agentlace`，所以正常情况下不需要再手工装一遍。等价的手工安装方式是：
 
 ```bash
-git clone https://github.com/youliangtan/agentlace.git
+git clone https://github.com/niejunnan25/agentlace.git
 cd agentlace
-git checkout cf2c337c5e3694cdbfc14831b239bd657bc4894d
+git checkout 885f5fc
 pip install -e .
 ```
 
@@ -121,18 +129,20 @@ pip install -e ./third_party/openpi-client
 
 但如果你还要启动 OpenPI policy server，仍然需要完整的 OpenPI 仓库，并正确设置 `OPENPI_ROOT`。
 
-如果你不是用 editable install，也可以手工补 `PYTHONPATH`：
+如果你完全不做 editable install，也可以手工补 `PYTHONPATH`：
 
 ```bash
-export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Documents/codebase/serl_torch/serl_launcher:$PYTHONPATH
+export PYTHONPATH=/home/hello/codebase:/home/hello/codebase/serl_torch/serl_launcher:$PYTHONPATH
 ```
 
-但对当前仓库，不建议长期依赖手工 `PYTHONPATH`。`pip install -e ./serl_launcher` 更稳，也更符合 Python 包的正常组织方式。
+但对当前仓库，不建议长期依赖手工 `PYTHONPATH`。`pip install -e ./serl_launcher` + `pip install -e .` 更稳，也更符合 Python 包的正常组织方式。
 
 ## 关于 `requirements.txt` 和 `setup.py`
 
 你会在这个仓库里同时看到：
 
+- `pyproject.toml`
+- `setup.py`
 - `serl_launcher/requirements.txt`
 - `serl_launcher/setup.py`
 
@@ -140,25 +150,35 @@ export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Doc
 
 当前它的实际语义是：
 
+- `pyproject.toml` + 根 `setup.py`
+  面向 repo 根的 editable install，主要提供 `import serl_torch.examples...`
+- `serl_launcher/setup.py`
+  面向 `serl_launcher` 这个本地包本身，主要提供 `import serl_launcher...`
 - `requirements.txt`
   面向“开发/运行当前主线的人”，描述一台机器要装哪些依赖才能跑 `examples/agibot_real` 和 `examples/libero`
-- `setup.py`
-  面向“Python 打包工具”，描述 `serl_launcher` 这个本地包本身
 
 之所以两个都保留，是因为如果只有 `requirements.txt`：
 
 - 你能装第三方依赖
-- 但 `import serl_launcher...` 仍然不一定成立
+- 但 `import serl_launcher...` 和 `import serl_torch.examples...` 仍然不一定成立
 
-如果只有 `setup.py`：
+如果只有根 `setup.py`：
+
+- 你能把 `serl_torch.examples...` 这层包进环境
+- 但 `import serl_launcher...` 不一定成立
+- 当前主线真正依赖的很多三方库也不一定会跟着一起装全
+
+如果只有 `serl_launcher/setup.py`：
 
 - 你能把 `serl_launcher` 这个本地包装进环境
+- 但 `import serl_torch.examples...` 不一定成立
 - 但当前主线真正依赖的很多三方库不一定会跟着一起装全
 
 所以现在这套组织是：
 
 - 用 `requirements.txt` 保证运行环境
-- 用 `setup.py` 保证本地包可安装
+- 用根 `setup.py` 保证 `serl_torch.examples...` 可安装
+- 用 `serl_launcher/setup.py` 保证 `serl_launcher...` 可安装
 
 这套方式能工作，但不是最整洁的终态。
 
@@ -185,7 +205,7 @@ export PYTHONPATH=/Users/niejunnan.25/Documents/codebase:/Users/niejunnan.25/Doc
 如果本机没有缓存 HuggingFace ResNet 权重，可以先下载：
 
 ```bash
-cd /Users/niejunnan.25/Documents/codebase/serl_torch
+cd /home/hello/codebase/serl_torch
 python scripts/download_resnet.py --models microsoft/resnet-18
 ```
 
@@ -215,13 +235,13 @@ pretrained_models/microsoft--resnet-18
 这套代码通常会默认使用下面这些本机路径假设：
 
 - LIBERO checkout:
-  `/vla/users/niejunnan/codebase/serl_torch/third_party/LIBERO`
+  `/home/hello/codebase/serl_torch/third_party/LIBERO`
 - LIBERO datasets:
   `/vla/users/niejunnan/datasets`
 - OpenPI repo:
   `/vla/users/niejunnan/codebase/openpi`
 - 本地 ResNet 缓存：
-  `/vla/users/niejunnan/codebase/serl_torch/pretrained_models`
+  `/home/hello/codebase/serl_torch/pretrained_models`
 
 如果你的机器路径不同，请在命令行或环境变量里显式覆盖，例如：
 
@@ -236,16 +256,27 @@ pretrained_models/microsoft--resnet-18
 
 ### LIBERO
 
-当前 canonical LIBERO 主线包括：
+当前 LIBERO residual 训练入口按算法和运行模式命名。最常见的三个落点是：
+
+- reference baseline:
+  `examples/libero/scripts/train_residual_step.py`
+- 当前最稳的优化线:
+  `examples/libero/scripts/train_residual_chunk.py`
+- 最新的 split / pipeline 演化版本:
+  `examples/libero/scripts/train_residual_processor.py`
+
+训练入口和配置文件都使用 `step` / `chunk` / `processor` 这组 mode 名称。
+
+当前 reference baseline LIBERO 主线包括：
 
 - config:
-  `examples/libero/configs/train_residual.yaml`
+  `examples/libero/configs/train_residual_step.yaml`
 - actor / learner entrypoint:
-  `examples/libero/scripts/run_residual_training.py`
+  `examples/libero/scripts/train_residual_step.py`
 - env server:
   `examples/libero/scripts/serve_env.py`
 - checkpoint eval:
-  `examples/libero/scripts/evaluate_checkpoint.py`
+  `examples/libero/scripts/run_residual_eval.py`
 
 这条线支持：
 

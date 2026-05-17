@@ -5,15 +5,23 @@ import inspect
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import websockets.sync.client
 from websockets import exceptions as websocket_exceptions
 
-from serl_launcher.policy.base import coerce_action_chunk, PolicyInferInfo, PolicyInput
+from serl_launcher.policy.base import (
+    coerce_action_chunk,
+    PolicyBatchInferResult,
+    PolicyInferInfo,
+    PolicyInput,
+)
 from serl_launcher.policy.joyra import msgpack_numpy
-from serl_launcher.policy.joyra.request_builder import build_joyra_request
+from serl_launcher.policy.joyra.request_builder import (
+    build_joyra_batch_request,
+    build_joyra_request,
+)
 
 
 def maybe_get_policy_infer_ms(pred: Dict[str, Any]) -> Optional[float]:
@@ -30,6 +38,8 @@ def maybe_get_server_infer_ms(pred: Dict[str, Any]) -> Optional[float]:
         if ms is not None:
             return float(ms)
     return None
+
+
 class JoyRAPolicyClient:
     def __init__(
         self,
@@ -93,11 +103,14 @@ class JoyRAPolicyClient:
             "close_timeout": self._close_timeout_sec,
             "proxy": None,
         }
-        return {
+        filtered_kwargs = {
             key: value
             for key, value in kwargs.items()
             if (key in supported_params) and (value is not None)
         }
+        if "proxy" in supported_params:
+            filtered_kwargs["proxy"] = None
+        return filtered_kwargs
 
     def _wait_for_server(self):
         uri = self._uri()
@@ -142,10 +155,11 @@ class JoyRAPolicyClient:
                 self._ws.close()
                 self._ws = None
 
-    def infer(
-        self, policy_input: PolicyInput
-    ) -> Tuple[np.ndarray, PolicyInferInfo]:
-        send_data = build_joyra_request(policy_input)
+    def _send_request_with_retry(
+        self,
+        *,
+        send_data: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], float]:
         for attempt_idx in range(self._reconnect_retry_count + 1):
             try:
                 start = time.time()
@@ -164,18 +178,7 @@ class JoyRAPolicyClient:
                     raise RuntimeError(
                         f"Expected JoyRA inference response dict, got {type(pred).__name__}"
                     )
-                chunk = coerce_action_chunk(
-                    pred["actions"],
-                    action_dim=self._action_dim,
-                )
-                info: PolicyInferInfo = {
-                    "e2e_ms": float(e2e_ms),
-                    "policy_ms": maybe_get_policy_infer_ms(pred),
-                    "server_ms": maybe_get_server_infer_ms(pred),
-                    "server_action_dim": int(np.asarray(pred["actions"]).shape[-1]),
-                    "used_action_dim": int(self._action_dim),
-                }
-                return chunk, info
+                return pred, float(e2e_ms)
             except Exception as err:
                 can_retry = (
                     self._is_retryable_connection_error(err)
@@ -195,6 +198,65 @@ class JoyRAPolicyClient:
                     time.sleep(self._reconnect_retry_backoff_sec)
 
         raise RuntimeError("JoyRA infer retry loop exited unexpectedly.")
+
+    def infer(
+        self, policy_input: PolicyInput
+    ) -> Tuple[np.ndarray, PolicyInferInfo]:
+        pred, e2e_ms = self._send_request_with_retry(
+            send_data=build_joyra_request(policy_input)
+        )
+        chunk = coerce_action_chunk(
+            pred["actions"],
+            action_dim=self._action_dim,
+        )
+        info: PolicyInferInfo = {
+            "e2e_ms": float(e2e_ms),
+            "policy_ms": maybe_get_policy_infer_ms(pred),
+            "server_ms": maybe_get_server_infer_ms(pred),
+            "server_action_dim": int(np.asarray(pred["actions"]).shape[-1]),
+            "used_action_dim": int(self._action_dim),
+        }
+        if "batch_size" in pred:
+            info["batch_size"] = int(pred["batch_size"])
+        return chunk, info
+
+    def infer_many(
+        self,
+        policy_inputs: Sequence[PolicyInput],
+    ) -> PolicyBatchInferResult:
+        if not policy_inputs:
+            raise ValueError("policy_inputs must be non-empty for JoyRA batch infer")
+        pred, e2e_ms = self._send_request_with_retry(
+            send_data=build_joyra_batch_request(policy_inputs)
+        )
+        raw_actions = np.asarray(pred["actions"], dtype=np.float32)
+        if raw_actions.ndim == 2:
+            raw_actions = np.expand_dims(raw_actions, axis=0)
+        if raw_actions.ndim != 3:
+            raise ValueError(
+                f"Expected JoyRA batch actions to be rank-3, got {raw_actions.shape}"
+            )
+        expected_batch_size = len(policy_inputs)
+        if int(raw_actions.shape[0]) != expected_batch_size:
+            raise ValueError(
+                "JoyRA batch response size does not match request size: "
+                f"expected={expected_batch_size} got={int(raw_actions.shape[0])}"
+            )
+        chunks = [
+            coerce_action_chunk(raw_actions[idx], action_dim=self._action_dim)
+            for idx in range(expected_batch_size)
+        ]
+        info: PolicyInferInfo = {
+            "e2e_ms": float(e2e_ms),
+            "policy_ms": maybe_get_policy_infer_ms(pred),
+            "server_ms": maybe_get_server_infer_ms(pred),
+            "server_action_dim": int(raw_actions.shape[-1]),
+            "used_action_dim": int(self._action_dim),
+            "batch_size": expected_batch_size,
+        }
+        if "batch_size" in pred:
+            info["server_batch_size"] = int(pred["batch_size"])
+        return chunks, info
 
     def infer_chunk(
         self, policy_input: PolicyInput

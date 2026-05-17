@@ -17,6 +17,7 @@ policy:
   host: 127.0.0.1
   port: 30001
   id: pi05_agibot
+  action_layout: dual_arm
 
 robot:
   assets_root: null
@@ -37,7 +38,9 @@ controller:
     help: h
 
 env:
+  arm_layout: dual_arm
   action_dim: 14
+  robot_action_dim: 14
   backend: local
 
 obs:
@@ -52,9 +55,17 @@ residual:
   clip_gripper: true
   chunk_horizon: 15
 
+action_filter:
+  enabled: false
+  alpha: 0.25
+  max_delta: null
+  warmup_steps: 0
+  reset_each_episode: true
+
 encoder:
   type: resnet
   shared: true
+  fuse_views: auto
   use_proprio: true
   proprio_latent_dim: 64
   resnet:
@@ -98,8 +109,15 @@ sac:
 
 training:
   mixed_precision:
-    enabled: false
+    enabled: true
     dtype: bfloat16
+  torch_compile:
+    enabled: false
+    target: actor_critic
+    backend: inductor
+    mode: default
+    fullgraph: true
+    dynamic: false
 
 eval:
   episodes: 10
@@ -107,13 +125,30 @@ eval:
   deterministic: true
   checkpoint_path: null
   checkpoint_step: null
+  logging:
+    enabled: false
+    backend: swanlab
+    project: agibot_real
+    entity: null
+    run_name: ${task.name}_eval
+    group: eval
+    mode: online
+    debug: false
 
 logging:
   summary_file: summary.json
   episode_log_file: episode_logs.jsonl
 
+video:
+  enabled: true
+  camera_key: image/head
+  fps: ${task.hz}
+  output_dir: videos
+  max_pending_frames: 128
+  drop_frames_when_busy: true
+
 launch:
-  output_root: outputs/agibot_real
+  output_root: examples/agibot_real/outputs
 
 hydra:
   run:

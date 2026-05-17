@@ -2,13 +2,13 @@ global_seed: 0
 
 task:
   name: office_setting
-  task_key: null
+  task_key: office_setting
   prompt: The right arm picks up the white mouse from the desk and places the mouse on the black mouse pad
   control_mode: camera_position
-  hz: 20.0
+  hz: 30.0
   trajectory_time: null
   use_smooth_trajectory: false
-  max_episode_steps: 1500
+  max_episode_steps: 300
   reset_hook: serl_torch.examples.agibot_real.robot.reset_hooks:reset_to_task_initial_pose
   success_hook: null
 
@@ -18,11 +18,26 @@ runtime:
   trainer_port: 5488
   broadcast_port: 5489
   data_store_queue_size: 2000
+  trainer_transport:
+    mode: async_commit
+    data_port: 5490
+    control_timeout_ms: 2000
+    data_queue_capacity: 8
+    data_socket_hwm: 8
+    commit_poll_ms: 20
+    wait_committed_on_episode_end: false
+    wait_committed_on_shutdown: true
+  processor_transport:
+    host: 127.0.0.1
+    port: 5491
+    timeout_ms: 2000
+    queue_capacity: 8
 
 wandb:
   project: agibot_real
-  exp_name: ${task.name}_residual
-  group: residual
+  exp_name: ${task.name}_residual_copy
+  group: residual_copy
+  mode: online
   debug: false
 
 policy:
@@ -30,6 +45,29 @@ policy:
   host: 127.0.0.1
   port: 9001
   id: joyra_office_setting
+  action_layout: dual_arm
+
+backfill_policy:
+  enabled: true
+  host: ${policy.host}
+  port: 9011
+  max_pending_chunks: 4
+  mode: thread
+
+processor:
+  # Default keeps real-robot control and data processing in the actor process.
+  # Set to standalone only when a processor role has been launched explicitly.
+  mode: in_process
+
+processor_batching:
+  enabled: false
+  max_batch_chunks: 4
+  max_batch_obs: 24
+  max_wait_ms: 3
+
+recycle:
+  enabled: false
+  output_root: raw_rollout_recycle
 
 robot:
   assets_root: null
@@ -50,7 +88,9 @@ controller:
     help: h
 
 env:
+  arm_layout: dual_arm
   action_dim: 14
+  robot_action_dim: 14
   backend: local
 
 obs:
@@ -59,15 +99,23 @@ obs:
   stack_horizon: 1
 
 residual:
-  alpha: 0
-  action_mask: [false, false, false, false, false, false, false, true, true, true, true, true, true, true]
+  alpha: 0.005
+  action_mask: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
-  chunk_horizon: 15
+  chunk_horizon: 30
+
+action_filter:
+  enabled: false
+  alpha: 0.25
+  max_delta: null
+  warmup_steps: 0
+  reset_each_episode: true
 
 encoder:
   type: resnet
   shared: true
+  fuse_views: auto
   use_proprio: true
   proprio_latent_dim: 64
   resnet:
@@ -92,11 +140,11 @@ sac:
   std_max: 5.0
   discount: 0.99
   soft_target_update_rate: 0.005
-  temperature_init: 1.0
+  temperature_init: 0.01
   backup_entropy: true
   critic_ensemble_size: 2
   critic_subsample_size: 2
-  utd_ratio: 2
+  utd_ratio: 4
   otf_num_samples: 1
   cql_n_actions: 10
   cql_temperature: 1.0
@@ -112,10 +160,13 @@ sac:
 replay:
   capacity: 250000
   batch_size: 128
+  prepared_chunk:
+    offline_enabled: false
+    online_enabled: false
 
 offline:
-  enabled: false
-  prepared_path: null
+  enabled: true
+  prepared_path: /home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data/office_setting/joyra_joyra_office_setting_chunk30_alpha0p005
   ratio: 0.5
   capacity: 50000
   load_max_episodes: null
@@ -123,12 +174,12 @@ offline:
   pretrain_steps: 0
 
   prepare:
-    # Temporary LIBERO-inspired reference input format. Replace this once the
-    # real AgiBot offline data source is defined.
-    raw_dataset_path: null
-    output_root: data/residual/offline_data
+    raw_dataset_path: /home/hello/codebase/datasets/task_3463_mouse
+    output_root: /home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
+    filter_unrepresentable_steps: false
+    max_episodes: null
 
 training:
   training_starts: 1000
@@ -138,20 +189,53 @@ training:
   max_update_steps: 300000
   max_episodes: 2000
   log_period: 100
+
   mixed_precision:
-    enabled: false
+    enabled: true
     dtype: bfloat16
+
+  torch_compile:
+    enabled: true
+    target: actor_critic
+    backend: inductor
+    mode: default
+    fullgraph: true
+    dynamic: false
   checkpoint:
-    every_steps: 2500
+    every_steps: 500
     keep: 0
     dir: checkpoints
+  # Schema-aligned with LIBERO, but intentionally disabled for real robots.
+  # AgiBot async eval is not supported; use scripts/run_residual_eval.py manually.
+  async_eval:
+    enabled: false
+    every_episodes: 20
+    episodes: 10
+    start_episode_idx: 0
+    max_env_steps_per_episode: null
+    deterministic: true
+    poll_interval_sec: 5.0
+    queue_file: async_eval_queue.jsonl
+    summary_jsonl: async_eval_results.jsonl
+    worker_log_file: async_eval_worker.log
+    checkpoint:
+      dir: async_eval_checkpoints
+      keep: 0
 
 logging:
   summary_file: summary.json
   episode_log_file: episode_logs.jsonl
 
+video:
+  enabled: true
+  camera_key: image/head
+  fps: ${task.hz}
+  output_dir: videos
+  max_pending_frames: 128
+  drop_frames_when_busy: true
+
 launch:
-  output_root: outputs/agibot_real
+  output_root: examples/agibot_real/outputs
 
 hydra:
   run:

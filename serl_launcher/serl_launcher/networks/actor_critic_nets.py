@@ -148,9 +148,9 @@ class Critic(nn.Module):
             self._head_initialized = True
         return q.squeeze(-1)
 
-    def forward(self, observations, actions: torch.Tensor, train: bool = False):
-        obs_enc = self._encode_obs(observations, train=train)
-
+    def forward_encoded(
+        self, obs_enc: torch.Tensor, actions: torch.Tensor, train: bool = False
+    ):
         if actions.ndim == 3:
             bsz, num_actions, act_dim = actions.shape
             flat_actions = actions.reshape(bsz * num_actions, act_dim)
@@ -163,6 +163,10 @@ class Critic(nn.Module):
             return q_values.reshape(bsz, num_actions)
 
         return self._forward_single(obs_enc, actions, train=train)
+
+    def forward(self, observations, actions: torch.Tensor, train: bool = False):
+        obs_enc = self._encode_obs(observations, train=train)
+        return self.forward_encoded(obs_enc, actions, train=train)
 
 
 class DistributionalCritic(nn.Module):
@@ -259,9 +263,31 @@ class CriticEnsemble(nn.Module):
     def __init__(self, critic_ctor, num_qs: int):
         super().__init__()
         self.models = nn.ModuleList([critic_ctor() for _ in range(num_qs)])
+        self._can_share_encoder_forward = self._detect_shared_encoder()
+
+    def _detect_shared_encoder(self) -> bool:
+        if len(self.models) <= 1:
+            return False
+        if not all(hasattr(critic, "forward_encoded") for critic in self.models):
+            return False
+        first_encoder = getattr(self.models[0], "encoder", None)
+        if first_encoder is None:
+            return False
+        return all(
+            getattr(critic, "encoder", None) is first_encoder
+            for critic in self.models[1:]
+        )
 
     def forward(self, observations, actions: torch.Tensor, train: bool = False):
-        qs = [critic(observations, actions, train=train) for critic in self.models]
+        if self._can_share_encoder_forward:
+            first_critic = self.models[0]
+            obs_enc = first_critic._encode_obs(observations, train=train)
+            qs = [
+                critic.forward_encoded(obs_enc, actions, train=train)
+                for critic in self.models
+            ]
+        else:
+            qs = [critic(observations, actions, train=train) for critic in self.models]
         return torch.stack(qs, dim=0)
 
 

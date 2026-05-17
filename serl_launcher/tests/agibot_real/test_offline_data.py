@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import pickle
 import sys
@@ -7,24 +8,43 @@ import tempfile
 from pathlib import Path
 import unittest
 
+import numpy as np
+
 REPO_PARENT = Path(__file__).resolve().parents[4]
 if str(REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(REPO_PARENT))
+SERL_LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
+if str(SERL_LAUNCHER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERL_LAUNCHER_ROOT))
 
 try:
     from omegaconf import OmegaConf
+    from serl_torch.examples.agibot_real.config import parse_train_cfg
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        load_prepared_offline_replay,
+    )
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        prepare_reference_episode_transitions,
+    )
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        resolve_and_validate_prepared_paths,
+    )
+    from serl_torch.examples.agibot_real.env.offline_data import (
+        resolve_prepared_episode_files,
+    )
+    from serl_launcher.residual.typed_action import ResidualActionSpec
 except ModuleNotFoundError:  # pragma: no cover - environment-dependent
     OmegaConf = None
 
-if OmegaConf is not None:
-    from serl_torch.examples.agibot_real.config import parse_train_cfg
-    from serl_torch.examples.agibot_real.offline_data import load_prepared_offline_replay
-    from serl_torch.examples.agibot_real.offline_data import (
-        resolve_and_validate_prepared_paths,
-    )
-    from serl_torch.examples.agibot_real.offline_data import (
-        resolve_prepared_episode_files,
-    )
+from serl_torch.examples.agibot_real.env.offline_data import (
+    _coerce_lerobot_state_action_vector,
+)
+from serl_torch.examples.agibot_real.env.offline_data import (
+    _coerce_lerobot_state_vector,
+)
+from serl_torch.examples.agibot_real.env.offline_data import (
+    _extract_lerobot_original_head_waist,
+)
 
 
 class _FakeReplayBuffer:
@@ -55,6 +75,94 @@ def _train_cfg_with_prepared_path(prepared_path: str) -> object:
     cfg.offline.enabled = True
     cfg.offline.prepared_path = prepared_path
     return parse_train_cfg(cfg)
+
+
+def _make_raw_obs() -> dict[str, object]:
+    return {
+        "state/pose": [0.0] * 14,
+        "image/head": [[[0, 0, 0]] * 8 for _ in range(8)],
+        "image/left_wrist": [[[0, 0, 0]] * 8 for _ in range(8)],
+        "image/right_wrist": [[[0, 0, 0]] * 8 for _ in range(8)],
+    }
+
+
+class AgiBotLeRobotRawDataTest(unittest.TestCase):
+    def test_openpi_14d_vector_is_used_as_is(self) -> None:
+        vector = list(range(14))
+        result = _coerce_lerobot_state_action_vector(
+            vector,
+            column="actions",
+            source_path=Path("/tmp/episode.parquet"),
+            arm_layout="dual_arm",
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in vector])
+
+    def test_openpi_14d_vector_can_be_projected_to_right_arm(self) -> None:
+        vector = list(range(14))
+        result = _coerce_lerobot_state_action_vector(
+            vector,
+            column="actions",
+            source_path=Path("/tmp/episode.parquet"),
+            arm_layout="right_arm",
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in range(7, 14)])
+
+    def test_single_arm_7d_vector_is_kept_for_right_arm(self) -> None:
+        vector = list(range(7))
+        result = _coerce_lerobot_state_action_vector(
+            vector,
+            column="actions",
+            source_path=Path("/tmp/episode.parquet"),
+            arm_layout="right_arm",
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in vector])
+
+    def test_joyra_30d_vector_uses_last_14_then_projects(self) -> None:
+        vector = list(range(30))
+        result = _coerce_lerobot_state_action_vector(
+            vector,
+            column="action",
+            source_path=Path("/tmp/episode.parquet"),
+            arm_layout="right_arm",
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in range(23, 30)])
+
+    def test_joyra_30d_state_keeps_canonical_pose_for_policy_input(self) -> None:
+        vector = list(range(30))
+        result = _coerce_lerobot_state_vector(
+            vector,
+            column="observation.state",
+            source_path=Path("/tmp/episode.parquet"),
+            arm_layout="right_arm",
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in range(16, 30)])
+
+    def test_joyra_original_state_extracts_head_and_waist(self) -> None:
+        original_state = np.arange(53, dtype=np.float32)
+        head, waist = _extract_lerobot_original_head_waist(
+            original_state,
+            source_path=Path("/tmp/episode.parquet"),
+        )
+        np.testing.assert_array_equal(head, np.asarray([26, 27], dtype=np.float32))
+        np.testing.assert_array_equal(waist, np.asarray([51, 52], dtype=np.float32))
+
+    def test_rejects_7d_vector_for_dual_arm(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dual_arm"):
+            _coerce_lerobot_state_action_vector(
+                [0.0] * 7,
+                column="action",
+                source_path=Path("/tmp/episode.parquet"),
+                arm_layout="dual_arm",
+            )
+
+    def test_rejects_unexpected_vector_width(self) -> None:
+        with self.assertRaisesRegex(ValueError, "7D single-arm data"):
+            _coerce_lerobot_state_action_vector(
+                [0.0] * 16,
+                column="action",
+                source_path=Path("/tmp/episode.parquet"),
+                arm_layout="right_arm",
+            )
 
 
 @unittest.skipIf(OmegaConf is None, "omegaconf is not installed")
@@ -91,8 +199,19 @@ class AgiBotOfflineDataTest(unittest.TestCase):
                     "action_mask": list(cfg.residual.action_mask),
                     "action_limits": list(cfg.residual.action_limits),
                     "clip_gripper": cfg.residual.clip_gripper,
+                    "expert_reference_scale": (
+                        cfg.offline.prepare.expert_reference_scale
+                    ),
+                    "clip_residual_to_unit": (
+                        cfg.offline.prepare.clip_residual_to_unit
+                    ),
+                    "filter_unrepresentable_steps": (
+                        cfg.offline.prepare.filter_unrepresentable_steps
+                    ),
                     "image_keys": list(cfg.obs.image_keys),
                     "vector_obs_keys": list(cfg.obs.vector_obs_keys),
+                    "arm_layout": cfg.env.arm_layout,
+                    "robot_action_dim": cfg.env.robot_action_dim,
                 },
                 "episode_files": [episode_path.name],
             }
@@ -116,8 +235,117 @@ class AgiBotOfflineDataTest(unittest.TestCase):
                 logger=_FakeLogger(),
             )
             self.assertEqual(stats["episodes_loaded"], 1)
-            self.assertEqual(stats["inserted"], 1)
+            self.assertEqual(stats["steps_loaded"], 1)
+            self.assertEqual(stats["load_errors"], 0)
             self.assertEqual(len(replay_buffer.inserted), 1)
+
+    def test_prepare_reference_episode_filters_unrepresentable_steps(self) -> None:
+        cfg = _train_cfg_with_prepared_path("/tmp/prepared")
+        cfg = dataclasses.replace(
+            cfg,
+            offline=dataclasses.replace(
+                cfg.offline,
+                prepare=dataclasses.replace(
+                    cfg.offline.prepare,
+                    filter_unrepresentable_steps=True,
+                ),
+            ),
+        )
+        action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=cfg.env.action_dim)
+        base_chunk = [[0.0] * cfg.env.action_dim for _ in range(cfg.residual.chunk_horizon)]
+        raw_steps = [
+            {
+                "observations": _make_raw_obs(),
+                "next_observations": _make_raw_obs(),
+                "expert_action": [2.0] + ([0.0] * (cfg.env.action_dim - 1)),
+                "base_chunk": base_chunk,
+                "reward": 0.0,
+                "done": False,
+            },
+            {
+                "observations": _make_raw_obs(),
+                "expert_action": [0.0] * cfg.env.action_dim,
+                "base_chunk": base_chunk,
+                "reward": 1.0,
+                "done": True,
+            },
+        ]
+
+        transitions, episode_stats = prepare_reference_episode_transitions(
+            raw_steps=raw_steps,
+            episode_id=7,
+            task_prompt=cfg.task.prompt,
+            action_spec=action_spec,
+            image_keys=cfg.obs.image_keys,
+            base_policy=object(),
+            expert_reference_scale=cfg.offline.prepare.expert_reference_scale,
+            clip_residual_to_unit=cfg.offline.prepare.clip_residual_to_unit,
+            filter_unrepresentable_steps=cfg.offline.prepare.filter_unrepresentable_steps,
+            source_path=Path("/tmp/reference_episode.pkl"),
+            arm_layout=cfg.env.arm_layout,
+        )
+
+        self.assertEqual(episode_stats["steps_total"], 2)
+        self.assertEqual(episode_stats["steps_unrepresentable"], 1)
+        self.assertEqual(episode_stats["steps_filtered"], 1)
+        self.assertEqual(episode_stats["steps_written"], 1)
+        self.assertEqual(len(transitions), 1)
+        self.assertEqual(transitions[0]["episode_id"], 7)
+        self.assertEqual(transitions[0]["episode_step"], 1)
+        self.assertTrue(transitions[0]["dones"])
+
+    def test_prepare_reference_episode_right_arm_writes_7d_replay(self) -> None:
+        cfg = _train_cfg_with_prepared_path("/tmp/prepared")
+        cfg = dataclasses.replace(
+            cfg,
+            env=dataclasses.replace(
+                cfg.env,
+                arm_layout="right_arm",
+                action_dim=7,
+                robot_action_dim=14,
+            ),
+            policy=dataclasses.replace(cfg.policy, action_layout="right_arm"),
+            residual=dataclasses.replace(
+                cfg.residual,
+                action_mask=(True,) * 7,
+                action_limits=(1.0,) * 7,
+            ),
+        )
+        action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=cfg.env.action_dim)
+        base_chunk = [[0.0] * cfg.env.action_dim for _ in range(cfg.residual.chunk_horizon)]
+        raw_steps = [
+            {
+                "observations": _make_raw_obs(),
+                "expert_action": [0.0] * 14,
+                "base_chunk": base_chunk,
+                "reward": 1.0,
+                "done": True,
+            },
+        ]
+
+        transitions, _episode_stats = prepare_reference_episode_transitions(
+            raw_steps=raw_steps,
+            episode_id=9,
+            task_prompt=cfg.task.prompt,
+            action_spec=action_spec,
+            image_keys=cfg.obs.image_keys,
+            base_policy=object(),
+            expert_reference_scale=cfg.offline.prepare.expert_reference_scale,
+            clip_residual_to_unit=cfg.offline.prepare.clip_residual_to_unit,
+            filter_unrepresentable_steps=False,
+            source_path=Path("/tmp/reference_episode.pkl"),
+            arm_layout=cfg.env.arm_layout,
+        )
+
+        self.assertEqual(np.asarray(transitions[0]["actions"]).shape, (7,))
+        self.assertEqual(
+            transitions[0]["observations"]["robot_proprio"].shape,
+            (1, 7),
+        )
+        self.assertEqual(
+            transitions[0]["observations"]["base_action_chunk"].shape[-1],
+            7,
+        )
 
     def test_validate_prepared_offline_rejects_manifestless_episode_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

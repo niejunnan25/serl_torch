@@ -40,7 +40,7 @@
 ### 1.3 关键路径
 
 - RoboTwin 根目录：`/vla/users/niejunnan/codebase/RoboTwin`
-- serl_torch 示例根目录：`/vla/users/niejunnan/codebase/serl_torch/examples/RoboTwin`
+- serl_torch 示例根目录：`/home/hello/codebase/serl_torch/examples/RoboTwin`
 - OpenPI 脚本：`/vla/users/niejunnan/test/openpi/tools/batch_serve_policy.sh`
 
 ---
@@ -67,7 +67,7 @@ docker exec -it robotwin_njn_new /bin/bash
 **方式 A：使用 RoboTwin 自带脚本（推荐，单任务）**
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch/examples/RoboTwin
+cd /home/hello/codebase/serl_torch/examples/RoboTwin
 bash tools/serve_openpi.sh place_a2b_left              # 默认端口 9000
 bash tools/serve_openpi.sh place_a2b_left --port 9000 # 指定端口
 bash tools/serve_openpi.sh adjust_bottle --port 9001 --gpu_id 1
@@ -91,7 +91,7 @@ bash /vla/users/niejunnan/test/openpi/tools/batch_serve_policy.sh place_a2b_left
 docker exec -it robotwin_njn_new /bin/bash
 conda activate robotwin2
 
-cd /vla/users/niejunnan/codebase/serl_torch/examples/RoboTwin
+cd /home/hello/codebase/serl_torch/examples/RoboTwin
 bash tools/serve_env.sh                    # 默认端口 9200
 # 或指定端口：bash tools/serve_env.sh --port 9100
 ```
@@ -106,7 +106,7 @@ bash tools/serve_env.sh                    # 默认端口 9200
 docker exec -it robotwin_njn_new /bin/bash
 conda activate serl_torch
 
-cd /vla/users/niejunnan/codebase/serl_torch/examples/RoboTwin
+cd /home/hello/codebase/serl_torch/examples/RoboTwin
 bash tools/train.sh
 ```
 
@@ -148,7 +148,7 @@ bash tools/train.sh env.remote.port=9100
 # 1. 进入容器并激活环境
 docker exec -it robotwin_njn_new /bin/bash
 conda activate serl_torch
-cd /vla/users/niejunnan/codebase/serl_torch/examples/RoboTwin
+cd /home/hello/codebase/serl_torch/examples/RoboTwin
 
 # 2. 确保 OpenPI 已启动（另一终端运行 batch_serve_policy.sh）
 
