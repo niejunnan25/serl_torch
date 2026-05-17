@@ -42,10 +42,12 @@ from serl_launcher.common.training_payloads import parse_rollout_stats_payload
 from serl_launcher.common.training_reporting import format_learner_heartbeat
 from serl_launcher.common.training_reporting import sync_eval_results_to_wandb
 from serl_launcher.common.wandb import WandBLogger
-from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.policy.typed_factory import build_policy_client
 from serl_launcher.policy.typed_factory import describe_policy_backend
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
+from serl_launcher.residual.chunk_window_replay import (
+    PreparedStepWindowReplayBufferSampler,
+)
 from serl_launcher.residual.chunk_window_replay import PrefetchingMixedBatchSampler
 from serl_launcher.residual.chunk_window_replay import ProfileAccumulator
 from serl_launcher.residual.action_metrics import ResidualActionStatsAccumulator
@@ -665,7 +667,13 @@ def learner(
         image_keys=image_keys,
         capacity=int(cfg.replay.capacity),
     )
-    offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None = None
+    if bool(cfg.replay.prepared_chunk.online_enabled):
+        raise NotImplementedError(
+            "replay.prepared_chunk.online_enabled is not implemented yet. "
+            "Use replay.prepared_chunk.offline_enabled for the immutable offline replay."
+        )
+    offline_replay_buffer: Any | None = None
+    offline_prepared_chunk_profile: dict[str, float] | None = None
     offline_prepared_path: Path | None = None
     offline_manifest_path: Path | None = None
     offline_validation_stats: dict[str, Any] | None = None
@@ -846,6 +854,40 @@ def learner(
             )
             offline_replay_buffer = None
         else:
+            if bool(cfg.replay.prepared_chunk.offline_enabled):
+                prepare_start = time.perf_counter()
+                offline_replay_buffer = PreparedStepWindowReplayBufferSampler(
+                    offline_replay_buffer,
+                    name="offline",
+                )
+                offline_prepared_chunk_profile = dict(
+                    offline_replay_buffer.prepare_profile
+                )
+                offline_prepared_chunk_profile.setdefault(
+                    "prepare_window_sec",
+                    float(time.perf_counter() - prepare_start),
+                )
+                logger.info(
+                    "offline prepared chunk cache ready: replay_size=%s windows=%s "
+                    "prepare_window_sec=%.6f action_cache_sec=%.6f scalar_cache_sec=%.6f",
+                    int(len(offline_replay_buffer)),
+                    int(offline_replay_buffer.num_windows),
+                    float(
+                        offline_prepared_chunk_profile.get("prepare_window_sec", 0.0)
+                    ),
+                    float(
+                        offline_prepared_chunk_profile.get(
+                            "prepare_action_cache_sec",
+                            0.0,
+                        )
+                    ),
+                    float(
+                        offline_prepared_chunk_profile.get(
+                            "prepare_scalar_cache_sec",
+                            0.0,
+                        )
+                    ),
+                )
             logger.info(
                 "offline replay ready: prepared_path=%s replay_size=%s ratio=%.3f pretrain_steps=%s",
                 None if offline_prepared_path is None else str(offline_prepared_path),
@@ -1165,6 +1207,20 @@ def learner(
                         update_profile_metrics=update_profile_metrics,
                     )
                 )
+                if offline_prepared_chunk_profile is not None:
+                    learner_metrics[
+                        "replay/offline_prepared_chunk/enabled"
+                    ] = 1.0
+                    learner_metrics[
+                        "replay/offline_prepared_chunk/prepared_windows"
+                    ] = float(
+                        offline_prepared_chunk_profile.get("prepared_windows", 0.0)
+                    )
+                    for key, value in offline_prepared_chunk_profile.items():
+                        if isinstance(value, (int, float)):
+                            learner_metrics[
+                                f"learner_time/offline_prepared_chunk/{key}"
+                            ] = float(value)
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
                 append_jsonl(
@@ -1178,6 +1234,11 @@ def learner(
                         "timer": timer_metrics,
                         "sample_profile": sample_profile_metrics,
                         "update_profile": update_profile_metrics,
+                        "offline_prepared_chunk": (
+                            None
+                            if offline_prepared_chunk_profile is None
+                            else to_jsonable(offline_prepared_chunk_profile)
+                        ),
                         "transport": _transport_status(),
                     },
                 )
@@ -1284,6 +1345,19 @@ def learner(
                         else to_jsonable(offline_validation_stats)
                     ),
                     "load_stats": to_jsonable(offline_load_stats),
+                    "prepared_chunk": {
+                        "offline_enabled": bool(
+                            cfg.replay.prepared_chunk.offline_enabled
+                        ),
+                        "online_enabled": bool(
+                            cfg.replay.prepared_chunk.online_enabled
+                        ),
+                        "profile": (
+                            None
+                            if offline_prepared_chunk_profile is None
+                            else to_jsonable(offline_prepared_chunk_profile)
+                        ),
+                    },
                     "replay_size": (
                         0
                         if offline_replay_buffer is None

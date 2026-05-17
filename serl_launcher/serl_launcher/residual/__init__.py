@@ -8,6 +8,7 @@ __all__ = [
     "ResidualActionSpec",
     "ResidualActionStatsAccumulator",
     "ResidualDeltaActionFilter",
+    "PreparedStepWindowReplayBufferSampler",
     "build_chunk_residual_obs",
     "build_chunk_residual_observation_space",
     "build_chunk_residual_sample_obs",
@@ -25,6 +26,10 @@ def __getattr__(name: str):
         from .action_filter import ResidualDeltaActionFilter
 
         return ResidualDeltaActionFilter
+    if name == "PreparedStepWindowReplayBufferSampler":
+        from .chunk_window_replay import PreparedStepWindowReplayBufferSampler
+
+        return PreparedStepWindowReplayBufferSampler
     if name == "project_expert_action":
         from .expert_projection import project_expert_action
 

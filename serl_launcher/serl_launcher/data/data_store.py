@@ -2,7 +2,10 @@ from threading import Lock
 import time
 from typing import Iterable, Optional, TypeVar
 
-import gym
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
 import numpy as np
 
 from serl_launcher.data.memory_efficient_replay_buffer import MemoryEfficientReplayBuffer
@@ -617,6 +620,7 @@ class MemoryEfficientStepWindowReplayBufferDataStore(
                 batch = self._build_transition_batch_from_metadata(
                     metadata,
                     pack_obs_and_next_obs=pack_obs_and_next_obs,
+                    profile=profile,
                 )
             except RuntimeError as exc:
                 last_error = exc

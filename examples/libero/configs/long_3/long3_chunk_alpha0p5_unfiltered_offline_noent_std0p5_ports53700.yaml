@@ -143,6 +143,9 @@ sac:
 replay:
   capacity: 250000
   batch_size: 128
+  prepared_chunk:
+    offline_enabled: true
+    online_enabled: false
 offline:
   enabled: true
   prepared_path: /vla/users/niejunnan/codebase/serl_torch/examples/libero/data/residual/offline_data/libero_10_task_3/openpi_chunk5_alpha0p5_unfiltered

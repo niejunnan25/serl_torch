@@ -1,7 +1,10 @@
 from typing import Dict, Iterable, Optional, Tuple, Union
 
 import numpy as np
-from gym.utils import seeding
+try:
+    from gym.utils import seeding
+except ModuleNotFoundError:
+    from gymnasium.utils import seeding
 
 DataType = Union[np.ndarray, Dict[str, "DataType"]]
 DatasetDict = Dict[str, DataType]

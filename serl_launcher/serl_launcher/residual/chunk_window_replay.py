@@ -111,7 +111,7 @@ class PrefetchingMixedBatchSampler:
         self,
         *,
         online_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore,
-        offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None,
+        offline_replay_buffer: Any | None,
         batch_size: int,
         device: Any = None,
         pack_obs_and_next_obs: bool = True,
@@ -212,6 +212,11 @@ def _profile_add(profile: Optional[Dict[str, float]], key: str, value: float) ->
         profile[key] = float(profile.get(key, 0.0)) + float(value)
 
 
+def _profile_set(profile: Optional[Dict[str, float]], key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(value)
+
+
 def _profile_count(
     profile: Optional[Dict[str, float]],
     key: str,
@@ -235,7 +240,7 @@ def _merge_prefixed_profile(
 
 
 def _sample_with_profile(
-    replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore,
+    replay_buffer: Any,
     *,
     batch_size: int,
     prefix: str,
@@ -298,6 +303,284 @@ def create_chunk_replay_buffer(
     )
 
 
+class PreparedStepWindowReplayBufferSampler:
+    """Prepared immutable step-window sampler for loaded offline replay buffers.
+
+    This wrapper caches window-level scalar/action data after an offline replay is
+    loaded. Observation arrays are still read from the wrapped replay at sample
+    time, so memory overhead stays bounded and image data remains single-copy.
+    The wrapper is intentionally for immutable/offline replay buffers; online
+    replay needs separate invalidation and insert/backpressure handling.
+    """
+
+    def __init__(
+        self,
+        replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore,
+        *,
+        name: str = "offline",
+    ) -> None:
+        self.replay_buffer = replay_buffer
+        self.name = str(name)
+        self.prepare_profile: dict[str, float] = {}
+
+        prepare_start = time.perf_counter()
+        lock = getattr(replay_buffer, "_lock", None)
+        if lock is None:
+            self._prepare_from_replay()
+        else:
+            lock.acquire()
+            try:
+                self._prepare_from_replay()
+            finally:
+                lock.release()
+        self.prepare_profile["prepare_window_sec"] = float(
+            time.perf_counter() - prepare_start
+        )
+        self.prepare_profile["prepared_windows"] = float(self.num_windows)
+
+    def __len__(self) -> int:
+        return int(len(self.replay_buffer))
+
+    @property
+    def num_windows(self) -> int:
+        return int(self._candidate_start_ids.shape[0])
+
+    def latest_data_id(self) -> int:
+        latest = getattr(self.replay_buffer, "latest_data_id", None)
+        if latest is None:
+            return int(len(self.replay_buffer))
+        return int(latest())
+
+    def sample(
+        self,
+        batch_size: int,
+        keys: Optional[Any] = None,
+        indx: Optional[np.ndarray] = None,
+        profile: Optional[Dict[str, float]] = None,
+        pack_obs_and_next_obs: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"unexpected sample keyword argument(s): {unexpected}")
+        if indx is not None:
+            return self._sample_explicit_indices(
+                batch_size=int(batch_size),
+                keys=keys,
+                indx=np.asarray(indx, dtype=np.int64),
+                profile=profile,
+                pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+            )
+
+        sample_start = time.perf_counter()
+        choice_start = time.perf_counter()
+        count = int(self._candidate_start_ids.shape[0])
+        if count <= 0:
+            raise RuntimeError(f"{self.name} prepared replay has no candidate windows")
+        if hasattr(self.replay_buffer.np_random, "integers"):
+            offsets = self.replay_buffer.np_random.integers(
+                count,
+                size=int(batch_size),
+            )
+        else:
+            offsets = self.replay_buffer.np_random.randint(
+                count,
+                size=int(batch_size),
+            )
+        offsets = np.asarray(offsets, dtype=np.int64)
+        _profile_add(profile, "candidate_choice_sec", time.perf_counter() - choice_start)
+        _profile_set(profile, "candidate_count", count)
+
+        batch = self._build_prepared_batch(
+            offsets=offsets,
+            profile=profile,
+            pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+        )
+        _profile_set(profile, "retry_count", 0.0)
+        _profile_set(profile, "batch_size", int(batch_size))
+        _profile_add(profile, "sample_total_sec", time.perf_counter() - sample_start)
+        if keys is not None:
+            select_start = time.perf_counter()
+            batch = {key: batch[key] for key in list(keys)}
+            _profile_add(profile, "select_keys_sec", time.perf_counter() - select_start)
+        return batch
+
+    def _prepare_from_replay(self) -> None:
+        self._candidate_start_ids = np.asarray(
+            list(self.replay_buffer._candidate_start_step_ids),
+            dtype=np.int64,
+        )
+        if int(self._candidate_start_ids.shape[0]) <= 0:
+            raise RuntimeError(f"{self.name} replay has no candidate windows")
+
+        metadata_start = time.perf_counter()
+        metadata = self.replay_buffer._sample_window_metadata(
+            batch_size=int(self._candidate_start_ids.shape[0]),
+            indx=self._candidate_start_ids,
+            profile=self.prepare_profile,
+        )
+        self._start_step_id_to_offset = {
+            int(step_id): int(offset)
+            for offset, step_id in enumerate(self._candidate_start_ids.tolist())
+        }
+        self._start_indices = np.asarray(metadata["start_indices"], dtype=np.int64)
+        self._last_step_ids = np.asarray(metadata["last_step_ids"], dtype=np.int64)
+        self._last_indices = np.asarray(metadata["last_indices"], dtype=np.int64)
+        self._window_steps = np.asarray(metadata["window_steps"], dtype=np.int32)
+        _profile_add(
+            self.prepare_profile,
+            "prepare_metadata_sec",
+            time.perf_counter() - metadata_start,
+        )
+
+        action_start = time.perf_counter()
+        valid = metadata["valid"]
+        window_indices = metadata["window_indices"]
+        valid_action_shape = valid.shape + (
+            1,
+        ) * len(self.replay_buffer._step_action_shape)
+        valid_actions = valid.reshape(valid_action_shape)
+        sampled_actions = self.replay_buffer.dataset_dict["actions"][window_indices]
+        self._actions = np.array(
+            np.where(
+                valid_actions,
+                sampled_actions,
+                np.zeros((), dtype=sampled_actions.dtype),
+            ),
+            copy=True,
+        )
+        self._action_mask = np.broadcast_to(
+            valid_actions,
+            valid.shape + self.replay_buffer._step_action_shape,
+        ).astype(np.float32, copy=True)
+        _profile_add(
+            self.prepare_profile,
+            "prepare_action_cache_sec",
+            time.perf_counter() - action_start,
+        )
+
+        scalar_start = time.perf_counter()
+        offsets = np.arange(int(self.replay_buffer.window_size), dtype=np.float32)
+        discounts = np.power(np.float32(self.replay_buffer.discount), offsets)
+        rewards = self.replay_buffer.dataset_dict["rewards"][window_indices]
+        self._rewards = np.sum(
+            rewards * valid.astype(np.float32) * discounts[None, :],
+            axis=1,
+        ).astype(np.float32)
+        terminal_discounts = np.power(
+            np.float32(self.replay_buffer.discount),
+            np.maximum(self._window_steps.astype(np.int64) - 1, 0).astype(np.float32),
+        )
+        self._masks = (
+            terminal_discounts
+            * self.replay_buffer.dataset_dict["masks"][self._last_indices].astype(
+                np.float32
+            )
+        ).astype(np.float32)
+        self._dones = np.any(
+            valid & self.replay_buffer.dataset_dict["dones"][window_indices],
+            axis=1,
+        )
+        _profile_add(
+            self.prepare_profile,
+            "prepare_scalar_cache_sec",
+            time.perf_counter() - scalar_start,
+        )
+
+    def _sample_explicit_indices(
+        self,
+        *,
+        batch_size: int,
+        keys: Optional[Any],
+        indx: np.ndarray,
+        profile: Optional[Dict[str, float]],
+        pack_obs_and_next_obs: bool,
+    ) -> dict[str, Any]:
+        sample_start = time.perf_counter()
+        choice_start = time.perf_counter()
+        sampled_start_ids = np.asarray(indx, dtype=np.int64).reshape(-1)
+        if int(sampled_start_ids.shape[0]) != int(batch_size):
+            raise ValueError(
+                "indx length must equal batch_size, got "
+                f"{sampled_start_ids.shape[0]} != {batch_size}"
+            )
+        offsets = np.asarray(
+            [
+                self._start_step_id_to_offset[int(step_id)]
+                for step_id in sampled_start_ids
+            ],
+            dtype=np.int64,
+        )
+        _profile_add(profile, "candidate_choice_sec", time.perf_counter() - choice_start)
+        _profile_set(profile, "candidate_count", int(self.num_windows))
+        batch = self._build_prepared_batch(
+            offsets=offsets,
+            profile=profile,
+            pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+        )
+        _profile_set(profile, "retry_count", 0.0)
+        _profile_set(profile, "batch_size", int(batch_size))
+        _profile_add(profile, "sample_total_sec", time.perf_counter() - sample_start)
+        if keys is not None:
+            select_start = time.perf_counter()
+            batch = {key: batch[key] for key in list(keys)}
+            _profile_add(profile, "select_keys_sec", time.perf_counter() - select_start)
+        return batch
+
+    def _build_prepared_batch(
+        self,
+        *,
+        offsets: np.ndarray,
+        profile: Optional[Dict[str, float]],
+        pack_obs_and_next_obs: bool,
+    ) -> dict[str, Any]:
+        transition_start = time.perf_counter()
+        cache_take_start = time.perf_counter()
+        start_indices = self._start_indices[offsets]
+        last_step_ids = self._last_step_ids[offsets]
+        last_indices = self._last_indices[offsets]
+        batch = {
+            "actions": np.array(self._actions[offsets], copy=True),
+            "action_mask": np.array(self._action_mask[offsets], copy=True),
+            "rewards": np.array(self._rewards[offsets], copy=True),
+            "masks": np.array(self._masks[offsets], copy=True),
+            "dones": np.array(self._dones[offsets], copy=True),
+            "window_steps": np.array(self._window_steps[offsets], copy=True),
+        }
+        _profile_add(
+            profile,
+            "prepared_cache_take_sec",
+            time.perf_counter() - cache_take_start,
+        )
+
+        obs_take_start = time.perf_counter()
+        batch["observations"] = self.replay_buffer._copy_observations_batch(
+            start_indices=start_indices,
+            last_step_ids=last_step_ids,
+            last_indices=last_indices,
+            pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+        )
+        _profile_add(profile, "obs_take_sec", time.perf_counter() - obs_take_start)
+
+        next_obs_take_start = time.perf_counter()
+        batch["next_observations"] = self.replay_buffer._copy_next_observations_batch(
+            last_step_ids=last_step_ids,
+            last_indices=last_indices,
+            pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+        )
+        _profile_add(
+            profile,
+            "next_obs_take_sec",
+            time.perf_counter() - next_obs_take_start,
+        )
+        _profile_add(
+            profile,
+            "transition_build_sec",
+            time.perf_counter() - transition_start,
+        )
+        return batch
+
+
 def reshape_chunk_batch_for_training(batch: dict[str, Any]) -> dict[str, Any]:
     """Flatten chunk action tensors into the shape expected by learner updates."""
 
@@ -337,8 +620,8 @@ def concat_batch_trees(values: list[Any]) -> Any:
 
 def sample_mixed_training_batch(
     *,
-    online_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore,
-    offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None,
+    online_replay_buffer: Any,
+    offline_replay_buffer: Any | None,
     batch_size: int,
     offline_ratio: float,
     reshape_batch: bool = True,

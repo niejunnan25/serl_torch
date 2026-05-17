@@ -5,7 +5,10 @@ import copy
 import time
 from typing import Iterable, Optional
 
-import gym
+try:
+    import gym
+except ModuleNotFoundError:
+    import gymnasium as gym
 import numpy as np
 
 from serl_launcher.data.dataset import Dataset, DatasetDict
@@ -514,6 +517,7 @@ class StepWindowReplayBuffer(Dataset):
         metadata: dict[str, np.ndarray],
         *,
         pack_obs_and_next_obs: bool = False,
+        profile: Optional[dict] = None,
     ) -> DatasetDict:
         start_indices = metadata["start_indices"]
         window_indices = metadata["window_indices"]
@@ -522,6 +526,7 @@ class StepWindowReplayBuffer(Dataset):
         last_step_ids = metadata["last_step_ids"]
         last_indices = metadata["last_indices"]
 
+        action_window_start = time.perf_counter()
         valid_action_shape = valid.shape + (1,) * len(self._step_action_shape)
         valid_actions = valid.reshape(valid_action_shape)
         sampled_actions = self.dataset_dict["actions"][window_indices]
@@ -533,11 +538,24 @@ class StepWindowReplayBuffer(Dataset):
             ),
             copy=True,
         )
+        _profile_add(
+            profile,
+            "action_window_sec",
+            time.perf_counter() - action_window_start,
+        )
+
+        action_mask_start = time.perf_counter()
         action_mask = np.broadcast_to(
             valid_actions,
             valid.shape + self._step_action_shape,
         ).astype(np.float32, copy=True)
+        _profile_add(
+            profile,
+            "action_mask_sec",
+            time.perf_counter() - action_mask_start,
+        )
 
+        reward_mask_start = time.perf_counter()
         offsets = np.arange(int(self.window_size), dtype=np.float32)
         discounts = np.power(np.float32(self.discount), offsets)
         rewards = self.dataset_dict["rewards"][window_indices]
@@ -552,24 +570,42 @@ class StepWindowReplayBuffer(Dataset):
         masks = (
             terminal_discounts * self.dataset_dict["masks"][last_indices].astype(np.float32)
         ).astype(np.float32)
+        dones = np.any(valid & self.dataset_dict["dones"][window_indices], axis=1)
+        _profile_add(
+            profile,
+            "reward_mask_sec",
+            time.perf_counter() - reward_mask_start,
+        )
+
+        obs_take_start = time.perf_counter()
+        observations = self._copy_observations_batch(
+            start_indices=start_indices,
+            last_step_ids=last_step_ids,
+            last_indices=last_indices,
+            pack_obs_and_next_obs=pack_obs_and_next_obs,
+        )
+        _profile_add(profile, "obs_take_sec", time.perf_counter() - obs_take_start)
+
+        next_obs_take_start = time.perf_counter()
+        next_observations = self._copy_next_observations_batch(
+            last_step_ids=last_step_ids,
+            last_indices=last_indices,
+            pack_obs_and_next_obs=pack_obs_and_next_obs,
+        )
+        _profile_add(
+            profile,
+            "next_obs_take_sec",
+            time.perf_counter() - next_obs_take_start,
+        )
 
         return {
-            "observations": self._copy_observations_batch(
-                start_indices=start_indices,
-                last_step_ids=last_step_ids,
-                last_indices=last_indices,
-                pack_obs_and_next_obs=pack_obs_and_next_obs,
-            ),
+            "observations": observations,
             "actions": action_window,
             "action_mask": action_mask,
-            "next_observations": self._copy_next_observations_batch(
-                last_step_ids=last_step_ids,
-                last_indices=last_indices,
-                pack_obs_and_next_obs=pack_obs_and_next_obs,
-            ),
+            "next_observations": next_observations,
             "rewards": discounted_rewards,
             "masks": masks,
-            "dones": np.any(valid & self.dataset_dict["dones"][window_indices], axis=1),
+            "dones": dones,
             "window_steps": window_steps,
         }
 
@@ -607,6 +643,7 @@ class StepWindowReplayBuffer(Dataset):
         batch = self._build_transition_batch_from_metadata(
             metadata,
             pack_obs_and_next_obs=bool(pack_obs_and_next_obs),
+            profile=profile,
         )
         _profile_add(
             profile,

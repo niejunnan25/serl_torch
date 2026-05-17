@@ -32,6 +32,9 @@ for path in (REPO_ROOT, SERL_LAUNCHER_ROOT):
         sys.path.insert(0, path_str)
 
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
+from serl_launcher.residual.chunk_window_replay import (
+    PreparedStepWindowReplayBufferSampler,
+)
 from serl_launcher.residual.chunk_window_replay import sample_mixed_training_batch
 
 
@@ -154,6 +157,35 @@ def _fake_transition_batch(
     }
 
 
+def _touch_array_pages(array: np.ndarray, rows: int, *, page_stride: int = 4096) -> None:
+    rows = min(int(rows), int(array.shape[0]))
+    if rows <= 0:
+        return
+    view = np.asarray(array[:rows]).view(np.uint8).reshape(-1)
+    if int(view.size) <= 0:
+        return
+    view[:: max(1, int(page_stride))] = 0
+
+
+def _touch_nested_pages(value: Any, rows: int, *, page_stride: int = 4096) -> None:
+    if isinstance(value, np.ndarray):
+        _touch_array_pages(value, int(rows), page_stride=int(page_stride))
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _touch_nested_pages(item, int(rows), page_stride=int(page_stride))
+
+
+def _touch_replay_observation_pages(replay: Any, rows: int) -> float:
+    start = time.perf_counter()
+    _touch_nested_pages(replay.dataset_dict["observations"], int(rows))
+    _touch_nested_pages(replay.dataset_dict["next_observations"], int(rows))
+    explicit_next_pixels = getattr(replay, "_explicit_next_pixels", None)
+    if isinstance(explicit_next_pixels, dict):
+        _touch_nested_pages(explicit_next_pixels, int(rows))
+    return float(time.perf_counter() - start)
+
+
 def _fill_replay(
     *,
     name: str,
@@ -227,6 +259,7 @@ def _prefill_replay_metadata(
     chunk_horizon: int,
     action_dim: int,
     episode_length: int,
+    touch_observation_pages: bool,
 ) -> Any:
     """Create a replay with valid metadata while leaving large image arrays untouched."""
 
@@ -274,6 +307,9 @@ def _prefill_replay_metadata(
     replay._candidate_start_step_ids.clear()
     replay._candidate_start_step_ids.extend(candidates)
     replay._candidate_start_step_set = set(candidates)
+    touch_elapsed = 0.0
+    if bool(touch_observation_pages):
+        touch_elapsed = _touch_replay_observation_pages(replay, rows=steps)
     print(
         json.dumps(
             {
@@ -282,6 +318,8 @@ def _prefill_replay_metadata(
                 "steps": int(steps),
                 "capacity": int(capacity),
                 "elapsed_sec": float(time.perf_counter() - start_time),
+                "touch_observation_pages": bool(touch_observation_pages),
+                "touch_elapsed_sec": float(touch_elapsed),
                 "num_windows": int(replay.num_windows),
             },
             sort_keys=True,
@@ -304,6 +342,7 @@ def _create_replay(
     chunk_horizon: int,
     action_dim: int,
     episode_length: int,
+    touch_observation_pages: bool,
 ) -> Any:
     if str(mode) == "metadata":
         return _prefill_replay_metadata(
@@ -316,6 +355,7 @@ def _create_replay(
             chunk_horizon=int(chunk_horizon),
             action_dim=int(action_dim),
             episode_length=int(episode_length),
+            touch_observation_pages=bool(touch_observation_pages),
         )
     if str(mode) != "batch":
         raise ValueError(f"Unsupported prefill mode: {mode}")
@@ -477,6 +517,31 @@ def main() -> None:
             "and constructs a valid replay state for sampling-only profiling"
         ),
     )
+    parser.add_argument(
+        "--replay-variant",
+        choices=("dynamic", "prepared-experimental", "both"),
+        default="dynamic",
+        help=(
+            "dynamic uses production sample-time window construction. "
+            "prepared-experimental builds an in-memory prepared window cache in "
+            "the benchmark and samples from it."
+        ),
+    )
+    parser.add_argument(
+        "--variant-order",
+        choices=("dynamic-first", "prepared-first"),
+        default="dynamic-first",
+        help="Order used when --replay-variant=both; useful for detecting ordering bias.",
+    )
+    parser.add_argument(
+        "--touch-observation-pages",
+        action="store_true",
+        help=(
+            "When using metadata prefill, touch one byte per observation storage "
+            "page before timing samples. This reduces cold-page ordering bias for "
+            "large fake image arrays."
+        ),
+    )
     parser.add_argument("--concurrent-writer", action="store_true")
     parser.add_argument("--writer-chunk-size", type=int, default=30)
     parser.add_argument("--writer-sleep-ms", type=float, default=20.0)
@@ -504,6 +569,7 @@ def main() -> None:
         chunk_horizon=int(args.chunk_horizon),
         action_dim=int(args.action_dim),
         episode_length=int(args.episode_length),
+        touch_observation_pages=bool(args.touch_observation_pages),
     )
     offline_replay = None
     if int(args.offline_steps) > 0 and float(args.offline_ratio) > 0.0:
@@ -519,6 +585,7 @@ def main() -> None:
             chunk_horizon=int(args.chunk_horizon),
             action_dim=int(args.action_dim),
             episode_length=int(args.episode_length),
+            touch_observation_pages=bool(args.touch_observation_pages),
         )
 
     stop_event = threading.Event()
@@ -539,6 +606,80 @@ def main() -> None:
         )
 
     try:
+        variants: Dict[str, Dict[str, Any]] = {}
+        requested_variants = (
+            ["dynamic", "prepared-experimental"]
+            if str(args.replay_variant) == "both"
+            else [str(args.replay_variant)]
+        )
+        if str(args.replay_variant) == "both" and str(args.variant_order) == "prepared-first":
+            requested_variants = ["prepared-experimental", "dynamic"]
+        if bool(args.concurrent_writer) and "prepared-experimental" in requested_variants:
+            raise ValueError(
+                "--concurrent-writer is only supported for --replay-variant=dynamic"
+            )
+
+        for variant in requested_variants:
+            if variant == "dynamic":
+                variant_online = online_replay
+                variant_offline = offline_replay
+                prepare_profile = None
+            elif variant == "prepared-experimental":
+                prepare_start = time.perf_counter()
+                variant_online = PreparedStepWindowReplayBufferSampler(
+                    online_replay,
+                    name="online",
+                )
+                variant_offline = (
+                    None
+                    if offline_replay is None
+                    else PreparedStepWindowReplayBufferSampler(
+                        offline_replay,
+                        name="offline",
+                    )
+                )
+                prepare_profile = {
+                    "prepare_total_sec": float(time.perf_counter() - prepare_start),
+                    "online": dict(variant_online.prepare_profile),
+                    "offline": (
+                        None
+                        if variant_offline is None
+                        else dict(variant_offline.prepare_profile)
+                    ),
+                }
+            else:
+                raise ValueError(f"Unsupported replay variant: {variant}")
+
+            variants[variant] = {
+                "prepare_profile": prepare_profile,
+                "single_mixed_sample": _run_samples(
+                    online_replay=variant_online,
+                    offline_replay=variant_offline,
+                    batch_size=int(args.batch_size),
+                    offline_ratio=float(args.offline_ratio),
+                    iterations=int(args.iterations),
+                    warmup=int(args.warmup),
+                    samples_per_iteration=1,
+                    pack_obs_and_next_obs=bool(args.pack_obs_and_next_obs),
+                    prefer_device_concat=bool(args.prefer_device_concat),
+                    device=device,
+                ),
+                "learner_update_sample_pattern": _run_samples(
+                    online_replay=variant_online,
+                    offline_replay=variant_offline,
+                    batch_size=int(args.batch_size),
+                    offline_ratio=float(args.offline_ratio),
+                    iterations=int(args.iterations),
+                    warmup=int(args.warmup),
+                    samples_per_iteration=max(1, int(args.critic_actor_ratio)),
+                    pack_obs_and_next_obs=bool(args.pack_obs_and_next_obs),
+                    prefer_device_concat=bool(args.prefer_device_concat),
+                    device=device,
+                ),
+                "final_online_size": int(len(variant_online)),
+                "final_online_windows": int(variant_online.num_windows),
+            }
+
         result = {
             "config": {
                 "online_steps": int(args.online_steps),
@@ -553,36 +694,14 @@ def main() -> None:
                 "concurrent_writer": bool(args.concurrent_writer),
                 "writer_chunk_size": int(args.writer_chunk_size),
                 "writer_sleep_ms": float(args.writer_sleep_ms),
+                "replay_variant": str(args.replay_variant),
+                "variant_order": str(args.variant_order),
+                "touch_observation_pages": bool(args.touch_observation_pages),
                 "pack_obs_and_next_obs": bool(args.pack_obs_and_next_obs),
                 "prefer_device_concat": bool(args.prefer_device_concat),
                 "device": str(args.device),
             },
-            "single_mixed_sample": _run_samples(
-                online_replay=online_replay,
-                offline_replay=offline_replay,
-                batch_size=int(args.batch_size),
-                offline_ratio=float(args.offline_ratio),
-                iterations=int(args.iterations),
-                warmup=int(args.warmup),
-                samples_per_iteration=1,
-                pack_obs_and_next_obs=bool(args.pack_obs_and_next_obs),
-                prefer_device_concat=bool(args.prefer_device_concat),
-                device=device,
-            ),
-            "learner_update_sample_pattern": _run_samples(
-                online_replay=online_replay,
-                offline_replay=offline_replay,
-                batch_size=int(args.batch_size),
-                offline_ratio=float(args.offline_ratio),
-                iterations=int(args.iterations),
-                warmup=int(args.warmup),
-                samples_per_iteration=max(1, int(args.critic_actor_ratio)),
-                pack_obs_and_next_obs=bool(args.pack_obs_and_next_obs),
-                prefer_device_concat=bool(args.prefer_device_concat),
-                device=device,
-            ),
-            "final_online_size": int(len(online_replay)),
-            "final_online_windows": int(online_replay.num_windows),
+            "variants": variants,
         }
     finally:
         stop_event.set()

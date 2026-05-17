@@ -156,9 +156,16 @@ class SacConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplayPreparedChunkConfig:
+    offline_enabled: bool
+    online_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayConfig:
     capacity: int
     batch_size: int
+    prepared_chunk: ReplayPreparedChunkConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -1094,11 +1101,20 @@ def _parse_sac_cfg(cfg: DictConfig) -> SacConfig:
 
 def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
     replay_cfg = cfg.get("replay", {})
+    prepared_chunk_cfg = replay_cfg.get("prepared_chunk", {}) or {}
     return ReplayConfig(
         capacity=_positive_int(replay_cfg.get("capacity", 250000), "replay.capacity"),
         batch_size=_positive_int(
             replay_cfg.get("batch_size", 128),
             "replay.batch_size",
+        ),
+        prepared_chunk=ReplayPreparedChunkConfig(
+            offline_enabled=bool(
+                prepared_chunk_cfg.get("offline_enabled", False)
+            ),
+            online_enabled=bool(
+                prepared_chunk_cfg.get("online_enabled", False)
+            ),
         ),
     )
 
@@ -1694,6 +1710,7 @@ __all__ = [
     "RecycleConfig",
     "RemoteEnvConfig",
     "ReplayConfig",
+    "ReplayPreparedChunkConfig",
     "ResidualConfig",
     "ResnetConfig",
     "RuntimeConfig",

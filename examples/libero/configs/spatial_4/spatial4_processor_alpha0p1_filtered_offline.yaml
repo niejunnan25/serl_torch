@@ -132,6 +132,9 @@ sac:
 replay:
   capacity: 250000
   batch_size: 128
+  prepared_chunk:
+    offline_enabled: true
+    online_enabled: false
 
 offline:
   enabled: true

@@ -143,6 +143,9 @@ sac:
 replay:
   capacity: 250000
   batch_size: 128
+  prepared_chunk:
+    offline_enabled: true
+    online_enabled: false
 offline:
   enabled: true
   prepared_path: /vla/users/niejunnan/codebase/serl_torch/data/residual/offline_data_limits_xyz1_rot0p4_grip0p3/libero_spatial_task_4/openpi_chunk5_alpha0p1

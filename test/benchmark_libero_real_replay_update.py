@@ -33,6 +33,9 @@ from serl_launcher.residual.chunk_window_replay import (  # noqa: E402
     create_chunk_replay_buffer,
 )
 from serl_launcher.residual.chunk_window_replay import (  # noqa: E402
+    PreparedStepWindowReplayBufferSampler,
+)
+from serl_launcher.residual.chunk_window_replay import (  # noqa: E402
     sample_mixed_training_batch,
 )
 from serl_launcher.residual.observation import (  # noqa: E402
@@ -54,7 +57,6 @@ from serl_torch.examples.libero.env.offline_data import (  # noqa: E402
 from serl_torch.examples.libero.env.offline_data import (  # noqa: E402
     resolve_and_validate_prepared_paths,
 )
-
 
 def summarize(values: list[float]) -> dict[str, float]:
     arr = np.asarray(values, dtype=np.float64)
@@ -108,6 +110,21 @@ def main() -> None:
         choices=("config", "auto", "true", "false"),
         default="config",
         help="Override encoder.fuse_views for ablation.",
+    )
+    parser.add_argument(
+        "--replay-variant",
+        choices=("dynamic", "prepared-experimental", "both"),
+        default="dynamic",
+        help=(
+            "dynamic uses production sample-time window construction. "
+            "prepared-experimental uses the benchmark-only prepared window "
+            "adapter to estimate cached-window sampling impact."
+        ),
+    )
+    parser.add_argument(
+        "--variant-order",
+        choices=("dynamic-first", "prepared-first"),
+        default="dynamic-first",
     )
     parser.add_argument("--json-output", type=Path, default=None)
     args = parser.parse_args()
@@ -197,6 +214,8 @@ def main() -> None:
     def run_mode(
         name: str,
         *,
+        online_replay_buffer: Any,
+        offline_replay_buffer: Any,
         pack_obs_and_next_obs: bool,
         prefer_device_concat: bool,
     ) -> dict[str, Any]:
@@ -215,8 +234,8 @@ def main() -> None:
             sync_cuda()
             section_start = time.perf_counter()
             batch, _ = sample_mixed_training_batch(
-                online_replay_buffer=online_replay,
-                offline_replay_buffer=offline_replay,
+                online_replay_buffer=online_replay_buffer,
+                offline_replay_buffer=offline_replay_buffer,
                 batch_size=int(typed_cfg.replay.batch_size),
                 offline_ratio=float(typed_cfg.offline.ratio),
                 profile=profile,
@@ -240,8 +259,8 @@ def main() -> None:
             sync_cuda()
             section_start = time.perf_counter()
             batch, _ = sample_mixed_training_batch(
-                online_replay_buffer=online_replay,
-                offline_replay_buffer=offline_replay,
+                online_replay_buffer=online_replay_buffer,
+                offline_replay_buffer=offline_replay_buffer,
                 batch_size=int(typed_cfg.replay.batch_size),
                 offline_ratio=float(typed_cfg.offline.ratio),
                 profile=profile,
@@ -283,6 +302,8 @@ def main() -> None:
     def run_prefetch_mode(
         name: str,
         *,
+        online_replay_buffer: Any,
+        offline_replay_buffer: Any,
         pack_obs_and_next_obs: bool,
         prefer_device_concat: bool,
     ) -> dict[str, Any]:
@@ -295,8 +316,8 @@ def main() -> None:
         def sample_once():
             sample_profile: dict[str, float] = {}
             batch, batch_mix = sample_mixed_training_batch(
-                online_replay_buffer=online_replay,
-                offline_replay_buffer=offline_replay,
+                online_replay_buffer=online_replay_buffer,
+                offline_replay_buffer=offline_replay_buffer,
                 batch_size=int(typed_cfg.replay.batch_size),
                 offline_ratio=float(typed_cfg.offline.ratio),
                 profile=sample_profile,
@@ -376,30 +397,75 @@ def main() -> None:
             "sample_profile": summarize_profiles(profile_records),
         }
 
-    modes = []
-    if args.mode in ("all", "stage1"):
-        modes.append(
-            run_mode(
-                "stage1_compatible_numpy_concat",
-                pack_obs_and_next_obs=False,
-                prefer_device_concat=False,
+    requested_variants = (
+        ["dynamic", "prepared-experimental"]
+        if str(args.replay_variant) == "both"
+        else [str(args.replay_variant)]
+    )
+    if str(args.replay_variant) == "both" and str(args.variant_order) == "prepared-first":
+        requested_variants = ["prepared-experimental", "dynamic"]
+
+    variants = []
+    for variant_name in requested_variants:
+        if variant_name == "dynamic":
+            variant_online_replay = online_replay
+            variant_offline_replay = offline_replay
+            prepare_profile = None
+        elif variant_name == "prepared-experimental":
+            prepare_start = time.perf_counter()
+            variant_online_replay = PreparedStepWindowReplayBufferSampler(
+                online_replay,
+                name="online",
             )
-        )
-    if args.mode in ("all", "stage2"):
-        modes.append(
-            run_mode(
-                "stage2_packed_device_concat",
-                pack_obs_and_next_obs=True,
-                prefer_device_concat=True,
+            variant_offline_replay = PreparedStepWindowReplayBufferSampler(
+                offline_replay,
+                name="offline",
             )
-        )
-    if args.mode in ("all", "stage2_prefetch"):
-        modes.append(
-            run_prefetch_mode(
-                "stage2_packed_device_concat_prefetch",
-                pack_obs_and_next_obs=True,
-                prefer_device_concat=True,
+            prepare_profile = {
+                "prepare_total_sec": float(time.perf_counter() - prepare_start),
+                "online": dict(variant_online_replay.prepare_profile),
+                "offline": dict(variant_offline_replay.prepare_profile),
+            }
+        else:
+            raise ValueError(f"Unsupported replay variant: {variant_name}")
+
+        modes = []
+        if args.mode in ("all", "stage1"):
+            modes.append(
+                run_mode(
+                    "stage1_compatible_numpy_concat",
+                    online_replay_buffer=variant_online_replay,
+                    offline_replay_buffer=variant_offline_replay,
+                    pack_obs_and_next_obs=False,
+                    prefer_device_concat=False,
+                )
             )
+        if args.mode in ("all", "stage2"):
+            modes.append(
+                run_mode(
+                    "stage2_packed_device_concat",
+                    online_replay_buffer=variant_online_replay,
+                    offline_replay_buffer=variant_offline_replay,
+                    pack_obs_and_next_obs=True,
+                    prefer_device_concat=True,
+                )
+            )
+        if args.mode in ("all", "stage2_prefetch"):
+            modes.append(
+                run_prefetch_mode(
+                    "stage2_packed_device_concat_prefetch",
+                    online_replay_buffer=variant_online_replay,
+                    offline_replay_buffer=variant_offline_replay,
+                    pack_obs_and_next_obs=True,
+                    prefer_device_concat=True,
+                )
+            )
+        variants.append(
+            {
+                "name": variant_name,
+                "prepare_profile": prepare_profile,
+                "modes": modes,
+            }
         )
 
     result = {
@@ -427,8 +493,10 @@ def main() -> None:
             "torch_compile_fullgraph": bool(typed_cfg.training.torch_compile.fullgraph),
             "torch_compile_dynamic": bool(typed_cfg.training.torch_compile.dynamic),
             "encoder_fuse_views": str(getattr(typed_cfg.encoder, "fuse_views", "auto")),
+            "replay_variant": str(args.replay_variant),
+            "variant_order": str(args.variant_order),
         },
-        "modes": modes,
+        "variants": variants,
     }
     text = json.dumps(result, indent=2, sort_keys=True)
     print(text)

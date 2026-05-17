@@ -135,6 +135,9 @@ sac:
 replay:
   capacity: 250000
   batch_size: 256
+  prepared_chunk:
+    offline_enabled: true
+    online_enabled: false
 
 offline:
   # This is the closest analogue to demo replay in the original SERL examples.
