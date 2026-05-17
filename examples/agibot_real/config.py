@@ -201,9 +201,16 @@ class SacConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplayPreparedChunkConfig:
+    offline_enabled: bool
+    online_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayConfig:
     capacity: int
     batch_size: int
+    prepared_chunk: ReplayPreparedChunkConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +259,27 @@ class CheckpointConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AsyncEvalCheckpointConfig:
+    dir: str
+    keep: int
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncEvalConfig:
+    enabled: bool
+    every_episodes: int
+    episodes: int
+    start_episode_idx: int
+    max_env_steps_per_episode: int | None
+    deterministic: bool
+    poll_interval_sec: float
+    queue_file: str
+    summary_jsonl: str
+    worker_log_file: str
+    checkpoint: AsyncEvalCheckpointConfig
+
+
+@dataclass(frozen=True, slots=True)
 class TrainingConfig:
     training_starts: int
     steps_per_update: int
@@ -263,6 +291,7 @@ class TrainingConfig:
     mixed_precision: MixedPrecisionConfig
     torch_compile: TorchCompileConfig
     checkpoint: CheckpointConfig
+    async_eval: AsyncEvalConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -1088,11 +1117,20 @@ def _parse_sac_cfg(cfg: DictConfig) -> SacConfig:
 
 def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
     replay_cfg = cfg.get("replay", {})
+    prepared_chunk_cfg = replay_cfg.get("prepared_chunk", {}) or {}
     return ReplayConfig(
         capacity=_positive_int(replay_cfg.get("capacity", 250000), "replay.capacity"),
         batch_size=_positive_int(
             replay_cfg.get("batch_size", 128),
             "replay.batch_size",
+        ),
+        prepared_chunk=ReplayPreparedChunkConfig(
+            offline_enabled=bool(
+                prepared_chunk_cfg.get("offline_enabled", False)
+            ),
+            online_enabled=bool(
+                prepared_chunk_cfg.get("online_enabled", False)
+            ),
         ),
     )
 
@@ -1244,6 +1282,66 @@ def _parse_training_cfg(cfg: DictConfig) -> TrainingConfig:
             dir=_required_str(
                 checkpoint_cfg.get("dir", "checkpoints"),
                 "training.checkpoint.dir",
+            ),
+        ),
+        async_eval=_parse_async_eval_cfg(cfg),
+    )
+
+
+def _parse_async_eval_cfg(cfg: DictConfig) -> AsyncEvalConfig:
+    training_cfg = cfg.get("training", {})
+    async_eval_cfg = training_cfg.get("async_eval", {}) or {}
+    checkpoint_cfg = async_eval_cfg.get("checkpoint", {}) or {}
+    enabled = bool(async_eval_cfg.get("enabled", False))
+    if enabled:
+        raise ValueError(
+            "AgiBot real robot training currently does not support async eval. "
+            "Use the standalone eval entrypoint examples/agibot_real/scripts/run_residual_eval.py. "
+            "LIBERO-style parallel env / checkpoint async eval is unsupported for AgiBot real robots."
+        )
+    return AsyncEvalConfig(
+        enabled=False,
+        every_episodes=_positive_int(
+            async_eval_cfg.get("every_episodes", 20),
+            "training.async_eval.every_episodes",
+        ),
+        episodes=_positive_int(
+            async_eval_cfg.get("episodes", 10),
+            "training.async_eval.episodes",
+        ),
+        start_episode_idx=_nonnegative_int(
+            async_eval_cfg.get("start_episode_idx", 0),
+            "training.async_eval.start_episode_idx",
+        ),
+        max_env_steps_per_episode=_optional_positive_int(
+            async_eval_cfg.get("max_env_steps_per_episode", None),
+            "training.async_eval.max_env_steps_per_episode",
+        ),
+        deterministic=bool(async_eval_cfg.get("deterministic", True)),
+        poll_interval_sec=_positive_float(
+            async_eval_cfg.get("poll_interval_sec", 5.0),
+            "training.async_eval.poll_interval_sec",
+        ),
+        queue_file=_required_str(
+            async_eval_cfg.get("queue_file", "async_eval_queue.jsonl"),
+            "training.async_eval.queue_file",
+        ),
+        summary_jsonl=_required_str(
+            async_eval_cfg.get("summary_jsonl", "async_eval_results.jsonl"),
+            "training.async_eval.summary_jsonl",
+        ),
+        worker_log_file=_required_str(
+            async_eval_cfg.get("worker_log_file", "async_eval_worker.log"),
+            "training.async_eval.worker_log_file",
+        ),
+        checkpoint=AsyncEvalCheckpointConfig(
+            dir=_required_str(
+                checkpoint_cfg.get("dir", "async_eval_checkpoints"),
+                "training.async_eval.checkpoint.dir",
+            ),
+            keep=_nonnegative_int(
+                checkpoint_cfg.get("keep", 0),
+                "training.async_eval.checkpoint.keep",
             ),
         ),
     )
@@ -1438,6 +1536,8 @@ __all__ = [
     "AgiBotRunConfig",
     "AgiBotTrainConfig",
     "ActionFilterConfig",
+    "AsyncEvalCheckpointConfig",
+    "AsyncEvalConfig",
     "BackfillPolicyConfig",
     "CheckpointConfig",
     "ControllerConfig",
@@ -1458,6 +1558,7 @@ __all__ = [
     "PolicyBackend",
     "PolicyConfig",
     "ReplayConfig",
+    "ReplayPreparedChunkConfig",
     "ResidualConfig",
     "ResnetConfig",
     "RobotConfig",

@@ -224,6 +224,7 @@ def run_eval(
     successes = 0
     total_env_steps = 0
     completed_episodes = 0
+    policy_requests = 0
 
     summary: dict[str, Any] = {
         "role": "eval",
@@ -235,6 +236,10 @@ def run_eval(
         "mean_return": 0.0,
         "mean_episode_steps": 0.0,
         "env_steps": 0,
+        "axis": {
+            "episode": "episode_id",
+            "env_steps": "env_steps",
+        },
         "deterministic": bool(deterministic),
         "checkpoint_loaded": True,
         "checkpoint_path": str(checkpoint_file),
@@ -294,10 +299,12 @@ def run_eval(
 
                 timer.tick("total")
                 with timer.context("sample_actions"):
-                    base_actions, _ = base_policy.infer(
-                        obs,
-                        prompt=task_prompt,
-                    )
+                    with timer.context("policy_infer"):
+                        base_actions, _ = base_policy.infer(
+                            obs,
+                            prompt=task_prompt,
+                        )
+                    policy_requests += 1
                     residual_obs = build_chunk_residual_obs(
                         robot_state=build_agibot_layout_state(
                             obs,
@@ -402,6 +409,9 @@ def run_eval(
 
             episode_record = {
                 "episode_id": int(episode_id),
+                "eval_episode_id": int(episode_id),
+                "env_steps": int(total_env_steps),
+                "eval_env_steps": int(total_env_steps),
                 "success": bool(episode_success),
                 "episode_return": float(episode_return),
                 "episode_steps": int(episode_steps),
@@ -456,6 +466,12 @@ def run_eval(
                     else 0.0
                 ),
                 "env_steps": int(total_env_steps),
+                "policy_requests": int(policy_requests),
+                "policy_requests_per_env_step": (
+                    float(policy_requests / total_env_steps)
+                    if total_env_steps > 0
+                    else 0.0
+                ),
                 "timer": to_jsonable(timer.get_average_times()),
             }
         )

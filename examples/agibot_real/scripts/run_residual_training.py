@@ -27,6 +27,12 @@ from serl_launcher.common.checkpoint_codec import snapshot_actor_network_payload
 from serl_launcher.common.trainer_transport import build_actor_trainer_transport
 from serl_launcher.common.trainer_transport import build_learner_trainer_transport
 from serl_launcher.common.training_observability import (
+    build_learner_runtime_wandb_metrics,
+)
+from serl_launcher.common.training_observability import (
+    build_rollout_env_step_wandb_metrics,
+)
+from serl_launcher.common.training_observability import (
     configure_learner_wandb_metrics,
 )
 from serl_launcher.common.training_observability import (
@@ -43,15 +49,16 @@ from serl_launcher.common.training_payloads import build_rollout_stats_payload
 from serl_launcher.common.training_payloads import parse_rollout_stats_payload
 from serl_launcher.common.training_reporting import format_learner_heartbeat
 from serl_launcher.common.wandb import WandBLogger
-from serl_launcher.data.data_store import MemoryEfficientStepWindowReplayBufferDataStore
 from serl_launcher.residual.action_filter import ResidualDeltaActionFilter
 from serl_launcher.residual.chunk_window_replay import create_chunk_replay_buffer
+from serl_launcher.residual.chunk_window_replay import (
+    PreparedStepWindowReplayBufferSampler,
+)
 from serl_launcher.residual.chunk_window_replay import PrefetchingMixedBatchSampler
 from serl_launcher.residual.chunk_window_replay import ProfileAccumulator
 from serl_launcher.residual.observation import build_chunk_residual_observation_space
 from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
-from serl_launcher.rollout.runtime_helpers import commit_finished_episode_chunks
 from serl_launcher.rollout.video_recorder import AsyncImageVideoRecorder
 from serl_launcher.rollout.video_recorder import AsyncVideoRecorderConfig
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
@@ -80,8 +87,9 @@ from serl_torch.examples.agibot_real.env.offline_data import (
 from serl_torch.examples.agibot_real.runtime.transition_assembly import (
     AgiBotTransitionAssembler,
 )
-from serl_torch.examples.agibot_real.runtime.transition_assembly import AssemblyResult
-from serl_torch.examples.agibot_real.runtime.transition_assembly import RawChunkRecord
+from serl_torch.examples.agibot_real.runtime.processor_pipeline import (
+    AgiBotRolloutProcessor,
+)
 from serl_torch.examples.agibot_real.runtime.transition_assembly import (
     count_executed_steps_from_infos,
 )
@@ -179,7 +187,6 @@ def actor(
     max_episodes = cfg.training.max_episodes
 
     env_steps = 0
-    committed_env_steps = 0
     episode_id = 0
     success_count = 0
     recent_episode_successes: deque[int] = deque(maxlen=20)
@@ -263,50 +270,12 @@ def actor(
         cfg.runtime.trainer_transport.wait_committed_on_episode_end
     )
     current_task_prompt: str | None = None
-    pending_last_transition: dict[str, Any] | None = None
-
-    def _flush_pending_last_transition() -> None:
-        nonlocal pending_last_transition
-        if pending_last_transition is None:
-            return
-        data_store.insert(pending_last_transition)
-        pending_last_transition = None
-
-    def _finalize_pending_last_transition(
-        *,
-        terminal_reward: float,
-        boundary_flag: bool,
-    ) -> None:
-        nonlocal pending_last_transition
-        if pending_last_transition is None:
-            return
-        pending_last_transition["rewards"] = float(
-            pending_last_transition["rewards"]
-        ) + float(terminal_reward)
-        pending_last_transition["dones"] = bool(boundary_flag)
-        pending_last_transition["masks"] = 0.0
-        data_store.insert(pending_last_transition)
-        pending_last_transition = None
-
-    def _commit_assembled_chunks(assembled_chunks: list[AssemblyResult]) -> None:
-        nonlocal committed_env_steps
-        nonlocal pending_last_transition
-        for assembled_chunk in assembled_chunks:
-            _flush_pending_last_transition()
-            if bool(assembled_chunk.episode_done):
-                transitions_to_insert = assembled_chunk.transitions
-            else:
-                transitions_to_insert = assembled_chunk.transitions[:-1]
-                pending_last_transition = assembled_chunk.transitions[-1]
-            for transition in transitions_to_insert:
-                data_store.insert(transition)
-            for step_offset in range(1, assembled_chunk.env_steps_delta + 1):
-                next_committed_env_step = int(committed_env_steps + step_offset)
-                if next_committed_env_step % steps_per_update == 0:
-                    _update_trainer_transport(
-                        context=f"commit_step_{int(next_committed_env_step)}"
-                    )
-            committed_env_steps += int(assembled_chunk.env_steps_delta)
+    rollout_processor = AgiBotRolloutProcessor(
+        transition_assembler=transition_assembler,
+        data_store=data_store,
+        trainer_update_fn=lambda context: _update_trainer_transport(context=context),
+        steps_per_update=int(steps_per_update),
+    )
 
     progress_bar = tqdm(
         total=int(max_env_steps),
@@ -335,7 +304,6 @@ def actor(
                 video_recorder.start_episode(int(episode_id))
                 video_recorder.add_obs_frame(obs)
 
-            pending_last_transition = None
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
@@ -343,8 +311,8 @@ def actor(
 
             while env_steps < max_env_steps:
                 if transition_assembler.async_transition_assembly_enabled:
-                    with timer.context("commit_replay"):
-                        _commit_assembled_chunks(transition_assembler.drain_ready())
+                    with timer.context("processor_drain_ready"):
+                        rollout_processor.drain_ready()
                 timer.tick("total")
                 with timer.context("prepare_action_chunk"):
                     decision_obs = transition_assembler.pop_prefetched_decision_obs()
@@ -409,19 +377,14 @@ def actor(
                         raise RuntimeError(
                             "step_chunk returned no executed actions without a terminal outcome"
                         )
-                    with timer.context("commit_replay"):
-                        commit_finished_episode_chunks(
-                            transition_assembler=transition_assembler,
-                            commit_assembled_chunks=_commit_assembled_chunks,
+                    with timer.context("processor_episode_terminal"):
+                        rollout_processor.finalize_zero_step_terminal(
+                            terminal_reward=float(chunk_result["reward_sum"]),
+                            boundary_flag=bool(
+                                chunk_result["done"] or chunk_result["truncated"]
+                            ),
                             wait_for_episode_commit=bool(wait_for_episode_commit),
-                            require_last_transition_ready=True,
                         )
-                    _finalize_pending_last_transition(
-                        terminal_reward=float(chunk_result["reward_sum"]),
-                        boundary_flag=bool(
-                            chunk_result["done"] or chunk_result["truncated"]
-                        ),
-                    )
                     episode_return += float(chunk_result["reward_sum"])
                     episode_success = bool(
                         episode_success or chunk_result["info"].get("success", False)
@@ -442,19 +405,17 @@ def actor(
                         )
                     break
 
-                raw_chunk = RawChunkRecord.from_step_chunk_result(
-                    episode_id=int(episode_id),
-                    episode_step_start=int(episode_steps),
-                    residual_obs_before_chunk=decision_obs.residual_obs,
-                    action_chunk=action_chunk,
-                    chunk_result=chunk_result,
-                )
                 previous_env_steps = int(env_steps)
-                with timer.context("assemble_transitions"):
-                    assembled_chunks = transition_assembler.handle_chunk(
-                        raw=raw_chunk,
+                with timer.context("processor_step_chunk"):
+                    processed_chunk = rollout_processor.process_step_chunk(
+                        episode_id=int(episode_id),
+                        episode_step_start=int(episode_steps),
+                        residual_obs_before_chunk=decision_obs.residual_obs,
+                        action_chunk=action_chunk,
+                        chunk_result=chunk_result,
                         task_prompt=task_prompt,
                     )
+                raw_chunk = processed_chunk.raw
 
                 env_steps += int(raw_chunk.executed_steps)
                 progress_bar.update(int(raw_chunk.executed_steps))
@@ -471,12 +432,6 @@ def actor(
                     next_env_step = int(previous_env_steps + step_offset)
                     if next_env_step % log_period == 0:
                         should_log_timer = True
-
-                if transition_assembler.async_transition_assembly_enabled:
-                    with timer.context("commit_replay"):
-                        _commit_assembled_chunks(assembled_chunks)
-                else:
-                    _commit_assembled_chunks(assembled_chunks)
 
                 if (
                     bool(chunk_result["done"] or chunk_result["truncated"])
@@ -518,15 +473,15 @@ def actor(
                 except Exception as exc:  # noqa: BLE001
                     next_reset_error = exc
             if transition_assembler.async_transition_assembly_enabled:
-                with timer.context("commit_replay"):
-                    commit_finished_episode_chunks(
-                        transition_assembler=transition_assembler,
-                        commit_assembled_chunks=_commit_assembled_chunks,
+                with timer.context("processor_episode_finish"):
+                    rollout_processor.finish_episode(
                         wait_for_episode_commit=bool(wait_for_episode_commit),
                     )
             else:
-                _commit_assembled_chunks(transition_assembler.finish_episode())
-            _flush_pending_last_transition()
+                with timer.context("processor_episode_finish"):
+                    rollout_processor.finish_episode(
+                        wait_for_episode_commit=bool(wait_for_episode_commit),
+                    )
             _update_trainer_transport(context="episode_end")
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
@@ -583,12 +538,10 @@ def actor(
     finally:
         if current_task_prompt is not None:
             try:
-                _commit_assembled_chunks(
-                    transition_assembler.finish_episode(
-                        block=True,
-                    )
+                rollout_processor.finish_episode(
+                    wait_for_episode_commit=True,
+                    require_last_transition_ready=True,
                 )
-                _flush_pending_last_transition()
             except Exception:  # noqa: BLE001
                 logger.debug(
                     "ignored final actor replay flush error",
@@ -623,7 +576,7 @@ def actor(
         except Exception:  # noqa: BLE001
             pass
         try:
-            transition_assembler.close()
+            rollout_processor.close()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -635,6 +588,37 @@ def actor(
             client.stop()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _maybe_wrap_offline_replay_for_prepared_chunk(
+    *,
+    cfg: AgiBotTrainConfig,
+    offline_replay_buffer: Any,
+    logger: logging.Logger,
+) -> tuple[Any, dict[str, float] | None]:
+    if not bool(cfg.replay.prepared_chunk.offline_enabled):
+        return offline_replay_buffer, None
+
+    prepare_start = time.perf_counter()
+    prepared_replay_buffer = PreparedStepWindowReplayBufferSampler(
+        offline_replay_buffer,
+        name="offline",
+    )
+    profile = dict(prepared_replay_buffer.prepare_profile)
+    profile.setdefault(
+        "prepare_window_sec",
+        float(time.perf_counter() - prepare_start),
+    )
+    logger.info(
+        "offline prepared chunk cache ready: replay_size=%s windows=%s "
+        "prepare_window_sec=%.6f action_cache_sec=%.6f scalar_cache_sec=%.6f",
+        int(len(prepared_replay_buffer)),
+        int(prepared_replay_buffer.num_windows),
+        float(profile.get("prepare_window_sec", 0.0)),
+        float(profile.get("prepare_action_cache_sec", 0.0)),
+        float(profile.get("prepare_scalar_cache_sec", 0.0)),
+    )
+    return prepared_replay_buffer, profile
 
 
 def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) -> None:
@@ -677,7 +661,13 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
         image_keys=image_keys,
         capacity=int(cfg.replay.capacity),
     )
-    offline_replay_buffer: MemoryEfficientStepWindowReplayBufferDataStore | None = None
+    if bool(cfg.replay.prepared_chunk.online_enabled):
+        raise NotImplementedError(
+            "replay.prepared_chunk.online_enabled is not implemented for AgiBot. "
+            "Use replay.prepared_chunk.offline_enabled for immutable offline replay."
+        )
+    offline_replay_buffer: Any | None = None
+    offline_prepared_chunk_profile: dict[str, float] | None = None
     offline_prepared_path: Path | None = None
     offline_manifest_path: Path | None = None
     offline_validation_stats: dict[str, Any] | None = None
@@ -716,6 +706,8 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     update_steps = 0
     env_steps = 0
     latest_completed_episode_id = 0
+    last_rollout_wall_time: float | None = None
+    last_rollout_env_steps = 0
     learner_timer_log_path = run_dir / "learner_timers.jsonl"
     progress_state_lock = Lock()
     summary: dict[str, Any] = {
@@ -758,6 +750,8 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
     def stats_callback(request_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal env_steps
         nonlocal latest_completed_episode_id
+        nonlocal last_rollout_wall_time
+        nonlocal last_rollout_env_steps
         if request_type != "send-stats":
             raise ValueError(f"Invalid request type: {request_type}")
         rollout_stats = parse_rollout_stats_payload(payload)
@@ -767,15 +761,38 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                 sorted(payload.keys()),
             )
             return {}
+        rollout_env_steps = int(rollout_stats["env_steps"])
+        now = time.time()
+        actor_env_steps_per_sec: float | None = None
+        if last_rollout_wall_time is not None:
+            elapsed_sec = max(float(now - last_rollout_wall_time), 1e-6)
+            actor_env_steps_per_sec = float(
+                max(0, int(rollout_env_steps - last_rollout_env_steps))
+            ) / elapsed_sec
+        last_rollout_wall_time = float(now)
+        last_rollout_env_steps = int(rollout_env_steps)
         with progress_state_lock:
-            env_steps = max(int(env_steps), int(rollout_stats["env_steps"]))
+            env_steps = max(int(env_steps), int(rollout_env_steps))
             latest_completed_episode_id = max(
                 int(latest_completed_episode_id),
                 int(rollout_stats["rollout"]["episode_id"]),
             )
         rollout_metrics = extract_rollout_wandb_metrics(rollout_stats)
+        if actor_env_steps_per_sec is not None:
+            rollout_metrics["speed/actor_env_steps_per_sec"] = float(
+                actor_env_steps_per_sec
+            )
         if rollout_metrics:
-            wandb_logger.log(to_jsonable(rollout_metrics))
+            rollout_step = int(rollout_stats["rollout"]["episode_id"])
+            wandb_logger.log(to_jsonable(rollout_metrics), step=rollout_step)
+            rollout_env_step_metrics = build_rollout_env_step_wandb_metrics(
+                rollout_metrics
+            )
+            if rollout_env_step_metrics:
+                wandb_logger.log(
+                    to_jsonable(rollout_env_step_metrics),
+                    step=int(rollout_env_steps),
+                )
         return {}
 
     server = build_learner_trainer_transport(
@@ -822,6 +839,13 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
             )
             offline_replay_buffer = None
         else:
+            offline_replay_buffer, offline_prepared_chunk_profile = (
+                _maybe_wrap_offline_replay_for_prepared_chunk(
+                    cfg=cfg,
+                    offline_replay_buffer=offline_replay_buffer,
+                    logger=logger,
+                )
+            )
             logger.info(
                 "offline replay ready: prepared_path=%s replay_size=%s ratio=%.3f pretrain_steps=%s",
                 None if offline_prepared_path is None else str(offline_prepared_path),
@@ -1035,6 +1059,36 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                 )
                 update_profile_metrics = to_jsonable(update_profile_accumulator.drain())
                 learner_metrics = extract_learner_wandb_metrics(update_metrics)
+                learner_metrics.update(
+                    build_learner_runtime_wandb_metrics(
+                        update_steps=int(update_steps),
+                        env_steps=int(env_steps),
+                        replay_size=int(len(replay_buffer)),
+                        updates_per_sec=float(updates_per_sec),
+                        eval_queue_backlog=None,
+                        offline_replay_size=(
+                            0
+                            if offline_replay_buffer is None
+                            else int(len(offline_replay_buffer))
+                        ),
+                        batch_mix=batch_mix,
+                        timer_metrics=timer_metrics,
+                        sample_profile_metrics=sample_profile_metrics,
+                        update_profile_metrics=update_profile_metrics,
+                    )
+                )
+                if offline_prepared_chunk_profile is not None:
+                    learner_metrics["replay/offline_prepared_chunk/enabled"] = 1.0
+                    learner_metrics[
+                        "replay/offline_prepared_chunk/prepared_windows"
+                    ] = float(
+                        offline_prepared_chunk_profile.get("prepared_windows", 0.0)
+                    )
+                    for key, value in offline_prepared_chunk_profile.items():
+                        if isinstance(value, (int, float)):
+                            learner_metrics[
+                                f"learner_time/offline_prepared_chunk/{key}"
+                            ] = float(value)
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
                 append_jsonl(
@@ -1048,6 +1102,11 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         "timer": timer_metrics,
                         "sample_profile": sample_profile_metrics,
                         "update_profile": update_profile_metrics,
+                        "offline_prepared_chunk": (
+                            None
+                            if offline_prepared_chunk_profile is None
+                            else to_jsonable(offline_prepared_chunk_profile)
+                        ),
                         "transport": _transport_status(),
                     },
                 )
@@ -1127,6 +1186,19 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                         else to_jsonable(offline_validation_stats)
                     ),
                     "load_stats": to_jsonable(offline_load_stats),
+                    "prepared_chunk": {
+                        "offline_enabled": bool(
+                            cfg.replay.prepared_chunk.offline_enabled
+                        ),
+                        "online_enabled": bool(
+                            cfg.replay.prepared_chunk.online_enabled
+                        ),
+                        "profile": (
+                            None
+                            if offline_prepared_chunk_profile is None
+                            else to_jsonable(offline_prepared_chunk_profile)
+                        ),
+                    },
                     "replay_size": (
                         0
                         if offline_replay_buffer is None
@@ -1134,6 +1206,13 @@ def learner(cfg: AgiBotTrainConfig, *, run_dir: Path, logger: logging.Logger) ->
                     ),
                     "pretrain_steps_requested": int(cfg.offline.pretrain_steps),
                     "pretrain_steps_completed": int(offline_pretrain_steps_done),
+                },
+                "eval": {
+                    "async_eval_supported": False,
+                    "async_eval_enabled": bool(cfg.training.async_eval.enabled),
+                    "standalone_eval_entrypoint": (
+                        "examples/agibot_real/scripts/run_residual_eval.py"
+                    ),
                 },
             }
         )

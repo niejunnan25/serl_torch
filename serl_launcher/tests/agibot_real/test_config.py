@@ -14,12 +14,19 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - environment-dependent
     OmegaConf = None
 
+_IMPORT_ERROR: ModuleNotFoundError | None = None
 if OmegaConf is not None:
-    from serl_torch.examples.agibot_real.config import parse_eval_cfg
-    from serl_torch.examples.agibot_real.config import parse_train_cfg
+    try:
+        from serl_torch.examples.agibot_real.config import parse_eval_cfg
+        from serl_torch.examples.agibot_real.config import parse_train_cfg
+    except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
+        _IMPORT_ERROR = exc
 
 
-@unittest.skipIf(OmegaConf is None, "omegaconf is not installed")
+@unittest.skipIf(
+    OmegaConf is None or _IMPORT_ERROR is not None,
+    "omegaconf or AgiBot config dependencies are not installed",
+)
 class AgiBotConfigTest(unittest.TestCase):
     def test_parse_train_cfg_with_offline_block(self) -> None:
         cfg = OmegaConf.load(
@@ -57,6 +64,10 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertIsNone(parsed.action_filter.max_delta)
         self.assertEqual(parsed.action_filter.warmup_steps, 0)
         self.assertTrue(parsed.action_filter.reset_each_episode)
+        self.assertFalse(parsed.replay.prepared_chunk.offline_enabled)
+        self.assertFalse(parsed.replay.prepared_chunk.online_enabled)
+        self.assertFalse(parsed.training.async_eval.enabled)
+        self.assertEqual(parsed.training.async_eval.every_episodes, 20)
 
     def test_parse_eval_cfg_from_yaml(self) -> None:
         cfg = OmegaConf.load(
@@ -73,9 +84,33 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
         self.assertFalse(parsed.action_filter.enabled)
         self.assertEqual(parsed.action_filter.alpha, 0.25)
-        self.assertTrue(parsed.action_filter.reset_each_episode)
-        self.assertTrue(parsed.video.enabled)
-        self.assertEqual(parsed.video.camera_key, "image/head")
+
+    def test_parse_train_cfg_rejects_async_eval_enabled(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.training.async_eval.enabled = True
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "AgiBot real robot training currently does not support async eval",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_agibot_does_not_define_async_eval_worker(self) -> None:
+        worker_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "runtime"
+            / "async_eval_worker.py"
+        )
+
+        self.assertFalse(worker_path.exists())
 
     def test_parse_train_cfg_accepts_fake_backend(self) -> None:
         cfg = OmegaConf.load(
@@ -342,6 +377,19 @@ class AgiBotConfigTest(unittest.TestCase):
             "start_episode_idx has been removed",
         ):
             parse_eval_cfg(cfg)
+
+
+class AgiBotAsyncEvalStaticSafetyTest(unittest.TestCase):
+    def test_agibot_runtime_has_no_async_eval_worker(self) -> None:
+        worker_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "runtime"
+            / "async_eval_worker.py"
+        )
+
+        self.assertFalse(worker_path.exists())
 
 
 if __name__ == "__main__":

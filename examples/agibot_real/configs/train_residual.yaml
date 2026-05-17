@@ -140,6 +140,9 @@ sac:
 replay:
   capacity: 250000
   batch_size: 128
+  prepared_chunk:
+    offline_enabled: false
+    online_enabled: false
 
 offline:
   enabled: true
@@ -182,6 +185,22 @@ training:
     every_steps: 500
     keep: 0
     dir: checkpoints
+  # Schema-aligned with LIBERO, but intentionally disabled for real robots.
+  # AgiBot async eval is not supported; use scripts/run_residual_eval.py manually.
+  async_eval:
+    enabled: false
+    every_episodes: 20
+    episodes: 10
+    start_episode_idx: 0
+    max_env_steps_per_episode: null
+    deterministic: true
+    poll_interval_sec: 5.0
+    queue_file: async_eval_queue.jsonl
+    summary_jsonl: async_eval_results.jsonl
+    worker_log_file: async_eval_worker.log
+    checkpoint:
+      dir: async_eval_checkpoints
+      keep: 0
 
 logging:
   summary_file: summary.json
