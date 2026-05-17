@@ -49,12 +49,16 @@ class QueuedProcessorSubmitter:
         logger: Any,
         queue_maxsize: int = 0,
         thread_name: str = "rollout-processor-submit",
+        enqueue_timeout_s: float = 5.0,
+        close_timeout_s: float = 10.0,
     ) -> None:
         self._processor_client = processor_client
         self._logger = logger
         self._command_queue: queue.Queue[_ProcessorCommand] = queue.Queue(
             maxsize=max(0, int(queue_maxsize))
         )
+        self._enqueue_timeout_s = max(0.0, float(enqueue_timeout_s))
+        self._close_timeout_s = max(0.0, float(close_timeout_s))
         self._failure_lock = Lock()
         self._failure: BaseException | None = None
         self._close_requested = False
@@ -184,20 +188,53 @@ class QueuedProcessorSubmitter:
     def close(self, *, wait: bool = True) -> None:
         if not bool(self._close_requested):
             self._close_requested = True
-            self._command_queue.put(
-                _ProcessorCommand(
-                    kind="close",
-                    payload={},
-                    context="close",
+            try:
+                self._command_queue.put(
+                    _ProcessorCommand(
+                        kind="close",
+                        payload={},
+                        context="close",
+                    ),
+                    timeout=float(self._enqueue_timeout_s),
                 )
-            )
+            except queue.Full as exc:
+                self._set_failure(
+                    RuntimeError(
+                        "processor command queue is full while closing; "
+                        "processor sender may be stalled"
+                    )
+                )
+                raise RuntimeError(
+                    "processor command queue is full while closing; "
+                    "processor sender may be stalled"
+                ) from exc
         if bool(wait):
-            self._sender_thread.join()
+            self._sender_thread.join(timeout=float(self._close_timeout_s))
+            if self._sender_thread.is_alive():
+                self._set_failure(
+                    RuntimeError(
+                        "processor sender thread did not exit within "
+                        f"{float(self._close_timeout_s):.1f}s"
+                    )
+                )
         self.raise_if_failed()
 
     def _enqueue(self, command: _ProcessorCommand) -> None:
         self.raise_if_failed()
-        self._command_queue.put(command)
+        if bool(self._close_requested):
+            raise RuntimeError("cannot enqueue processor command after close requested")
+        try:
+            self._command_queue.put(
+                command,
+                timeout=float(self._enqueue_timeout_s),
+            )
+        except queue.Full as exc:
+            error = RuntimeError(
+                "processor command queue is full; processor may be unavailable or "
+                "too slow to keep up with actor rollout"
+            )
+            self._set_failure(error)
+            raise error from exc
 
     def _get_failure(self) -> BaseException | None:
         with self._failure_lock:

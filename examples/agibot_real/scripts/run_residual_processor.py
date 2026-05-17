@@ -23,7 +23,7 @@ from serl_torch.examples.agibot_real.runtime.processor_runtime import run_proces
 @hydra.main(
     version_base=None,
     config_path="../configs",
-    config_name="train_residual",
+    config_name="train_residual_processor",
 )
 def main(cfg: DictConfig) -> None:
     typed_cfg = parse_train_cfg(cfg)

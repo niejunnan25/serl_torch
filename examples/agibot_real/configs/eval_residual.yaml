@@ -148,7 +148,7 @@ video:
   drop_frames_when_busy: true
 
 launch:
-  output_root: outputs
+  output_root: examples/agibot_real/outputs
 
 hydra:
   run:

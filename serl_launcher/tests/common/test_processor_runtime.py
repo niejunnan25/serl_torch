@@ -35,6 +35,27 @@ def test_processor_client_wait_until_ready_times_out() -> None:
         client.close()
 
 
+def test_processor_submit_fails_after_bounded_retries() -> None:
+    client = ProcessorClient(
+        transport_config=ProcessorTransportConfig(
+            host="127.0.0.1",
+            port=_find_free_port(),
+            timeout_ms=5,
+            queue_capacity=2,
+        ),
+        logger=logging.getLogger(__name__),
+    )
+    client._submit_retry_limit = 2
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match=r"processor request 'submit-chunk' failed repeatedly",
+        ):
+            client.submit(payload={"chunk_seq": 1}, context="missing_server")
+    finally:
+        client.close()
+
+
 def test_processor_roundtrip_and_flush() -> None:
     port = _find_free_port()
     flush_calls: list[tuple[str, bool]] = []

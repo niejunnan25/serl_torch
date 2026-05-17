@@ -60,7 +60,7 @@ processor:
   mode: in_process
 
 processor_batching:
-  enabled: true
+  enabled: false
   max_batch_chunks: 4
   max_batch_obs: 24
   max_wait_ms: 3
@@ -235,7 +235,7 @@ video:
   drop_frames_when_busy: true
 
 launch:
-  output_root: outputs
+  output_root: examples/agibot_real/outputs
 
 hydra:
   run:

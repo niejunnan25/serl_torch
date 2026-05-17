@@ -1,0 +1,26 @@
+defaults:
+  - train_residual
+  - _self_
+
+runtime:
+  role: processor
+
+wandb:
+  exp_name: ${task.name}_residual_processor
+  group: residual_processor
+
+processor:
+  mode: standalone
+
+processor_batching:
+  enabled: true
+  max_batch_chunks: 4
+  max_batch_obs: 24
+  max_wait_ms: 3
+
+# Explicit processor config: keep raw rollout recycle on so real-robot data can
+# be replayed through the processor later. Use recycle.enabled=false if disk is
+# constrained for a particular run.
+recycle:
+  enabled: true
+  output_root: raw_rollout_recycle

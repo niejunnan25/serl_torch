@@ -69,7 +69,7 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertFalse(parsed.training.async_eval.enabled)
         self.assertEqual(parsed.training.async_eval.every_episodes, 20)
         self.assertEqual(parsed.processor.mode, "in_process")
-        self.assertTrue(parsed.processor_batching.enabled)
+        self.assertFalse(parsed.processor_batching.enabled)
         self.assertEqual(parsed.processor_batching.max_batch_chunks, 4)
         self.assertEqual(parsed.runtime.processor_transport.port, 5491)
         self.assertFalse(parsed.recycle.enabled)
@@ -125,6 +125,26 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertEqual(parsed.runtime.role, "processor")
         self.assertEqual(parsed.processor.mode, "standalone")
 
+    def test_parse_processor_cfg_yaml_enables_standalone_processor(self) -> None:
+        config_dir = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+        )
+        base_cfg = OmegaConf.load(config_dir / "train_residual.yaml")
+        override_cfg = OmegaConf.load(config_dir / "train_residual_processor.yaml")
+        override_cfg.pop("defaults", None)
+        cfg = OmegaConf.merge(base_cfg, override_cfg)
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.runtime.role, "processor")
+        self.assertEqual(parsed.processor.mode, "standalone")
+        self.assertTrue(parsed.processor_batching.enabled)
+        self.assertTrue(parsed.recycle.enabled)
+        self.assertEqual(parsed.wandb.group, "residual_processor")
+
     def test_parse_train_cfg_rejects_processor_role_without_standalone_mode(self) -> None:
         cfg = OmegaConf.load(
             Path(__file__).resolve().parents[3]
@@ -167,7 +187,7 @@ class AgiBotConfigTest(unittest.TestCase):
 
         self.assertEqual(parsed.env.backend, "fake")
 
-    def test_parse_train_cfg_accepts_fake_right_arm_backend(self) -> None:
+    def test_parse_train_cfg_accepts_inline_right_arm_override(self) -> None:
         base_cfg = OmegaConf.load(
             Path(__file__).resolve().parents[3]
             / "examples"
@@ -175,14 +195,26 @@ class AgiBotConfigTest(unittest.TestCase):
             / "configs"
             / "train_residual.yaml"
         )
-        override_cfg = OmegaConf.load(
-            Path(__file__).resolve().parents[3]
-            / "examples"
-            / "agibot_real"
-            / "configs"
-            / "train_residual_openpi_right_arm.yaml"
+        override_cfg = OmegaConf.create(
+            {
+                "policy": {
+                    "type": "openpi",
+                    "id": "pi05_right_arm",
+                    "action_layout": "right_arm",
+                },
+                "env": {
+                    "arm_layout": "right_arm",
+                    "action_dim": 7,
+                    "robot_action_dim": 14,
+                },
+                "residual": {
+                    "action_mask": [True] * 7,
+                    "action_limits": [1.0] * 7,
+                    "chunk_horizon": 15,
+                },
+                "training": {"steps_per_update": 15},
+            }
         )
-        override_cfg.pop("defaults", None)
         cfg = OmegaConf.merge(base_cfg, override_cfg)
         cfg.env.backend = "fake"
 

@@ -157,7 +157,8 @@ class AgiBotTrainingSourceShapeTest(unittest.TestCase):
         self.assertIn('"eval_env_steps"', source)
         self.assertIn('"policy_requests_per_env_step"', source)
         self.assertIn("_init_eval_dashboard_logger", source)
-        self.assertIn("eval_by_env_steps", source)
+        self.assertIn("step=int(total_env_steps)", source)
+        self.assertNotIn("step=int(episode_id)", source)
 
     def test_learner_does_not_queue_agibot_async_eval(self) -> None:
         source = (
@@ -171,6 +172,18 @@ class AgiBotTrainingSourceShapeTest(unittest.TestCase):
         self.assertNotIn("start_async_eval_worker", source)
         self.assertNotIn("append_async_eval", source)
         self.assertNotIn("save_async_eval", source)
+
+    def test_standalone_processor_requires_dedicated_backfill_policy(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "runtime"
+            / "processor_runtime.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("requires a dedicated backfill policy", source)
+        self.assertNotIn("build_agibot_base_policy(cfg, logger=logger)", source)
 
 
 if __name__ == "__main__":

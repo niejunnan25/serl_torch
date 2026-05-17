@@ -272,7 +272,25 @@ python examples/agibot_real/scripts/reset_robot.py \
 sudo docker exec -it docker--agibot /bin/bash
 conda activate robot
 python /home/hello/codebase/serl_torch/examples/agibot_real/scripts/run_residual_offline_prepare.py \
-  --config-name train_residual_openpi_right_arm
+  --config-name train_residual \
+  task.hz=15.0 \
+  policy.type=openpi \
+  policy.host=127.0.0.1 \
+  policy.port=30001 \
+  policy.id=pi05_task_3463_3540_mouse_only_right_hand_camera_position_15hz \
+  policy.action_layout=right_arm \
+  env.arm_layout=right_arm \
+  env.action_dim=7 \
+  env.robot_action_dim=14 \
+  'residual.action_mask=[true,true,true,true,true,true,true]' \
+  'residual.action_limits=[1.0,1.0,1.0,1.0,1.0,1.0,1.0]' \
+  residual.chunk_horizon=15 \
+  training.steps_per_update=15 \
+  offline.prepared_path=null \
+  offline.prepare.raw_dataset_path=/home/hello/codebase/niejunnan/datasets/task_3463_3540_mouse_only_right_hand_camera_position_15hz \
+  offline.prepare.output_root=/home/hello/codebase/serl_torch/examples/agibot_real/outputs/offline_data \
+  offline.prepare.max_episodes=50 \
+  offline.prepare.filter_unrepresentable_steps=true
 ```
 
 
@@ -343,3 +361,37 @@ python examples/agibot_real/scripts/run_residual_training.py \
 ```
 
 `train_residual.yaml` 默认已经开启 `backfill_policy.enabled=true`。上面的命令把 `policy.port` 和 `backfill_policy.port` 都设为 `8001`，表示主控制推理和 backfill 共用同一个 JoyRA 服务。如果需要减少真机控制路径和 backfill 的推理竞争，可以再启动一个 JoyRA 服务，把 `backfill_policy.port` 改成独立端口。
+
+### 可选：standalone processor 模式
+
+默认 `train_residual.yaml` 仍然是 in-process processor，actor 会在本进程内完成 transition assembly 和 replay commit。需要把真机交互和数据处理拆开时，使用 `train_residual_processor.yaml`，并额外启动 processor 角色。
+
+learner：
+
+```bash
+python examples/agibot_real/scripts/run_residual_training.py \
+  --config-name train_residual_processor \
+  runtime.role=learner \
+  policy.port=8001 \
+  backfill_policy.port=8001
+```
+
+processor：
+
+```bash
+python examples/agibot_real/scripts/run_residual_processor.py \
+  policy.port=8001 \
+  backfill_policy.port=8001
+```
+
+actor：
+
+```bash
+python examples/agibot_real/scripts/run_residual_training.py \
+  --config-name train_residual_processor \
+  runtime.role=actor \
+  policy.port=8001 \
+  backfill_policy.port=8001
+```
+
+这个模式下 `processor.mode=standalone`、`processor_batching.enabled=true`、`recycle.enabled=true`。上面的最小命令仍然让主控制推理和 processor backfill 共用 `8001`。如果要隔离推理竞争，需要再启动一个 JoyRA 服务到独立端口，例如 `9011`，然后把三条命令里的 `backfill_policy.port` 改成 `9011`。如果磁盘空间有限，可以额外加 `recycle.enabled=false`。

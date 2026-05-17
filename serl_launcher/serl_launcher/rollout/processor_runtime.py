@@ -103,7 +103,7 @@ class ProcessorClient:
             request_type="submit-chunk",
             payload=payload,
             context=context,
-            retry_limit=None,
+            retry_limit=int(self._submit_retry_limit),
         )
 
     def finish(

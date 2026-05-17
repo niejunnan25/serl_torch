@@ -41,26 +41,6 @@ from serl_torch.examples.agibot_real.runtime.transition_assembly import (
 
 EVAL_EPISODE_AXIS = "eval/episode_id"
 EVAL_ENV_STEP_AXIS = "eval/env_steps"
-EVAL_EPISODE_METRICS = (
-    "eval/success",
-    "eval/episode_return",
-    "eval/episode_steps",
-    "eval/running_success_rate",
-    "eval/policy_requests",
-    "eval/policy_requests_per_env_step",
-    "eval/checkpoint_step",
-    "eval/total_sec",
-    "eval/sample_actions_sec",
-    "eval/policy_infer_sec",
-    "eval/step_env_sec",
-)
-EVAL_ENV_STEP_METRICS = (
-    "eval_by_env_steps/episode_id",
-    "eval_by_env_steps/success",
-    "eval_by_env_steps/episode_return",
-    "eval_by_env_steps/episode_steps",
-    "eval_by_env_steps/running_success_rate",
-)
 
 
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
@@ -126,10 +106,6 @@ def _init_eval_dashboard_logger(
     if not bool(cfg.eval.logging.enabled):
         return None
     try:
-        from serl_launcher.common.observability import define_metric_group
-        from serl_launcher.common.training_observability import (
-            configure_eval_wandb_metrics,
-        )
         from serl_launcher.common.wandb import WandBLogger
 
         wandb_cfg = WandBLogger.get_default_config()
@@ -146,19 +122,6 @@ def _init_eval_dashboard_logger(
             mode=str(cfg.eval.logging.mode),
             debug=bool(cfg.eval.logging.debug),
         )
-        configure_eval_wandb_metrics(
-            wandb_logger=wandb_logger,
-            axis_metric=EVAL_EPISODE_AXIS,
-            metric_names=EVAL_EPISODE_METRICS,
-        )
-        run = getattr(wandb_logger, "run", None)
-        if run is not None:
-            define_metric_group(
-                run,
-                axis_metric=EVAL_ENV_STEP_AXIS,
-                metric_names=EVAL_ENV_STEP_METRICS,
-                hide_axis_metric=True,
-            )
         logger.info(
             "Eval dashboard logging enabled: backend=%s project=%s run=%s mode=%s",
             str(cfg.eval.logging.backend),
@@ -224,24 +187,7 @@ def _log_eval_episode_metrics(
         if value is not None:
             metrics[metric_name] = float(value)
     try:
-        wandb_logger.log(to_jsonable(metrics), step=int(episode_id))
-    except Exception:  # noqa: BLE001
-        return
-
-    env_step_metrics = {
-        EVAL_ENV_STEP_AXIS: int(total_env_steps),
-        "eval_by_env_steps/episode_id": float(episode_id),
-        "eval_by_env_steps/success": float(bool(episode_record["success"])),
-        "eval_by_env_steps/episode_return": float(
-            episode_record["episode_return"]
-        ),
-        "eval_by_env_steps/episode_steps": float(episode_steps),
-        "eval_by_env_steps/running_success_rate": float(
-            episode_record["running_success_rate"]
-        ),
-    }
-    try:
-        wandb_logger.log(to_jsonable(env_step_metrics), step=int(total_env_steps))
+        wandb_logger.log(to_jsonable(metrics), step=int(total_env_steps))
     except Exception:  # noqa: BLE001
         return
 
@@ -266,7 +212,7 @@ def _log_eval_summary_metrics(
         ),
     }
     try:
-        wandb_logger.log(to_jsonable(metrics), step=int(summary["episodes_completed"]))
+        wandb_logger.log(to_jsonable(metrics), step=int(total_env_steps))
     except Exception:  # noqa: BLE001
         return
 

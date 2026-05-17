@@ -91,27 +91,25 @@ def run_processor(
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    if bool(cfg.backfill_policy.enabled):
-        base_policy = build_agibot_base_policy(
-            cfg,
-            logger=logger,
-            host=str(cfg.backfill_policy.host),
-            port=int(cfg.backfill_policy.port),
+    if not bool(cfg.backfill_policy.enabled):
+        raise ValueError(
+            "AgiBot standalone processor requires a dedicated backfill policy "
+            "backend. Set backfill_policy.enabled=true and configure "
+            "backfill_policy.host/backfill_policy.port so processor inference "
+            "does not share the actor policy server."
         )
-        logger.info(
-            "Processor base policy backend: %s endpoint=%s:%s",
-            base_policy.describe(),
-            str(cfg.backfill_policy.host),
-            int(cfg.backfill_policy.port),
-        )
-    else:
-        base_policy = build_agibot_base_policy(cfg, logger=logger)
-        logger.info(
-            "Processor base policy backend: %s endpoint=%s:%s",
-            base_policy.describe(),
-            str(cfg.policy.host),
-            int(cfg.policy.port),
-        )
+    base_policy = build_agibot_base_policy(
+        cfg,
+        logger=logger,
+        host=str(cfg.backfill_policy.host),
+        port=int(cfg.backfill_policy.port),
+    )
+    logger.info(
+        "Processor base policy backend: %s endpoint=%s:%s",
+        base_policy.describe(),
+        str(cfg.backfill_policy.host),
+        int(cfg.backfill_policy.port),
+    )
     processor_assembler_cfg = dataclasses.replace(
         cfg,
         backfill_policy=dataclasses.replace(
