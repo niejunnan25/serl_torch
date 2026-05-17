@@ -107,7 +107,9 @@ class AgiBotTrainingSourceShapeTest(unittest.TestCase):
 
         self.assertIn("AgiBotRolloutProcessor(", source)
         self.assertIn("rollout_processor.process_step_chunk(", source)
-        self.assertNotIn("RawChunkRecord.from_step_chunk_result(", source)
+        self.assertIn("QueuedProcessorSubmitter", source)
+        self.assertIn("ProcessorClient", source)
+        self.assertIn("processor.mode", source)
         self.assertNotIn("def _commit_assembled_chunks", source)
 
     def test_actor_logs_rollout_on_episode_and_env_step_axes(self) -> None:
@@ -154,6 +156,8 @@ class AgiBotTrainingSourceShapeTest(unittest.TestCase):
         self.assertIn('"eval_episode_id"', source)
         self.assertIn('"eval_env_steps"', source)
         self.assertIn('"policy_requests_per_env_step"', source)
+        self.assertIn("_init_eval_dashboard_logger", source)
+        self.assertIn("eval_by_env_steps", source)
 
     def test_learner_does_not_queue_agibot_async_eval(self) -> None:
         source = (

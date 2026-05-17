@@ -153,6 +153,58 @@ class AgiBotRolloutProcessorTest(unittest.TestCase):
         processor.close()
         self.assertTrue(assembler.closed)
 
+    def test_processor_can_process_submission_payload_batch(self) -> None:
+        data_store = _FakeDataStore()
+        update_contexts: list[str] = []
+        processor = AgiBotRolloutProcessor(
+            transition_assembler=_FakeAssembler(),
+            data_store=data_store,
+            trainer_update_fn=update_contexts.append,
+            steps_per_update=1,
+        )
+
+        processed = processor.process_payload_batch(
+            (
+                {
+                    "chunk_seq": 0,
+                    "episode_id": 3,
+                    "episode_step_start": 7,
+                    "task_prompt": "test",
+                    "residual_obs_before_chunk": {
+                        "state": np.asarray([0.0], dtype=np.float32)
+                    },
+                    "action_chunk": np.asarray([[0.25]], dtype=np.float32),
+                    "chunk_result": {
+                        "observations": [
+                            {"state": np.asarray([1.0], dtype=np.float32)}
+                        ],
+                        "rewards": [1.0],
+                        "dones": [True],
+                        "infos": [
+                            {
+                                "controller_action_executed": True,
+                                "success": True,
+                            }
+                        ],
+                        "obs": {"state": np.asarray([1.0], dtype=np.float32)},
+                        "done": True,
+                        "truncated": False,
+                        "reward_sum": 1.0,
+                        "info": {"success": True},
+                    },
+                },
+            ),
+            base_policy=object(),
+            image_keys=("image_rgb_0",),
+            residual_alpha=0.2,
+            arm_layout="dual_arm",
+        )
+
+        self.assertEqual(len(processed), 1)
+        self.assertEqual(processed[0].raw.executed_steps, 1)
+        self.assertEqual(len(data_store.inserted), 1)
+        self.assertEqual(update_contexts, ["commit_step_1"])
+
     def test_zero_step_terminal_updates_pending_transition_before_flush(self) -> None:
         data_store = _FakeDataStore()
         assembler = _FakePendingAssembler()

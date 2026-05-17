@@ -111,6 +111,66 @@ class RawChunkRecord:
             executed_steps=executed_steps,
         )
 
+    @classmethod
+    def from_submission_payload(
+        cls,
+        payload: dict[str, Any],
+        *,
+        base_policy: Any,
+        image_keys: tuple[str, ...],
+        residual_alpha: float,
+        arm_layout: str,
+    ) -> "RawChunkRecord":
+        """Reconstruct the canonical raw chunk from a processor payload."""
+
+        chunk_result = dict(payload["chunk_result"])
+        residual_obs_before_chunk = payload.get("residual_obs_before_chunk", None)
+        action_chunk = payload.get("action_chunk", None)
+
+        if residual_obs_before_chunk is None:
+            steps = [dict(step) for step in list(chunk_result.get("steps", ()))]
+            if not steps:
+                raise ValueError(
+                    "processor payload must include residual_obs_before_chunk or "
+                    "chunk_result.steps with a start observation"
+                )
+            start_obs = dict(steps[0]["obs"])
+            _base_actions, residual_obs_before_chunk = infer_chunk_residual_obs(
+                obs=start_obs,
+                task_prompt=str(payload["task_prompt"]),
+                base_policy=base_policy,
+                image_keys=tuple(image_keys),
+                residual_alpha=float(residual_alpha),
+                arm_layout=str(arm_layout),
+            )
+        else:
+            residual_obs_before_chunk = {
+                str(key): np.asarray(value)
+                for key, value in dict(residual_obs_before_chunk).items()
+            }
+
+        if action_chunk is None:
+            steps = [dict(step) for step in list(chunk_result.get("steps", ()))]
+            if not steps:
+                raise ValueError(
+                    "processor payload must include action_chunk or chunk_result.steps"
+                )
+            action_chunk = np.stack(
+                [
+                    np.asarray(dict(step)["action"], dtype=np.float32).reshape(-1)
+                    for step in steps
+                ],
+                axis=0,
+            )
+
+        return cls.from_step_chunk_result(
+            episode_id=int(payload["episode_id"]),
+            episode_step_start=int(payload["episode_step_start"]),
+            residual_obs_before_chunk=dict(residual_obs_before_chunk),
+            action_chunk=np.asarray(action_chunk, dtype=np.float32),
+            chunk_result=chunk_result,
+        )
+
 
 @dataclass(frozen=True)
 class AssemblyResult:
@@ -230,10 +290,21 @@ class AgiBotTransitionAssembler:
         )
 
     def pop_prefetched_decision_obs(self) -> PrefetchedDecisionObs | None:
-        if self._async_assembly is not None:
-            return None
         decision_obs = self._prefetched
         self._prefetched = None
+        return decision_obs
+
+    def prefetch_next_decision_obs(
+        self,
+        *,
+        obs: dict[str, Any],
+        task_prompt: str,
+    ) -> PrefetchedDecisionObs:
+        decision_obs = self.infer_decision_obs(
+            obs=obs,
+            task_prompt=task_prompt,
+        )
+        self._prefetched = decision_obs
         return decision_obs
 
     def backfill_post_step_residual_obs(

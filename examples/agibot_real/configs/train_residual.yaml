@@ -27,6 +27,11 @@ runtime:
     commit_poll_ms: 20
     wait_committed_on_episode_end: false
     wait_committed_on_shutdown: true
+  processor_transport:
+    host: 127.0.0.1
+    port: 5491
+    timeout_ms: 2000
+    queue_capacity: 8
 
 wandb:
   project: agibot_real
@@ -48,6 +53,21 @@ backfill_policy:
   port: 9011
   max_pending_chunks: 4
   mode: thread
+
+processor:
+  # Default keeps real-robot control and data processing in the actor process.
+  # Set to standalone only when a processor role has been launched explicitly.
+  mode: in_process
+
+processor_batching:
+  enabled: true
+  max_batch_chunks: 4
+  max_batch_obs: 24
+  max_wait_ms: 3
+
+recycle:
+  enabled: false
+  output_root: raw_rollout_recycle
 
 robot:
   assets_root: null

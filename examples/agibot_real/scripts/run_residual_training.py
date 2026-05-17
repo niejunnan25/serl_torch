@@ -3,12 +3,14 @@ from __future__ import annotations
 """Mainline AgiBot residual DRQ training script."""
 
 from collections import deque
+import dataclasses
 import json
 import logging
 import sys
 import time
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 from typing import Any
 
 from agentlace.data.data_store import QueuedDataStore
@@ -61,6 +63,9 @@ from serl_launcher.residual.observation import build_chunk_residual_sample_obs
 from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.rollout.video_recorder import AsyncImageVideoRecorder
 from serl_launcher.rollout.video_recorder import AsyncVideoRecorderConfig
+from serl_launcher.rollout import build_processor_submission_payload
+from serl_launcher.rollout import ProcessorClient
+from serl_launcher.rollout import QueuedProcessorSubmitter
 from serl_launcher.utils.checkpoint_utils import save_agent_checkpoint
 from serl_launcher.utils.jsonl import append_jsonl
 from serl_launcher.utils.seeding import set_global_seeds
@@ -89,6 +94,10 @@ from serl_torch.examples.agibot_real.runtime.transition_assembly import (
 )
 from serl_torch.examples.agibot_real.runtime.processor_pipeline import (
     AgiBotRolloutProcessor,
+)
+from serl_torch.examples.agibot_real.runtime.processor_runtime import run_processor
+from serl_torch.examples.agibot_real.runtime.raw_rollout_recorder import (
+    RawRolloutRecorder,
 )
 from serl_torch.examples.agibot_real.runtime.transition_assembly import (
     count_executed_steps_from_infos,
@@ -129,8 +138,17 @@ def actor(
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
+    assembler_cfg = cfg
+    if cfg.processor.mode == "standalone" and bool(cfg.backfill_policy.enabled):
+        assembler_cfg = dataclasses.replace(
+            cfg,
+            backfill_policy=dataclasses.replace(
+                cfg.backfill_policy,
+                enabled=False,
+            ),
+        )
     transition_assembler = AgiBotTransitionAssembler(
-        cfg=cfg,
+        cfg=assembler_cfg,
         base_policy=base_policy,
         logger=logger,
     )
@@ -270,12 +288,54 @@ def actor(
         cfg.runtime.trainer_transport.wait_committed_on_episode_end
     )
     current_task_prompt: str | None = None
-    rollout_processor = AgiBotRolloutProcessor(
-        transition_assembler=transition_assembler,
-        data_store=data_store,
-        trainer_update_fn=lambda context: _update_trainer_transport(context=context),
-        steps_per_update=int(steps_per_update),
-    )
+    use_standalone_processor = cfg.processor.mode == "standalone"
+    rollout_processor: AgiBotRolloutProcessor | None = None
+    processor_submitter: QueuedProcessorSubmitter | None = None
+    recycle_recorder: RawRolloutRecorder | None = None
+    if use_standalone_processor:
+        processor_submitter = QueuedProcessorSubmitter(
+            processor_client=ProcessorClient(
+                transport_config=cfg.runtime.processor_transport,
+                logger=logger,
+            ),
+            logger=logger,
+            queue_maxsize=int(cfg.runtime.processor_transport.queue_capacity),
+            thread_name="agibot-processor-submit",
+        )
+        processor_submitter.wait_until_ready()
+        logger.info(
+            "AgiBot actor using standalone processor: host=%s port=%s",
+            str(cfg.runtime.processor_transport.host),
+            int(cfg.runtime.processor_transport.port),
+        )
+    else:
+        rollout_processor = AgiBotRolloutProcessor(
+            transition_assembler=transition_assembler,
+            data_store=data_store,
+            trainer_update_fn=lambda context: _update_trainer_transport(
+                context=context
+            ),
+            steps_per_update=int(steps_per_update),
+        )
+        if bool(cfg.recycle.enabled):
+            recycle_output_root = Path(cfg.recycle.output_root)
+            if not recycle_output_root.is_absolute():
+                recycle_output_root = (run_dir / recycle_output_root).resolve()
+            recycle_recorder = RawRolloutRecorder(
+                output_root=recycle_output_root,
+                logger=logger,
+                metadata={
+                    "task_key": str(cfg.task.task_key),
+                    "task_name": str(cfg.task.name),
+                    "policy": base_policy.describe(),
+                    "processor_mode": "in_process",
+                    "processor_schema_version": 1,
+                },
+            )
+            logger.info(
+                "raw rollout recorder enabled: output_root=%s",
+                recycle_output_root,
+            )
 
     progress_bar = tqdm(
         total=int(max_env_steps),
@@ -284,6 +344,7 @@ def actor(
         leave=True,
     )
     prefetched_reset_prepared = False
+    next_chunk_seq = 0
 
     try:
         while env_steps < max_env_steps and episode_id < max_episodes:
@@ -307,12 +368,19 @@ def actor(
             episode_return = 0.0
             episode_steps = 0
             episode_success = False
+            episode_last_chunk_seq: int | None = None
             last_info: dict[str, Any] = {}
 
             while env_steps < max_env_steps:
-                if transition_assembler.async_transition_assembly_enabled:
+                if (
+                    (not use_standalone_processor)
+                    and transition_assembler.async_transition_assembly_enabled
+                ):
                     with timer.context("processor_drain_ready"):
+                        assert rollout_processor is not None
                         rollout_processor.drain_ready()
+                if processor_submitter is not None:
+                    processor_submitter.raise_if_failed()
                 timer.tick("total")
                 with timer.context("prepare_action_chunk"):
                     decision_obs = transition_assembler.pop_prefetched_decision_obs()
@@ -378,13 +446,44 @@ def actor(
                             "step_chunk returned no executed actions without a terminal outcome"
                         )
                     with timer.context("processor_episode_terminal"):
-                        rollout_processor.finalize_zero_step_terminal(
-                            terminal_reward=float(chunk_result["reward_sum"]),
-                            boundary_flag=bool(
-                                chunk_result["done"] or chunk_result["truncated"]
-                            ),
-                            wait_for_episode_commit=bool(wait_for_episode_commit),
-                        )
+                        if processor_submitter is not None:
+                            zero_step_payload = build_processor_submission_payload(
+                                chunk_seq=int(next_chunk_seq),
+                                episode_id=int(episode_id),
+                                episode_step_start=int(episode_steps),
+                                task_prompt=str(task_prompt),
+                                chunk_result=dict(chunk_result),
+                            )
+                            zero_step_payload.update(
+                                {
+                                    "zero_step_terminal": True,
+                                    "terminal_reward": float(
+                                        chunk_result["reward_sum"]
+                                    ),
+                                    "terminal_boundary": bool(
+                                        chunk_result["done"]
+                                        or chunk_result["truncated"]
+                                    ),
+                                }
+                            )
+                            processor_submitter.submit_chunk(
+                                payload=zero_step_payload,
+                                context=(
+                                    f"episode_{int(episode_id)}_chunk_"
+                                    f"{int(next_chunk_seq)}_terminal"
+                                ),
+                            )
+                            episode_last_chunk_seq = int(next_chunk_seq)
+                            next_chunk_seq += 1
+                        else:
+                            assert rollout_processor is not None
+                            rollout_processor.finalize_zero_step_terminal(
+                                terminal_reward=float(chunk_result["reward_sum"]),
+                                boundary_flag=bool(
+                                    chunk_result["done"] or chunk_result["truncated"]
+                                ),
+                                wait_for_episode_commit=bool(wait_for_episode_commit),
+                            )
                     episode_return += float(chunk_result["reward_sum"])
                     episode_success = bool(
                         episode_success or chunk_result["info"].get("success", False)
@@ -406,16 +505,68 @@ def actor(
                     break
 
                 previous_env_steps = int(env_steps)
+                payload = build_processor_submission_payload(
+                    chunk_seq=int(next_chunk_seq),
+                    episode_id=int(episode_id),
+                    episode_step_start=int(episode_steps),
+                    task_prompt=str(task_prompt),
+                    chunk_result=dict(chunk_result),
+                )
+                payload.update(
+                    {
+                        "residual_obs_before_chunk": decision_obs.residual_obs,
+                        "action_chunk": np.asarray(action_chunk, dtype=np.float32),
+                    }
+                )
                 with timer.context("processor_step_chunk"):
-                    processed_chunk = rollout_processor.process_step_chunk(
-                        episode_id=int(episode_id),
-                        episode_step_start=int(episode_steps),
-                        residual_obs_before_chunk=decision_obs.residual_obs,
-                        action_chunk=action_chunk,
-                        chunk_result=chunk_result,
-                        task_prompt=task_prompt,
-                    )
-                raw_chunk = processed_chunk.raw
+                    if processor_submitter is not None:
+                        processor_submitter.submit_chunk(
+                            payload=payload,
+                            context=(
+                                f"episode_{int(episode_id)}_chunk_"
+                                f"{int(next_chunk_seq)}"
+                            ),
+                        )
+                        raw_chunk = SimpleNamespace(
+                            executed_steps=int(executed_steps),
+                            reward_sum=float(chunk_result["reward_sum"]),
+                            infos=list(chunk_infos[:executed_steps]),
+                            chunk_info=dict(chunk_result["info"]),
+                            final_obs=dict(chunk_result["obs"]),
+                        )
+                    else:
+                        assert rollout_processor is not None
+                        processed_chunk = rollout_processor.process_step_chunk(
+                            episode_id=int(episode_id),
+                            episode_step_start=int(episode_steps),
+                            residual_obs_before_chunk=decision_obs.residual_obs,
+                            action_chunk=action_chunk,
+                            chunk_result=chunk_result,
+                            task_prompt=task_prompt,
+                        )
+                        raw_chunk = processed_chunk.raw
+                        if recycle_recorder is not None:
+                            try:
+                                recycle_recorder.append_chunk(payload=payload)
+                            except Exception:
+                                recycle_recorder.record_append_error()
+                                logger.exception(
+                                    "raw rollout append failed: chunk_seq=%s episode_id=%s",
+                                    int(next_chunk_seq),
+                                    int(episode_id),
+                                )
+                episode_last_chunk_seq = int(next_chunk_seq)
+                next_chunk_seq += 1
+                if (
+                    processor_submitter is not None
+                    and not bool(chunk_result["done"] or chunk_result["truncated"])
+                    and env_steps + int(raw_chunk.executed_steps) < max_env_steps
+                ):
+                    with timer.context("processor_prefetch_next_obs"):
+                        transition_assembler.prefetch_next_decision_obs(
+                            obs=dict(raw_chunk.final_obs),
+                            task_prompt=str(task_prompt),
+                        )
 
                 env_steps += int(raw_chunk.executed_steps)
                 progress_bar.update(int(raw_chunk.executed_steps))
@@ -459,7 +610,8 @@ def actor(
 
             next_reset_error: Exception | None = None
             should_prefetch_next_reset = bool(
-                transition_assembler.async_transition_assembly_enabled
+                (not use_standalone_processor)
+                and transition_assembler.async_transition_assembly_enabled
                 and supports_staged_reset
                 and env_steps < max_env_steps
                 and episode_id < max_episodes
@@ -472,16 +624,23 @@ def actor(
                         prepare_episode_reset_fn()
                 except Exception as exc:  # noqa: BLE001
                     next_reset_error = exc
-            if transition_assembler.async_transition_assembly_enabled:
+            if not use_standalone_processor:
                 with timer.context("processor_episode_finish"):
+                    assert rollout_processor is not None
                     rollout_processor.finish_episode(
                         wait_for_episode_commit=bool(wait_for_episode_commit),
                     )
-            else:
-                with timer.context("processor_episode_finish"):
-                    rollout_processor.finish_episode(
-                        wait_for_episode_commit=bool(wait_for_episode_commit),
-                    )
+                    if recycle_recorder is not None:
+                        recycle_recorder.finalize_episode(
+                            marker={
+                                "episode_id": int(episode_id),
+                                "last_chunk_seq": (
+                                    -1
+                                    if episode_last_chunk_seq is None
+                                    else int(episode_last_chunk_seq)
+                                ),
+                            }
+                        )
             _update_trainer_transport(context="episode_end")
             success_count += int(episode_success)
             recent_episode_successes.append(int(episode_success))
@@ -507,11 +666,23 @@ def actor(
                     "source": "rollout",
                     **episode_stats,
                     "transport": _transport_status(),
+                    "processor": (
+                        None
+                        if processor_submitter is None
+                        else processor_submitter.status_snapshot()
+                    ),
                 },
             )
-            if wait_for_episode_commit:
-                client.wait_until_committed()
-            _send_rollout_stats(payload=episode_stats)
+            if processor_submitter is not None:
+                processor_submitter.mark_episode_end(
+                    episode_id=int(episode_id),
+                    last_chunk_seq=episode_last_chunk_seq,
+                    rollout_stats=episode_stats,
+                )
+            else:
+                if wait_for_episode_commit:
+                    client.wait_until_committed()
+                _send_rollout_stats(payload=episode_stats)
             progress_bar.set_postfix(
                 episode=int(episode_id),
                 success=int(bool(episode_success)),
@@ -536,7 +707,7 @@ def actor(
                 )
 
     finally:
-        if current_task_prompt is not None:
+        if current_task_prompt is not None and rollout_processor is not None:
             try:
                 rollout_processor.finish_episode(
                     wait_for_episode_commit=True,
@@ -548,8 +719,17 @@ def actor(
                     exc_info=True,
                 )
         try:
+            if processor_submitter is not None:
+                processor_submitter.shutdown(last_chunk_seq=int(next_chunk_seq - 1))
+                processor_submitter.close(wait=True)
+        except Exception:  # noqa: BLE001
+            logger.debug("ignored processor submitter shutdown error", exc_info=True)
+        try:
             _update_trainer_transport(context="shutdown")
-            if bool(cfg.runtime.trainer_transport.wait_committed_on_shutdown):
+            if (
+                (not use_standalone_processor)
+                and bool(cfg.runtime.trainer_transport.wait_committed_on_shutdown)
+            ):
                 client.wait_until_committed()
         except Exception:  # noqa: BLE001
             pass
@@ -559,6 +739,16 @@ def actor(
                 "episodes": int(episode_id),
                 "successes": int(success_count),
                 "transport": _transport_status(),
+                "processor": (
+                    None
+                    if processor_submitter is None
+                    else processor_submitter.status_snapshot()
+                ),
+                "recycle": (
+                    None
+                    if recycle_recorder is None
+                    else recycle_recorder.status_snapshot()
+                ),
             }
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
@@ -576,7 +766,8 @@ def actor(
         except Exception:  # noqa: BLE001
             pass
         try:
-            rollout_processor.close()
+            if rollout_processor is not None:
+                rollout_processor.close()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -1253,6 +1444,9 @@ def main(cfg: DictConfig) -> None:
 
     if typed_cfg.runtime.role == "actor":
         actor(typed_cfg, run_dir=run_dir, logger=logger)
+        return
+    if typed_cfg.runtime.role == "processor":
+        run_processor(typed_cfg, run_dir=run_dir, logger=logger)
         return
     learner(typed_cfg, run_dir=run_dir, logger=logger)
 

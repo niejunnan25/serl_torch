@@ -14,6 +14,7 @@ from omegaconf import DictConfig
 from serl_launcher.common.trainer_transport import SUPPORTED_TRANSPORT_MODES
 from serl_launcher.common.trainer_transport import TrainerTransportConfig
 from serl_launcher.common.trainer_transport import validate_transport_mode
+from serl_launcher.rollout import ProcessorTransportConfig
 from serl_launcher.utils.serialization import to_jsonable
 
 from .env.arm_layout import AGIBOT_ROBOT_ACTION_DIM
@@ -24,10 +25,11 @@ from .env.arm_layout import validate_arm_layout_dims
 from .env.schema import build_agibot_task_key
 from .env.schema import resolve_agibot_image_keys
 
-RuntimeRole = Literal["actor", "learner"]
+RuntimeRole = Literal["actor", "learner", "processor"]
 EnvBackend = Literal["local", "fake"]
 PolicyBackend = Literal["openpi", "joyra"]
 OptimizerType = Literal["adam", "adamw"]
+ProcessorMode = Literal["in_process", "standalone"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,7 @@ class RuntimeConfig:
     broadcast_port: int
     data_store_queue_size: int
     trainer_transport: TrainerTransportConfig
+    processor_transport: ProcessorTransportConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +142,25 @@ class ActionFilterConfig:
     max_delta: float | None
     warmup_steps: int
     reset_each_episode: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessorConfig:
+    mode: ProcessorMode
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessorBatchingConfig:
+    enabled: bool
+    max_batch_chunks: int
+    max_batch_obs: int
+    max_wait_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class RecycleConfig:
+    enabled: bool
+    output_root: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +302,18 @@ class AsyncEvalConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EvalLoggingConfig:
+    enabled: bool
+    backend: str
+    project: str
+    entity: str | None
+    run_name: str
+    group: str | None
+    mode: str
+    debug: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TrainingConfig:
     training_starts: int
     steps_per_update: int
@@ -307,6 +341,7 @@ class EvalConfig:
     deterministic: bool
     checkpoint_path: str | None
     checkpoint_step: int | None
+    logging: EvalLoggingConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +368,9 @@ class AgiBotTrainConfig:
     wandb: WandbConfig
     policy: PolicyConfig
     backfill_policy: BackfillPolicyConfig
+    processor: ProcessorConfig
+    processor_batching: ProcessorBatchingConfig
+    recycle: RecycleConfig
     robot: RobotConfig
     controller: ControllerConfig
     env: EnvConfig
@@ -603,7 +641,7 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
     role = _parse_choice(
         runtime_cfg.get("role", "actor"),
         "runtime.role",
-        allowed=("actor", "learner"),
+        allowed=("actor", "learner", "processor"),
     )
     trainer_port = _positive_int(
         runtime_cfg.get("trainer_port", 5488),
@@ -612,6 +650,15 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
     transport_cfg = _parse_trainer_transport_cfg(
         runtime_cfg=runtime_cfg,
         default_data_port=int(trainer_port + 2),
+    )
+    processor_transport_cfg = _parse_processor_transport_cfg(
+        runtime_cfg=runtime_cfg,
+        default_host=_required_str(
+            runtime_cfg.get("trainer_host", "127.0.0.1"),
+            "runtime.trainer_host",
+        ),
+        default_port=int(trainer_port + 3),
+        default_timeout_ms=int(transport_cfg.control_timeout_ms),
     )
     return RuntimeConfig(
         role=cast(RuntimeRole, role),
@@ -629,6 +676,51 @@ def _parse_runtime_cfg(cfg: DictConfig) -> RuntimeConfig:
             "runtime.data_store_queue_size",
         ),
         trainer_transport=transport_cfg,
+        processor_transport=processor_transport_cfg,
+    )
+
+
+def _parse_processor_cfg(cfg: DictConfig) -> ProcessorConfig:
+    processor_cfg = cfg.get("processor", {}) or {}
+    return ProcessorConfig(
+        mode=cast(
+            ProcessorMode,
+            _parse_choice(
+                processor_cfg.get("mode", "in_process"),
+                "processor.mode",
+                allowed=("in_process", "standalone"),
+            ),
+        )
+    )
+
+
+def _parse_processor_batching_cfg(cfg: DictConfig) -> ProcessorBatchingConfig:
+    batching_cfg = cfg.get("processor_batching", {}) or {}
+    return ProcessorBatchingConfig(
+        enabled=bool(batching_cfg.get("enabled", False)),
+        max_batch_chunks=_positive_int(
+            batching_cfg.get("max_batch_chunks", 4),
+            "processor_batching.max_batch_chunks",
+        ),
+        max_batch_obs=_positive_int(
+            batching_cfg.get("max_batch_obs", 24),
+            "processor_batching.max_batch_obs",
+        ),
+        max_wait_ms=_nonnegative_int(
+            batching_cfg.get("max_wait_ms", 3),
+            "processor_batching.max_wait_ms",
+        ),
+    )
+
+
+def _parse_recycle_cfg(cfg: DictConfig) -> RecycleConfig:
+    recycle_cfg = cfg.get("recycle", {}) or {}
+    return RecycleConfig(
+        enabled=bool(recycle_cfg.get("enabled", False)),
+        output_root=_required_str(
+            recycle_cfg.get("output_root", "raw_rollout_recycle"),
+            "recycle.output_root",
+        ),
     )
 
 
@@ -671,6 +763,34 @@ def _parse_trainer_transport_cfg(
         ),
         wait_committed_on_shutdown=bool(
             raw_cfg.get("wait_committed_on_shutdown", True)
+        ),
+    )
+
+
+def _parse_processor_transport_cfg(
+    *,
+    runtime_cfg: DictConfig | dict[str, Any],
+    default_host: str,
+    default_port: int,
+    default_timeout_ms: int,
+) -> ProcessorTransportConfig:
+    processor_cfg = runtime_cfg.get("processor_transport", {}) or {}
+    return ProcessorTransportConfig(
+        host=_required_str(
+            processor_cfg.get("host", default_host),
+            "runtime.processor_transport.host",
+        ),
+        port=_positive_int(
+            processor_cfg.get("port", default_port),
+            "runtime.processor_transport.port",
+        ),
+        timeout_ms=_positive_int(
+            processor_cfg.get("timeout_ms", default_timeout_ms),
+            "runtime.processor_transport.timeout_ms",
+        ),
+        queue_capacity=_positive_int(
+            processor_cfg.get("queue_capacity", 8),
+            "runtime.processor_transport.queue_capacity",
         ),
     )
 
@@ -1385,6 +1505,48 @@ def _parse_eval_cfg_block(cfg: DictConfig) -> EvalConfig:
             eval_cfg.get("checkpoint_step", None),
             "eval.checkpoint_step",
         ),
+        logging=_parse_eval_logging_cfg(cfg),
+    )
+
+
+def _parse_eval_logging_cfg(cfg: DictConfig) -> EvalLoggingConfig:
+    eval_cfg = cfg.get("eval", {})
+    logging_cfg = eval_cfg.get("logging", {}) or {}
+    debug = bool(logging_cfg.get("debug", False))
+    mode_value = logging_cfg.get("mode", None)
+    if mode_value is None:
+        resolved_mode = "online"
+    else:
+        resolved_mode = _parse_choice(
+            mode_value,
+            "eval.logging.mode",
+            allowed=("online", "offline", "disabled"),
+        )
+    if debug:
+        resolved_mode = "disabled"
+    task = _parse_task_cfg(cfg)
+    default_run_name = f"{task.task_key}_eval"
+    return EvalLoggingConfig(
+        enabled=bool(logging_cfg.get("enabled", False)),
+        backend=_parse_choice(
+            logging_cfg.get("backend", "swanlab"),
+            "eval.logging.backend",
+            allowed=("wandb", "swanlab"),
+        ),
+        project=_required_str(
+            logging_cfg.get("project", "agibot_real"),
+            "eval.logging.project",
+        ),
+        entity=_optional_str(
+            logging_cfg.get("entity", os.environ.get("WANDB_ENTITY"))
+        ),
+        run_name=_required_str(
+            logging_cfg.get("run_name", default_run_name),
+            "eval.logging.run_name",
+        ),
+        group=_optional_str(logging_cfg.get("group", None)),
+        mode=str(resolved_mode),
+        debug=debug,
     )
 
 
@@ -1430,6 +1592,11 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
     task = _parse_task_cfg(cfg)
     env = _parse_env_cfg(cfg)
     runtime = _parse_runtime_cfg(cfg)
+    processor = _parse_processor_cfg(cfg)
+    if runtime.role == "processor" and processor.mode != "standalone":
+        raise ValueError(
+            "runtime.role=processor requires processor.mode=standalone"
+        )
     policy = _parse_policy_cfg(cfg, env=env)
     backfill_policy = _parse_backfill_policy_cfg(cfg, policy=policy)
     controller = _parse_controller_cfg(cfg)
@@ -1451,6 +1618,9 @@ def parse_train_cfg(cfg: DictConfig) -> AgiBotTrainConfig:
         wandb=_parse_wandb_cfg(cfg, task=task),
         policy=policy,
         backfill_policy=backfill_policy,
+        processor=processor,
+        processor_batching=_parse_processor_batching_cfg(cfg),
+        recycle=_parse_recycle_cfg(cfg),
         robot=_parse_robot_cfg(cfg),
         controller=controller,
         env=env,
@@ -1546,6 +1716,7 @@ __all__ = [
     "EnvBackend",
     "EnvConfig",
     "EvalConfig",
+    "EvalLoggingConfig",
     "EvalTrainingConfig",
     "LoggingConfig",
     "MixedPrecisionConfig",
@@ -1557,6 +1728,10 @@ __all__ = [
     "OptimizerType",
     "PolicyBackend",
     "PolicyConfig",
+    "ProcessorBatchingConfig",
+    "ProcessorConfig",
+    "ProcessorMode",
+    "RecycleConfig",
     "ReplayConfig",
     "ReplayPreparedChunkConfig",
     "ResidualConfig",

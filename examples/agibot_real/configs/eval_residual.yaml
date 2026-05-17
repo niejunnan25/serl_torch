@@ -125,6 +125,15 @@ eval:
   deterministic: true
   checkpoint_path: null
   checkpoint_step: null
+  logging:
+    enabled: false
+    backend: swanlab
+    project: agibot_real
+    entity: null
+    run_name: ${task.name}_eval
+    group: eval
+    mode: online
+    debug: false
 
 logging:
   summary_file: summary.json

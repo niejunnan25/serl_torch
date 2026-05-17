@@ -39,6 +39,29 @@ from serl_torch.examples.agibot_real.runtime.transition_assembly import (
     count_executed_steps_from_infos,
 )
 
+EVAL_EPISODE_AXIS = "eval/episode_id"
+EVAL_ENV_STEP_AXIS = "eval/env_steps"
+EVAL_EPISODE_METRICS = (
+    "eval/success",
+    "eval/episode_return",
+    "eval/episode_steps",
+    "eval/running_success_rate",
+    "eval/policy_requests",
+    "eval/policy_requests_per_env_step",
+    "eval/checkpoint_step",
+    "eval/total_sec",
+    "eval/sample_actions_sec",
+    "eval/policy_infer_sec",
+    "eval/step_env_sec",
+)
+EVAL_ENV_STEP_METRICS = (
+    "eval_by_env_steps/episode_id",
+    "eval_by_env_steps/success",
+    "eval_by_env_steps/episode_return",
+    "eval_by_env_steps/episode_steps",
+    "eval_by_env_steps/running_success_rate",
+)
+
 
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
     if value is None:
@@ -92,6 +115,160 @@ def _resolve_checkpoint_input(
         step=checkpoint_step,
     ).resolve()
     return checkpoint_input_path, resolved_checkpoint_path
+
+
+def _init_eval_dashboard_logger(
+    cfg: AgiBotEvalConfig,
+    *,
+    run_dir: Path,
+    logger: logging.Logger,
+) -> Any | None:
+    if not bool(cfg.eval.logging.enabled):
+        return None
+    try:
+        from serl_launcher.common.observability import define_metric_group
+        from serl_launcher.common.training_observability import (
+            configure_eval_wandb_metrics,
+        )
+        from serl_launcher.common.wandb import WandBLogger
+
+        wandb_cfg = WandBLogger.get_default_config()
+        wandb_cfg.project = str(cfg.eval.logging.project)
+        wandb_cfg.entity = cfg.eval.logging.entity
+        wandb_cfg.exp_descriptor = str(cfg.eval.logging.run_name)
+        wandb_cfg.group = cfg.eval.logging.group
+        wandb_cfg.mode = str(cfg.eval.logging.mode)
+        wandb_cfg.tag = [str(cfg.eval.logging.run_name), "agibot_eval"]
+        wandb_logger = WandBLogger(
+            wandb_cfg,
+            cfg_to_log_payload(cfg),
+            wandb_output_dir=str(run_dir / "wandb_eval"),
+            mode=str(cfg.eval.logging.mode),
+            debug=bool(cfg.eval.logging.debug),
+        )
+        configure_eval_wandb_metrics(
+            wandb_logger=wandb_logger,
+            axis_metric=EVAL_EPISODE_AXIS,
+            metric_names=EVAL_EPISODE_METRICS,
+        )
+        run = getattr(wandb_logger, "run", None)
+        if run is not None:
+            define_metric_group(
+                run,
+                axis_metric=EVAL_ENV_STEP_AXIS,
+                metric_names=EVAL_ENV_STEP_METRICS,
+                hide_axis_metric=True,
+            )
+        logger.info(
+            "Eval dashboard logging enabled: backend=%s project=%s run=%s mode=%s",
+            str(cfg.eval.logging.backend),
+            str(cfg.eval.logging.project),
+            str(cfg.eval.logging.run_name),
+            str(cfg.eval.logging.mode),
+        )
+        return wandb_logger
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "failed to initialize eval dashboard logger; continuing with file logs: %s",
+            exc,
+            exc_info=True,
+        )
+        return None
+
+
+def _timer_metric(timer: Timer, name: str) -> float | None:
+    averages = timer.get_average_times()
+    value = averages.get(str(name), None)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _log_eval_episode_metrics(
+    *,
+    wandb_logger: Any | None,
+    episode_record: dict[str, Any],
+    checkpoint_step: int | None,
+    timer: Timer,
+    policy_requests: int,
+    total_env_steps: int,
+) -> None:
+    if wandb_logger is None:
+        return
+    episode_id = int(episode_record["eval_episode_id"])
+    episode_steps = int(episode_record["episode_steps"])
+    policy_requests_per_env_step = (
+        float(policy_requests / total_env_steps) if total_env_steps > 0 else 0.0
+    )
+    metrics: dict[str, Any] = {
+        EVAL_EPISODE_AXIS: int(episode_id),
+        EVAL_ENV_STEP_AXIS: int(total_env_steps),
+        "eval/success": float(bool(episode_record["success"])),
+        "eval/episode_return": float(episode_record["episode_return"]),
+        "eval/episode_steps": float(episode_steps),
+        "eval/running_success_rate": float(
+            episode_record["running_success_rate"]
+        ),
+        "eval/policy_requests": float(policy_requests),
+        "eval/policy_requests_per_env_step": float(policy_requests_per_env_step),
+    }
+    if checkpoint_step is not None:
+        metrics["eval/checkpoint_step"] = float(checkpoint_step)
+    for timer_name, metric_name in (
+        ("total", "eval/total_sec"),
+        ("sample_actions", "eval/sample_actions_sec"),
+        ("policy_infer", "eval/policy_infer_sec"),
+        ("step_env", "eval/step_env_sec"),
+    ):
+        value = _timer_metric(timer, timer_name)
+        if value is not None:
+            metrics[metric_name] = float(value)
+    try:
+        wandb_logger.log(to_jsonable(metrics), step=int(episode_id))
+    except Exception:  # noqa: BLE001
+        return
+
+    env_step_metrics = {
+        EVAL_ENV_STEP_AXIS: int(total_env_steps),
+        "eval_by_env_steps/episode_id": float(episode_id),
+        "eval_by_env_steps/success": float(bool(episode_record["success"])),
+        "eval_by_env_steps/episode_return": float(
+            episode_record["episode_return"]
+        ),
+        "eval_by_env_steps/episode_steps": float(episode_steps),
+        "eval_by_env_steps/running_success_rate": float(
+            episode_record["running_success_rate"]
+        ),
+    }
+    try:
+        wandb_logger.log(to_jsonable(env_step_metrics), step=int(total_env_steps))
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _log_eval_summary_metrics(
+    *,
+    wandb_logger: Any | None,
+    summary: dict[str, Any],
+    total_env_steps: int,
+) -> None:
+    if wandb_logger is None:
+        return
+    metrics = {
+        EVAL_ENV_STEP_AXIS: int(total_env_steps),
+        "eval/episodes_completed": float(summary["episodes_completed"]),
+        "eval/success_rate": float(summary["success_rate"]),
+        "eval/mean_return": float(summary["mean_return"]),
+        "eval/mean_episode_steps": float(summary["mean_episode_steps"]),
+        "eval/policy_requests": float(summary["policy_requests"]),
+        "eval/policy_requests_per_env_step": float(
+            summary["policy_requests_per_env_step"]
+        ),
+    }
+    try:
+        wandb_logger.log(to_jsonable(metrics), step=int(summary["episodes_completed"]))
+    except Exception:  # noqa: BLE001
+        return
 
 
 def run_eval(
@@ -273,6 +450,11 @@ def run_eval(
             "task_description": str(cfg.task.prompt),
         },
     }
+    dashboard_logger = _init_eval_dashboard_logger(
+        cfg,
+        run_dir=run_dir,
+        logger=logger,
+    )
 
     try:
         for episode_id in range(episodes):
@@ -430,6 +612,14 @@ def run_eval(
                     )
                 )
             episode_logger.write(to_jsonable(episode_record))
+            _log_eval_episode_metrics(
+                wandb_logger=dashboard_logger,
+                episode_record=episode_record,
+                checkpoint_step=checkpoint_step,
+                timer=timer,
+                policy_requests=int(policy_requests),
+                total_env_steps=int(total_env_steps),
+            )
             if video_recorder is not None:
                 video_recorder.end_episode(
                     episode_id=int(episode_id),
@@ -477,6 +667,11 @@ def run_eval(
         )
         with open(run_dir / cfg.logging.summary_file, "w", encoding="utf-8") as fp:
             json.dump(summary, fp, indent=2, ensure_ascii=False)
+        _log_eval_summary_metrics(
+            wandb_logger=dashboard_logger,
+            summary=summary,
+            total_env_steps=int(total_env_steps),
+        )
         try:
             episode_logger.close()
         except Exception:  # noqa: BLE001
@@ -492,6 +687,16 @@ def run_eval(
         try:
             if video_recorder is not None:
                 video_recorder.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            run = (
+                None
+                if dashboard_logger is None
+                else getattr(dashboard_logger, "run", None)
+            )
+            if run is not None:
+                run.finish()
         except Exception:  # noqa: BLE001
             pass
 

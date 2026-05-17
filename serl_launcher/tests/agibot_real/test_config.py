@@ -68,6 +68,11 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertFalse(parsed.replay.prepared_chunk.online_enabled)
         self.assertFalse(parsed.training.async_eval.enabled)
         self.assertEqual(parsed.training.async_eval.every_episodes, 20)
+        self.assertEqual(parsed.processor.mode, "in_process")
+        self.assertTrue(parsed.processor_batching.enabled)
+        self.assertEqual(parsed.processor_batching.max_batch_chunks, 4)
+        self.assertEqual(parsed.runtime.processor_transport.port, 5491)
+        self.assertFalse(parsed.recycle.enabled)
 
     def test_parse_eval_cfg_from_yaml(self) -> None:
         cfg = OmegaConf.load(
@@ -84,6 +89,9 @@ class AgiBotConfigTest(unittest.TestCase):
         self.assertEqual(parsed.logging.episode_log_file, "episode_logs.jsonl")
         self.assertFalse(parsed.action_filter.enabled)
         self.assertEqual(parsed.action_filter.alpha, 0.25)
+        self.assertFalse(parsed.eval.logging.enabled)
+        self.assertEqual(parsed.eval.logging.backend, "swanlab")
+        self.assertEqual(parsed.eval.logging.project, "agibot_real")
 
     def test_parse_train_cfg_rejects_async_eval_enabled(self) -> None:
         cfg = OmegaConf.load(
@@ -98,6 +106,39 @@ class AgiBotConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError,
             "AgiBot real robot training currently does not support async eval",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_parse_train_cfg_accepts_standalone_processor_role(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.runtime.role = "processor"
+        cfg.processor.mode = "standalone"
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertEqual(parsed.runtime.role, "processor")
+        self.assertEqual(parsed.processor.mode, "standalone")
+
+    def test_parse_train_cfg_rejects_processor_role_without_standalone_mode(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "agibot_real"
+            / "configs"
+            / "train_residual.yaml"
+        )
+        cfg.runtime.role = "processor"
+        cfg.processor.mode = "in_process"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "runtime.role=processor requires processor.mode=standalone",
         ):
             parse_train_cfg(cfg)
 

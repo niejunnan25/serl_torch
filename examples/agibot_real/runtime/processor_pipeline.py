@@ -10,6 +10,7 @@ transition assembly, pending terminal bookkeeping, and replay insertion.
 from dataclasses import dataclass
 from typing import Any
 from typing import Callable
+from typing import Sequence
 
 import numpy as np
 
@@ -53,6 +54,50 @@ class AgiBotRolloutProcessor:
         self.commit_assembled_chunks(assembled_chunks)
         return assembled_chunks
 
+    def process_raw_chunk(
+        self,
+        *,
+        raw: RawChunkRecord,
+        task_prompt: str,
+    ) -> AgiBotProcessedChunk:
+        assembled_chunks = tuple(
+            self.transition_assembler.handle_chunk(
+                raw=raw,
+                task_prompt=str(task_prompt),
+            )
+        )
+        self.commit_assembled_chunks(assembled_chunks)
+        return AgiBotProcessedChunk(
+            raw=raw,
+            assembled_chunks=assembled_chunks,
+        )
+
+    def process_payload_batch(
+        self,
+        payloads: Sequence[dict[str, Any]],
+        *,
+        base_policy: Any,
+        image_keys: tuple[str, ...],
+        residual_alpha: float,
+        arm_layout: str,
+    ) -> list[AgiBotProcessedChunk]:
+        processed_chunks: list[AgiBotProcessedChunk] = []
+        for payload in payloads:
+            raw = RawChunkRecord.from_submission_payload(
+                dict(payload),
+                base_policy=base_policy,
+                image_keys=tuple(image_keys),
+                residual_alpha=float(residual_alpha),
+                arm_layout=str(arm_layout),
+            )
+            processed_chunks.append(
+                self.process_raw_chunk(
+                    raw=raw,
+                    task_prompt=str(payload["task_prompt"]),
+                )
+            )
+        return processed_chunks
+
     def process_step_chunk(
         self,
         *,
@@ -70,16 +115,9 @@ class AgiBotRolloutProcessor:
             action_chunk=action_chunk,
             chunk_result=chunk_result,
         )
-        assembled_chunks = tuple(
-            self.transition_assembler.handle_chunk(
-                raw=raw,
-                task_prompt=str(task_prompt),
-            )
-        )
-        self.commit_assembled_chunks(assembled_chunks)
-        return AgiBotProcessedChunk(
+        return self.process_raw_chunk(
             raw=raw,
-            assembled_chunks=assembled_chunks,
+            task_prompt=str(task_prompt),
         )
 
     def finalize_zero_step_terminal(

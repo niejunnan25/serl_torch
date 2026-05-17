@@ -145,6 +145,47 @@ def _fake_agibot_raw_chunk(
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"missing dependency: {_IMPORT_ERROR}")
 class AgiBotTransitionAssemblerRuntimeTest(unittest.TestCase):
+    def test_raw_chunk_can_be_reconstructed_from_processor_payload(self) -> None:
+        payload = {
+            "chunk_seq": 2,
+            "episode_id": 3,
+            "episode_step_start": 4,
+            "task_prompt": "task",
+            "residual_obs_before_chunk": {
+                "state": np.asarray([0.5], dtype=np.float32)
+            },
+            "action_chunk": np.asarray([[0.25]], dtype=np.float32),
+            "chunk_result": {
+                "observations": [{"state": np.asarray([1.0], dtype=np.float32)}],
+                "rewards": [1.0],
+                "dones": [True],
+                "infos": [
+                    {
+                        "controller_action_executed": True,
+                        "success": True,
+                    }
+                ],
+                "obs": {"state": np.asarray([1.0], dtype=np.float32)},
+                "done": True,
+                "truncated": False,
+                "reward_sum": 1.0,
+                "info": {"success": True},
+            },
+        }
+
+        raw = RawChunkRecord.from_submission_payload(
+            payload,
+            base_policy=object(),
+            image_keys=("image_rgb_0",),
+            residual_alpha=0.2,
+            arm_layout="dual_arm",
+        )
+
+        self.assertEqual(raw.episode_id, 3)
+        self.assertEqual(raw.episode_step_start, 4)
+        self.assertEqual(raw.executed_steps, 1)
+        self.assertTrue(raw.chunk_done)
+
     def test_sync_path_reuses_prefetched_decision_obs(self) -> None:
         assembler = AgiBotTransitionAssembler(
             cfg=_fake_agibot_cfg(async_enabled=False),
