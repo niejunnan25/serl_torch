@@ -92,13 +92,16 @@ class RolloutProcessorControlServer:
 
     def stop(self) -> None:
         self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        if self._thread is not None and self._thread.is_alive():
+            # Avoid closing a ZMQ socket while the serving thread may still be in recv().
+            return
         _close_zmq_socket(self._socket)
         try:
             self._context.term()
         except Exception:
             pass
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
 
 
 class RolloutProcessorControlClient:
