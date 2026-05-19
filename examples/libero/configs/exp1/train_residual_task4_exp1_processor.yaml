@@ -86,7 +86,25 @@ residual:
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
   chunk_horizon: 5
+key_rl:
+  enabled: false
+  mode: fixed_step
+  start_step: 0
+  replay_mode: active_only
+  require_chunk_boundary: true
 
+  stage1:
+    enabled: false
+    start_step: 0
+    end_step: 0
+  stage2:
+    enabled: false
+    start_step: 0
+    end_step: 0
+  stage3:
+    enabled: false
+    start_step: 0
+    end_step: 0
 encoder:
   type: resnet
   shared: true

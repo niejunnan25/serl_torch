@@ -24,6 +24,8 @@ RuntimeRole = Literal["actor", "learner", "processor"]
 EnvBackend = Literal["local", "remote"]
 PolicyBackend = Literal["openpi", "joyra"]
 OptimizerType = Literal["adam", "adamw"]
+KeyRLMode = Literal["fixed_step", "fixed_stages"]
+KeyRLReplayMode = Literal["active_only"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +96,25 @@ class ResidualConfig:
     action_limits: tuple[float, ...]
     clip_gripper: bool
     chunk_horizon: int
+
+
+@dataclass(frozen=True, slots=True)
+class KeyRLStageConfig:
+    enabled: bool
+    start_step: int
+    end_step: int
+
+
+@dataclass(frozen=True, slots=True)
+class KeyRLConfig:
+    enabled: bool
+    mode: KeyRLMode
+    start_step: int
+    replay_mode: KeyRLReplayMode
+    require_chunk_boundary: bool
+    stage1: KeyRLStageConfig
+    stage2: KeyRLStageConfig
+    stage3: KeyRLStageConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +342,7 @@ class LiberoTrainConfig:
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    key_rl: KeyRLConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -341,6 +363,7 @@ class LiberoEvalConfig:
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    key_rl: KeyRLConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -942,6 +965,60 @@ def _parse_residual_cfg(cfg: DictConfig, *, action_dim: int) -> ResidualConfig:
             residual_cfg.get("chunk_horizon", 1),
             "residual.chunk_horizon",
         ),
+    )
+
+
+def _parse_key_rl_stage_cfg(key_rl_cfg: Any, stage_name: str) -> KeyRLStageConfig:
+    stage_cfg = key_rl_cfg.get(stage_name, {}) or {}
+    return KeyRLStageConfig(
+        enabled=bool(stage_cfg.get("enabled", False)),
+        start_step=_nonnegative_int(
+            stage_cfg.get("start_step", 0),
+            f"key_rl.{stage_name}.start_step",
+        ),
+        end_step=_nonnegative_int(
+            stage_cfg.get("end_step", 0),
+            f"key_rl.{stage_name}.end_step",
+        ),
+    )
+
+
+def _parse_key_rl_cfg(cfg: DictConfig) -> KeyRLConfig:
+    key_rl_cfg = cfg.get("key_rl", {}) or {}
+    unsupported_stages = sorted(
+        str(key)
+        for key in key_rl_cfg.keys()
+        if str(key).startswith("stage") and str(key) not in {"stage1", "stage2", "stage3"}
+    )
+    if unsupported_stages:
+        raise ValueError(
+            "key_rl supports only stage1/stage2/stage3, got "
+            f"{unsupported_stages}"
+        )
+    mode = _parse_choice(
+        key_rl_cfg.get("mode", "fixed_step"),
+        "key_rl.mode",
+        allowed=("fixed_step", "fixed_stages"),
+    )
+    replay_mode = _parse_choice(
+        key_rl_cfg.get("replay_mode", "active_only"),
+        "key_rl.replay_mode",
+        allowed=("active_only",),
+    )
+    return KeyRLConfig(
+        enabled=bool(key_rl_cfg.get("enabled", False)),
+        mode=cast(KeyRLMode, mode),
+        start_step=_nonnegative_int(
+            key_rl_cfg.get("start_step", 0),
+            "key_rl.start_step",
+        ),
+        replay_mode=cast(KeyRLReplayMode, replay_mode),
+        require_chunk_boundary=bool(
+            key_rl_cfg.get("require_chunk_boundary", True)
+        ),
+        stage1=_parse_key_rl_stage_cfg(key_rl_cfg, "stage1"),
+        stage2=_parse_key_rl_stage_cfg(key_rl_cfg, "stage2"),
+        stage3=_parse_key_rl_stage_cfg(key_rl_cfg, "stage3"),
     )
 
 
@@ -1561,6 +1638,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     runtime = _parse_runtime_cfg(cfg)
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    key_rl = _parse_key_rl_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
     offline = _parse_offline_cfg(cfg)
     policy = _parse_policy_cfg(cfg)
@@ -1585,6 +1663,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         env=env,
         obs=obs,
         residual=residual,
+        key_rl=key_rl,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
@@ -1609,6 +1688,7 @@ def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:
     env = _parse_env_cfg(cfg)
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    key_rl = _parse_key_rl_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
@@ -1626,6 +1706,7 @@ def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:
         env=env,
         obs=obs,
         residual=residual,
+        key_rl=key_rl,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
@@ -1670,6 +1751,7 @@ def train_cfg_to_eval_cfg(
         env=eval_env,
         obs=train_cfg.obs,
         residual=train_cfg.residual,
+        key_rl=train_cfg.key_rl,
         encoder=train_cfg.encoder,
         network=train_cfg.network,
         sac=train_cfg.sac,
@@ -1693,6 +1775,10 @@ __all__ = [
     "EnvConfig",
     "EvalConfig",
     "EvalTrainingConfig",
+    "KeyRLConfig",
+    "KeyRLMode",
+    "KeyRLReplayMode",
+    "KeyRLStageConfig",
     "LiberoEvalConfig",
     "LiberoRunConfig",
     "LiberoTrainConfig",

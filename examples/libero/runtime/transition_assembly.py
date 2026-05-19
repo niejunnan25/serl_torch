@@ -18,6 +18,9 @@ from serl_launcher.rollout.async_transition_assembly import (
 from serl_torch.examples.libero.env.observation import build_libero_state
 from serl_torch.examples.libero.env.observation import extract_libero_images
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
+from serl_torch.examples.libero.runtime.key_rl import StageRange
+from serl_torch.examples.libero.runtime.key_rl import key_rl_active_step_ranges
+from serl_torch.examples.libero.runtime.key_rl import key_rl_step_in_ranges
 
 
 @dataclass(frozen=True)
@@ -276,6 +279,7 @@ def _build_chunk_assembly_result(
     residual_obs_before_chunk: dict[str, np.ndarray],
     next_base_actions: Sequence[np.ndarray],
     next_residual_observations: Sequence[dict[str, np.ndarray]],
+    active_step_ranges: tuple[StageRange, ...] | None = None,
 ) -> AssemblyResult:
     expected_steps = int(raw.executed_steps)
     if len(next_base_actions) != expected_steps:
@@ -299,6 +303,7 @@ def _build_chunk_assembly_result(
         infos=raw.infos,
         next_residual_observations=list(next_residual_observations),
         chunk_truncated=bool(raw.chunk_truncated),
+        active_step_ranges=active_step_ranges,
     )
 
     episode_done = bool(raw.chunk_done or raw.chunk_truncated)
@@ -330,11 +335,13 @@ class LiberoTransitionAssembler:
         chunk_horizon: int,
         image_keys: tuple[str, ...],
         residual_alpha: float,
+        active_step_ranges: tuple[StageRange, ...] | None = None,
     ) -> None:
         self.policy_client = policy_client
         self.chunk_horizon = int(chunk_horizon)
         self.image_keys = tuple(image_keys)
         self.residual_alpha = float(residual_alpha)
+        self.active_step_ranges = active_step_ranges
 
     def infer_decision_obs(
         self,
@@ -393,6 +400,7 @@ class LiberoTransitionAssembler:
             infos=raw.infos,
             next_residual_observations=backfilled_residual_obs,
             chunk_truncated=bool(raw.chunk_truncated),
+            active_step_ranges=getattr(self, "active_step_ranges", None),
         )
 
         episode_done = bool(raw.chunk_done or raw.chunk_truncated)
@@ -516,6 +524,7 @@ class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
                     residual_obs_before_chunk=current_residual_obs[0],
                     next_base_actions=current_base_actions[1:],
                     next_residual_observations=current_residual_obs[1:],
+                    active_step_ranges=self.active_step_ranges,
                 )
                 offset += int(observation_count)
             if offset != len(batched_residual_obs):
@@ -548,6 +557,9 @@ class LiberoActorTransitionAssembler:
             chunk_horizon=int(cfg.residual.chunk_horizon),
             image_keys=tuple(cfg.obs.image_keys),
             residual_alpha=float(cfg.residual.alpha),
+            active_step_ranges=key_rl_active_step_ranges(
+                getattr(cfg, "key_rl", None),
+            ),
         )
         self._prefetched: PrefetchedDecisionObs | None = None
         self._last_submitted_chunk_seq: int | None = None
@@ -717,6 +729,11 @@ class LiberoActorTransitionAssembler:
             infos=raw.infos,
             next_residual_observations=next_residual_observations,
             chunk_truncated=bool(raw.chunk_truncated),
+            active_step_ranges=getattr(
+                self._sync_assembler,
+                "active_step_ranges",
+                None,
+            ),
         )
         return AssemblyResult(
             transitions=transitions,
@@ -788,6 +805,7 @@ def assemble_chunk_step_transitions(
     infos: list[dict[str, Any]],
     next_residual_observations: list[dict[str, np.ndarray]],
     chunk_truncated: bool = False,
+    active_step_ranges: tuple[StageRange, ...] | None = None,
 ) -> list[dict[str, Any]]:
     executed_actions = np.asarray(executed_actions, dtype=np.float32)
     executed_steps = int(executed_actions.shape[0])
@@ -814,8 +832,19 @@ def assemble_chunk_step_transitions(
         done_flag = bool(dones[step_idx]) or (
             bool(chunk_truncated) and bool(is_last_step)
         )
+        next_episode_step = int(episode_step_start + step_idx + 1)
+        next_key_rl_active = key_rl_step_in_ranges(
+            next_episode_step,
+            active_step_ranges,
+        )
         mask_flag = float(
-            0.0 if (done_flag or bool(step_info.get("env_done", False))) else 1.0
+            0.0
+            if (
+                done_flag
+                or bool(step_info.get("env_done", False))
+                or not bool(next_key_rl_active)
+            )
+            else 1.0
         )
         transitions.append(
             {

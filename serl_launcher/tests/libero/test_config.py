@@ -97,6 +97,99 @@ class LiberoConfigTest(unittest.TestCase):
         self.assertEqual(parsed.training.async_eval.parallel_envs, 1)
         self.assertEqual(parsed.training.async_eval.policy_batch_size, 1)
         self.assertIsNone(parsed.training.async_eval.env.remote.ports)
+        self.assertFalse(parsed.key_rl.enabled)
+        self.assertEqual(parsed.key_rl.mode, "fixed_step")
+        self.assertEqual(parsed.key_rl.start_step, 0)
+        self.assertEqual(parsed.key_rl.replay_mode, "active_only")
+        self.assertTrue(parsed.key_rl.require_chunk_boundary)
+        for stage in (parsed.key_rl.stage1, parsed.key_rl.stage2, parsed.key_rl.stage3):
+            self.assertFalse(stage.enabled)
+            self.assertEqual(stage.start_step, 0)
+            self.assertEqual(stage.end_step, 0)
+
+    def test_parse_train_cfg_reads_key_rl_override(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.key_rl.enabled = True
+        cfg.key_rl.start_step = 30
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertTrue(parsed.key_rl.enabled)
+        self.assertEqual(parsed.key_rl.mode, "fixed_step")
+        self.assertEqual(parsed.key_rl.start_step, 30)
+        self.assertEqual(parsed.key_rl.replay_mode, "active_only")
+        self.assertTrue(parsed.key_rl.require_chunk_boundary)
+        self.assertFalse(parsed.key_rl.stage1.enabled)
+
+    def test_parse_train_cfg_reads_key_rl_fixed_stages_override(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.key_rl.enabled = True
+        cfg.key_rl.mode = "fixed_stages"
+        cfg.key_rl.stage1.enabled = True
+        cfg.key_rl.stage1.start_step = 30
+        cfg.key_rl.stage1.end_step = 75
+        cfg.key_rl.stage2.enabled = True
+        cfg.key_rl.stage2.start_step = 110
+        cfg.key_rl.stage2.end_step = 160
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertTrue(parsed.key_rl.enabled)
+        self.assertEqual(parsed.key_rl.mode, "fixed_stages")
+        self.assertEqual(parsed.key_rl.stage1.start_step, 30)
+        self.assertEqual(parsed.key_rl.stage1.end_step, 75)
+        self.assertEqual(parsed.key_rl.stage2.start_step, 110)
+        self.assertEqual(parsed.key_rl.stage2.end_step, 160)
+        self.assertFalse(parsed.key_rl.stage3.enabled)
+
+    def test_parse_train_cfg_rejects_unsupported_key_rl_stage(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.key_rl.stage4 = {
+            "enabled": True,
+            "start_step": 0,
+            "end_step": 10,
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "key_rl supports only stage1/stage2/stage3",
+        ):
+            parse_train_cfg(cfg)
+
+    def test_spatial_chunk_config_exposes_key_rl_override(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "spatial_4_0514_runtime"
+            / "spatial4_chunk_alpha0p2_unfiltered_offline_noent_std1p0_ports53300.yaml"
+        )
+        cfg.key_rl.enabled = True
+        cfg.key_rl.start_step = 30
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertTrue(parsed.key_rl.enabled)
+        self.assertEqual(parsed.key_rl.start_step, 30)
 
     def test_parse_train_cfg_requires_explicit_backfill_policy_block(self) -> None:
         cfg = OmegaConf.create(
@@ -422,6 +515,23 @@ class LiberoConfigTest(unittest.TestCase):
             "env.remote.ports must not contain duplicate ports",
         ):
             parse_eval_cfg(cfg)
+
+    def test_parse_eval_cfg_reads_key_rl_defaults(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "eval_residual.yaml"
+        )
+
+        parsed = parse_eval_cfg(cfg)
+
+        self.assertFalse(parsed.key_rl.enabled)
+        self.assertEqual(parsed.key_rl.start_step, 0)
+        self.assertFalse(parsed.key_rl.stage1.enabled)
+        self.assertFalse(parsed.key_rl.stage2.enabled)
+        self.assertFalse(parsed.key_rl.stage3.enabled)
 
 
 if __name__ == "__main__":

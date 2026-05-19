@@ -43,6 +43,10 @@ from serl_launcher.utils.path_utils import resolve_path
 from serl_launcher.utils.serialization import to_jsonable
 
 from ..config import LiberoTrainConfig
+from ..runtime.key_rl import StageRange
+from ..runtime.key_rl import key_rl_active_step_ranges
+from ..runtime.key_rl import key_rl_min_replay_episode_step
+from ..runtime.key_rl import key_rl_step_in_ranges
 from .observation import build_libero_state
 from .observation import extract_libero_images
 from .policy_input import build_libero_policy_input
@@ -65,6 +69,27 @@ class LiberoTaskSpec:
     @property
     def task_key(self) -> str:
         return f"{self.suite_name}_task_{self.task_id}"
+
+
+def _key_rl_payload(cfg: LiberoTrainConfig) -> dict[str, Any]:
+    stages: dict[str, dict[str, Any]] = {}
+    for stage_name in ("stage1", "stage2", "stage3"):
+        stage_cfg = getattr(cfg.key_rl, stage_name)
+        stages[stage_name] = {
+            "enabled": bool(stage_cfg.enabled),
+            "start_step": int(stage_cfg.start_step),
+            "end_step": int(stage_cfg.end_step),
+        }
+    return {
+        "enabled": bool(cfg.key_rl.enabled),
+        "mode": str(cfg.key_rl.mode),
+        "start_step": int(cfg.key_rl.start_step),
+        "replay_mode": str(cfg.key_rl.replay_mode),
+        "require_chunk_boundary": bool(cfg.key_rl.require_chunk_boundary),
+        "stages": stages,
+        "min_replay_episode_step": key_rl_min_replay_episode_step(cfg.key_rl),
+        "active_step_ranges": key_rl_active_step_ranges(cfg.key_rl),
+    }
 
 
 def _candidate_dataset_paths(
@@ -153,6 +178,9 @@ def prepare_fingerprint(
         image_keys=cfg.obs.image_keys,
         vector_obs_keys=cfg.obs.vector_obs_keys,
         raw_dataset_path=task_spec.dataset_path,
+        extra_fields={
+            "key_rl": _key_rl_payload(cfg),
+        },
     )
 
 
@@ -288,6 +316,8 @@ def prepare_demo_transitions(
     expert_reference_scale: float,
     clip_residual_to_unit: bool,
     filter_unrepresentable_steps: bool,
+    min_episode_step: int | None = None,
+    active_step_ranges: tuple[StageRange, ...] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     payload = _load_demo_payload(demo)
     expert_actions = payload["actions"]
@@ -329,8 +359,19 @@ def prepare_demo_transitions(
     unrepresentable_values = 0
     steps_unrepresentable = 0
     steps_filtered = 0
+    steps_skipped_key_rl = 0
     episode_return = 0.0
     for step_idx in range(num_steps):
+        if min_episode_step is not None and int(step_idx) < int(min_episode_step):
+            steps_skipped_key_rl += 1
+            continue
+        if active_step_ranges is not None and not key_rl_step_in_ranges(
+            int(step_idx),
+            active_step_ranges,
+        ):
+            steps_skipped_key_rl += 1
+            continue
+
         obs_raw = build_frame_obs(payload, step_idx)
         base_chunk = np.asarray(base_chunks_per_step[step_idx], dtype=np.float32)
         residual_obs = build_chunk_residual_obs(
@@ -371,7 +412,11 @@ def prepare_demo_transitions(
                 base_actions=next_base_chunk,
                 residual_alpha=float(action_spec.alpha),
             )
-            mask = 1.0
+            next_step_active = key_rl_step_in_ranges(
+                int(step_idx + 1),
+                active_step_ranges,
+            )
+            mask = 1.0 if bool(next_step_active) else 0.0
 
         transitions.append(
             {
@@ -392,6 +437,7 @@ def prepare_demo_transitions(
         "steps_written": int(len(transitions)),
         "steps_unrepresentable": int(steps_unrepresentable),
         "steps_filtered": int(steps_filtered),
+        "steps_skipped_key_rl": int(steps_skipped_key_rl),
         "episode_return": float(episode_return),
         "success": bool(num_steps > 0),
         "unrepresentable_values": int(unrepresentable_values),
@@ -466,6 +512,7 @@ def write_manifest(
                 cfg.offline.prepare.filter_unrepresentable_steps
             ),
         },
+        "key_rl": _key_rl_payload(cfg),
         "fingerprint": to_jsonable(fingerprint),
         "prepare_stats": to_jsonable(prepare_stats),
         "episode_files": [str(path.name) for path in episode_files],
@@ -491,6 +538,8 @@ def load_prepared_offline_replay(
     logger: logging.Logger,
     max_episodes: int | None = None,
     max_transitions: int | None = None,
+    min_episode_step: int | None = None,
+    active_step_ranges: tuple[StageRange, ...] | None = None,
 ) -> dict[str, Any]:
     return _load_prepared_offline_replay(
         replay_buffer=replay_buffer,
@@ -498,6 +547,8 @@ def load_prepared_offline_replay(
         logger=logger,
         max_episodes=max_episodes,
         max_transitions=max_transitions,
+        min_episode_step=min_episode_step,
+        active_step_ranges=active_step_ranges,
         manifest_filename=MANIFEST_FILENAME,
         episode_file_glob=EPISODE_FILE_GLOB,
         read_manifest_fn=read_manifest,

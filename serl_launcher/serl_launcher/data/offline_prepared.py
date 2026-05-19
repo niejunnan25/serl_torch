@@ -21,6 +21,7 @@ from serl_launcher.utils.serialization import to_jsonable
 
 MANIFEST_FILENAME = "manifest.json"
 EPISODE_FILE_GLOB = "episode_*.pkl"
+ActiveStepRange = tuple[int, int | None]
 RESIDUAL_PREPARED_SIGNATURE_KEYS = (
     "task_key",
     "policy_backend_type",
@@ -341,6 +342,46 @@ def resolve_prepared_episode_files(
     return unique_files
 
 
+def _episode_step_in_active_ranges(
+    episode_step: int,
+    active_step_ranges: Sequence[ActiveStepRange] | None,
+) -> bool:
+    if active_step_ranges is None:
+        return True
+    step = int(episode_step)
+    for start_step, end_step in active_step_ranges:
+        if step < int(start_step):
+            continue
+        if end_step is not None and step >= int(end_step):
+            continue
+        return True
+    return False
+
+
+def _terminalize_if_next_step_inactive(
+    transition: dict[str, Any],
+    *,
+    episode_step: int,
+    active_step_ranges: Sequence[ActiveStepRange] | None,
+) -> tuple[dict[str, Any], bool]:
+    if active_step_ranges is None:
+        return transition, False
+    if _episode_step_in_active_ranges(
+        int(episode_step) + 1,
+        active_step_ranges,
+    ):
+        return transition, False
+
+    existing_mask = transition.get("masks", 1.0)
+    try:
+        already_terminal = float(existing_mask) == 0.0
+    except Exception:  # noqa: BLE001
+        already_terminal = False
+    patched_transition = dict(transition)
+    patched_transition["masks"] = 0.0
+    return patched_transition, not bool(already_terminal)
+
+
 def load_prepared_offline_replay(
     *,
     replay_buffer: Any,
@@ -348,6 +389,8 @@ def load_prepared_offline_replay(
     logger: logging.Logger,
     max_episodes: int | None = None,
     max_transitions: int | None = None,
+    min_episode_step: int | None = None,
+    active_step_ranges: Sequence[ActiveStepRange] | None = None,
     manifest_filename: str = MANIFEST_FILENAME,
     episode_file_glob: str = EPISODE_FILE_GLOB,
     read_manifest_fn: Callable[[Path], dict[str, Any] | None] = read_manifest,
@@ -362,6 +405,9 @@ def load_prepared_offline_replay(
         "files_total": int(len(episode_files)),
         "episodes_loaded": 0,
         "steps_loaded": 0,
+        "steps_skipped_min_episode_step": 0,
+        "steps_skipped_active_step_ranges": 0,
+        "steps_terminalized_active_step_ranges": 0,
         "load_errors": 0,
     }
     if not episode_files:
@@ -393,6 +439,32 @@ def load_prepared_offline_replay(
                     raise ValueError(
                         f"prepared transition must be a dict, got {type(transition)}"
                     )
+                if min_episode_step is not None:
+                    episode_step_raw = transition.get("episode_step", None)
+                    if episode_step_raw is None:
+                        stats["steps_skipped_min_episode_step"] += 1
+                        continue
+                    if int(episode_step_raw) < int(min_episode_step):
+                        stats["steps_skipped_min_episode_step"] += 1
+                        continue
+                if active_step_ranges is not None:
+                    episode_step_raw = transition.get("episode_step", None)
+                    if episode_step_raw is None:
+                        stats["steps_skipped_active_step_ranges"] += 1
+                        continue
+                    if not _episode_step_in_active_ranges(
+                        int(episode_step_raw),
+                        active_step_ranges,
+                    ):
+                        stats["steps_skipped_active_step_ranges"] += 1
+                        continue
+                    transition, terminalized = _terminalize_if_next_step_inactive(
+                        transition,
+                        episode_step=int(episode_step_raw),
+                        active_step_ranges=active_step_ranges,
+                    )
+                    if terminalized:
+                        stats["steps_terminalized_active_step_ranges"] += 1
                 replay_buffer.insert(transition)
                 stats["steps_loaded"] += 1
             stats["episodes_loaded"] += 1
@@ -445,11 +517,15 @@ def load_prepared_offline_replay(
 
     logger.info(
         "Offline replay loaded: files_total=%s episodes_loaded=%s steps_loaded=%s "
-        "load_errors=%s dataset_steps_total=%s dataset_steps_filtered=%s "
-        "dataset_steps_written=%s",
+        "steps_skipped_min_episode_step=%s steps_skipped_active_step_ranges=%s "
+        "steps_terminalized_active_step_ranges=%s load_errors=%s "
+        "dataset_steps_total=%s dataset_steps_filtered=%s dataset_steps_written=%s",
         int(stats["files_total"]),
         int(stats["episodes_loaded"]),
         int(stats["steps_loaded"]),
+        int(stats["steps_skipped_min_episode_step"]),
+        int(stats["steps_skipped_active_step_ranges"]),
+        int(stats["steps_terminalized_active_step_ranges"]),
         int(stats["load_errors"]),
         int(dataset_stats["steps_total"]),
         int(dataset_stats["steps_filtered"]),

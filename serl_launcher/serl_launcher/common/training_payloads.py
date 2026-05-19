@@ -27,6 +27,7 @@ class RolloutStatsPayload(TypedDict):
     rollout: RolloutPayload
     env_info: dict[str, Any]
     residual: dict[str, Any]
+    replay: dict[str, Any]
 
 
 class ActorProgressPayload(TypedDict):
@@ -66,6 +67,7 @@ def build_rollout_stats_payload(
     rollout: RolloutPayload,
     env_info: Mapping[str, Any] | None = None,
     residual: Mapping[str, Any] | None = None,
+    replay: Mapping[str, Any] | None = None,
 ) -> RolloutStatsPayload:
     """Build a transport-safe actor->learner rollout stats payload."""
 
@@ -81,11 +83,18 @@ def build_rollout_stats_payload(
         if isinstance(serialized_residual, Mapping):
             residual_payload = dict(serialized_residual)
 
+    replay_payload: dict[str, Any] = {}
+    if replay is not None:
+        serialized_replay = to_jsonable(dict(replay))
+        if isinstance(serialized_replay, Mapping):
+            replay_payload = dict(serialized_replay)
+
     return {
         "env_steps": int(env_steps),
         "rollout": dict(rollout),
         "env_info": env_info_payload,
         "residual": residual_payload,
+        "replay": replay_payload,
     }
 
 
@@ -128,11 +137,17 @@ def parse_rollout_stats_payload(
     if isinstance(residual, Mapping):
         residual_payload = dict(residual)
 
+    replay_payload: dict[str, Any] = {}
+    replay = payload.get("replay", None)
+    if isinstance(replay, Mapping):
+        replay_payload = dict(replay)
+
     return {
         "env_steps": int(env_steps),
         "rollout": rollout,
         "env_info": env_info_payload,
         "residual": residual_payload,
+        "replay": replay_payload,
     }
 
 

@@ -112,6 +112,11 @@ from serl_torch.examples.libero.runtime.learner_shutdown import (
 from serl_torch.examples.libero.runtime.learner_shutdown import (
     actor_done_data_committed,
 )
+from serl_torch.examples.libero.runtime.key_rl import build_key_rl_progress
+from serl_torch.examples.libero.runtime.key_rl import key_rl_active
+from serl_torch.examples.libero.runtime.key_rl import key_rl_active_only_replay
+from serl_torch.examples.libero.runtime.key_rl import key_rl_active_step_ranges
+from serl_torch.examples.libero.runtime.key_rl import validate_key_rl_chunk_boundary
 from serl_torch.examples.libero.runtime.processor_dispatch import (
     QueuedProcessorSubmitter,
 )
@@ -206,6 +211,11 @@ def actor(
     chunk_horizon = cfg.residual.chunk_horizon
     residual_alpha = cfg.residual.alpha
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
+    validate_key_rl_chunk_boundary(
+        cfg.key_rl,
+        chunk_horizon=int(chunk_horizon),
+        context="key_rl",
+    )
     runtime_cfg = cfg.runtime
     trainer_transport_cfg = runtime_cfg.trainer_transport
 
@@ -275,6 +285,9 @@ def actor(
     )
 
     env_steps = 0
+    active_steps = 0
+    replay_inserted_steps = 0
+    skipped_base_only_steps = 0
     episode_id = 0
     success_count = 0
     next_chunk_seq = 0
@@ -288,6 +301,9 @@ def actor(
         "mode": "residual",
         "transport_mode": trainer_transport_cfg.mode,
         "env_steps": 0,
+        "active_steps": 0,
+        "replay_inserted_steps": 0,
+        "skipped_base_only_steps": 0,
         "episodes": 0,
         "successes": 0,
         "chunks_sent": 0,
@@ -323,6 +339,10 @@ def actor(
                 processor_submitter.raise_if_failed()
                 timer.tick("total")
                 with timer.context("prepare_action_chunk"):
+                    key_active = key_rl_active(
+                        cfg.key_rl,
+                        episode_step=int(episode_steps),
+                    )
                     robot_state = build_libero_state(current_obs)
                     image_observations = extract_libero_images(current_obs)
 
@@ -337,21 +357,25 @@ def actor(
                         base_actions=base_actions,
                         chunk_horizon=chunk_horizon,
                     )
-                    residual_obs = build_chunk_residual_obs(
-                        robot_state=robot_state,
-                        images=image_observations,
-                        image_keys=image_keys,
-                        base_actions=base_actions,
-                        residual_alpha=residual_alpha,
-                    )
-                    residual_actions = agent.sample_action(
-                        residual_obs,
-                        deterministic=False,
-                    )
-                    final_actions = residual_action_spec.compose_chunk(
-                        base_action_chunk=base_actions,
-                        residual_action=residual_actions,
-                    )
+                    if key_active:
+                        residual_obs = build_chunk_residual_obs(
+                            robot_state=robot_state,
+                            images=image_observations,
+                            image_keys=image_keys,
+                            base_actions=base_actions,
+                            residual_alpha=residual_alpha,
+                        )
+                        residual_actions = agent.sample_action(
+                            residual_obs,
+                            deterministic=False,
+                        )
+                        final_actions = residual_action_spec.compose_chunk(
+                            base_action_chunk=base_actions,
+                            residual_action=residual_actions,
+                        )
+                    else:
+                        residual_actions = None
+                        final_actions = np.asarray(base_actions, dtype=np.float32)
 
                 should_log_timer = False
                 remaining_env_steps = max(0, int(max_env_steps - env_steps))
@@ -359,39 +383,51 @@ def actor(
                     timer.tock("total")
                     break
 
-                action_chunk = final_actions[:remaining_env_steps]
+                action_chunk = np.asarray(final_actions, dtype=np.float32)[
+                    :remaining_env_steps
+                ]
 
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
 
                 chunk_summary = extract_actor_rollout_chunk_summary(dict(chunk_result))
 
-                assigned_chunk_seq = int(next_chunk_seq)
-                with timer.context("enqueue_processor_chunk"):
-                    processor_submitter.submit_rollout_chunk(
-                        episode_id=int(episode_id),
-                        chunk_seq=int(assigned_chunk_seq),
-                        episode_step_start=int(episode_steps),
-                        task_prompt=task_prompt,
-                        chunk_result=chunk_result,
-                    )
-                next_chunk_seq += 1
-                episode_last_enqueued_chunk_seq = int(assigned_chunk_seq)
+                assigned_chunk_seq: int | None = None
+                if key_active:
+                    assigned_chunk_seq = int(next_chunk_seq)
+                    with timer.context("enqueue_processor_chunk"):
+                        processor_submitter.submit_rollout_chunk(
+                            episode_id=int(episode_id),
+                            chunk_seq=int(assigned_chunk_seq),
+                            episode_step_start=int(episode_steps),
+                            task_prompt=task_prompt,
+                            chunk_result=chunk_result,
+                        )
+                    next_chunk_seq += 1
+                    episode_last_enqueued_chunk_seq = int(assigned_chunk_seq)
 
                 executed_steps = int(chunk_summary.executed_steps)
                 env_steps += int(executed_steps)
-                residual_chunk = np.asarray(residual_actions, dtype=np.float32).reshape(
-                    int(chunk_horizon),
-                    -1,
-                )
-                base_chunk = np.asarray(base_actions, dtype=np.float32)
-                final_chunk = np.asarray(action_chunk, dtype=np.float32)
-                for executed_idx in range(int(executed_steps)):
-                    episode_residual_stats.add(
-                        residual_action=residual_chunk[int(executed_idx)],
-                        base_action=base_chunk[int(executed_idx)],
-                        final_action=final_chunk[int(executed_idx)],
+                if key_active and residual_actions is not None:
+                    active_steps += int(executed_steps)
+                    replay_inserted_steps += int(executed_steps)
+                    residual_chunk = np.asarray(
+                        residual_actions,
+                        dtype=np.float32,
+                    ).reshape(
+                        int(chunk_horizon),
+                        -1,
                     )
+                    base_chunk = np.asarray(base_actions, dtype=np.float32)
+                    final_chunk = np.asarray(action_chunk, dtype=np.float32)
+                    for executed_idx in range(int(executed_steps)):
+                        episode_residual_stats.add(
+                            residual_action=residual_chunk[int(executed_idx)],
+                            base_action=base_chunk[int(executed_idx)],
+                            final_action=final_chunk[int(executed_idx)],
+                        )
+                else:
+                    skipped_base_only_steps += int(executed_steps)
                 progress_bar.update(int(executed_steps))
                 episode_steps += int(executed_steps)
                 episode_return += float(chunk_summary.reward_sum)
@@ -420,9 +456,16 @@ def actor(
                         {
                             "source": "actor",
                             "env_steps": int(env_steps),
+                            "active_steps": int(active_steps),
+                            "replay_inserted_steps": int(replay_inserted_steps),
+                            "skipped_base_only_steps": int(skipped_base_only_steps),
                             "episode_id": int(episode_id),
                             "episode_steps": int(episode_steps),
-                            "chunk_seq": int(assigned_chunk_seq),
+                            "chunk_seq": (
+                                None
+                                if assigned_chunk_seq is None
+                                else int(assigned_chunk_seq)
+                            ),
                             "timer": timer.get_average_times(),
                             "transport": trainer_session.status(),
                             "processor": processor_submitter.status_snapshot(),
@@ -445,6 +488,13 @@ def actor(
                 episode_id=int(episode_id),
                 actor_done=bool(int(env_steps) >= int(max_env_steps)),
             )
+            replay_progress = build_key_rl_progress(
+                key_rl_cfg=cfg.key_rl,
+                env_steps=int(env_steps),
+                active_steps=int(active_steps),
+                replay_inserted_steps=int(replay_inserted_steps),
+                skipped_base_only_steps=int(skipped_base_only_steps),
+            )
             rollout_stats_payload = build_rollout_stats_payload(
                 env_steps=int(env_steps),
                 rollout=build_rollout_payload(
@@ -458,13 +508,31 @@ def actor(
                 ),
                 env_info=latest_env_info,
                 residual=episode_residual_stats.summary(),
+                replay=replay_progress,
             )
-            processor_submitter.mark_episode_end(
-                last_chunk_seq=episode_last_enqueued_chunk_seq,
-                episode_id=int(episode_id),
-                actor_progress=actor_progress_payload,
-                rollout_stats=rollout_stats_payload,
-            )
+            if episode_last_enqueued_chunk_seq is None:
+                trainer_session.request(
+                    "send-stats",
+                    rollout_stats_payload,
+                    context=f"episode_{int(episode_id)}_stats_base_only",
+                    raise_on_exhaustion=False,
+                )
+                trainer_session.request(
+                    "actor-progress",
+                    actor_progress_payload,
+                    context=f"episode_{int(episode_id)}_progress_base_only",
+                    failure_message=(
+                        "processor actor-progress failed repeatedly; aborting actor run"
+                    ),
+                    retry_until_exhausted=True,
+                )
+            else:
+                processor_submitter.mark_episode_end(
+                    last_chunk_seq=episode_last_enqueued_chunk_seq,
+                    episode_id=int(episode_id),
+                    actor_progress=actor_progress_payload,
+                    rollout_stats=rollout_stats_payload,
+                )
 
             append_jsonl(
                 rollout_log_path,
@@ -481,12 +549,17 @@ def actor(
                 refresh=False,
             )
             logger.info(
-                "episode=%s success=%s steps=%s return=%.3f env_steps=%s chunks_sent=%s",
+                "episode=%s success=%s steps=%s return=%.3f env_steps=%s "
+                "active_steps=%s replay_inserted_steps=%s "
+                "skipped_base_only_steps=%s chunks_sent=%s",
                 int(episode_id),
                 bool(episode_success),
                 int(episode_steps),
                 float(episode_return),
                 int(env_steps),
+                int(active_steps),
+                int(replay_inserted_steps),
+                int(skipped_base_only_steps),
                 int(next_chunk_seq),
             )
 
@@ -505,6 +578,16 @@ def actor(
         summary.update(
             {
                 "env_steps": int(env_steps),
+                "active_steps": int(active_steps),
+                "replay_inserted_steps": int(replay_inserted_steps),
+                "skipped_base_only_steps": int(skipped_base_only_steps),
+                "key_rl": build_key_rl_progress(
+                    key_rl_cfg=cfg.key_rl,
+                    env_steps=int(env_steps),
+                    active_steps=int(active_steps),
+                    replay_inserted_steps=int(replay_inserted_steps),
+                    skipped_base_only_steps=int(skipped_base_only_steps),
+                ),
                 "episodes": int(episode_id),
                 "successes": int(success_count),
                 "chunks_sent": int(next_chunk_seq),
@@ -624,6 +707,14 @@ def processor(
     ) -> None:
         for marker in flushed_markers:
             episode_id = int(marker.get("episode_id", -1))
+            rollout_stats = marker.get("rollout_stats", None)
+            if isinstance(rollout_stats, dict) and rollout_stats:
+                trainer_session.request(
+                    "send-stats",
+                    rollout_stats,
+                    context=f"episode_{int(episode_id)}_stats",
+                    raise_on_exhaustion=False,
+                )
             actor_progress = marker.get("actor_progress", None)
             if isinstance(actor_progress, dict) and actor_progress:
                 trainer_session.request(
@@ -635,14 +726,6 @@ def processor(
                         "aborting processor run"
                     ),
                     retry_until_exhausted=True,
-                )
-            rollout_stats = marker.get("rollout_stats", None)
-            if isinstance(rollout_stats, dict) and rollout_stats:
-                trainer_session.request(
-                    "send-stats",
-                    rollout_stats,
-                    context=f"episode_{int(episode_id)}_stats",
-                    raise_on_exhaustion=False,
                 )
 
     def _drain_flushed_episode_markers() -> None:
@@ -1034,6 +1117,7 @@ def learner(
 
     update_steps = 0
     env_steps = 0
+    actor_replay_steps = 0
     latest_completed_episode_id = 0
     completed_episode_env_steps: dict[int, int] = {}
     last_queued_async_eval_episode = 0
@@ -1047,6 +1131,7 @@ def learner(
         "transport_mode": trainer_transport_cfg.mode,
         "update_steps": 0,
         "env_steps": 0,
+        "actor_replay_steps": 0,
         "replay_size": 0,
         "timer_log_path": str(learner_timer_log_path),
         "stop_reason": None,
@@ -1054,6 +1139,7 @@ def learner(
     actor_reported_env_steps = 0
     actor_done = False
     stop_reason = "max_update_steps"
+    key_rl_target_data_steps = key_rl_active_only_replay(cfg.key_rl)
 
     def _transport_status() -> dict[str, Any]:
         try:
@@ -1074,6 +1160,9 @@ def learner(
         return actor_done_data_committed(
             actor_done=bool(actor_done),
             target_env_steps=int(actor_reported_env_steps),
+            target_data_steps=(
+                int(actor_replay_steps) if bool(key_rl_target_data_steps) else None
+            ),
             latest_data_id=int(_committed_online_steps()),
             transport_status=_transport_status(),
             require_transport_commit=True,
@@ -1095,6 +1184,7 @@ def learner(
 
     def stats_callback(request_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal actor_reported_env_steps
+        nonlocal actor_replay_steps
         nonlocal actor_done
         nonlocal last_rollout_wall_time
         nonlocal last_rollout_env_steps
@@ -1127,6 +1217,10 @@ def learner(
             )
             return {}
         rollout_env_steps = int(rollout_stats["env_steps"])
+        replay_stats = dict(rollout_stats.get("replay", {}))
+        replay_steps_raw = replay_stats.get("replay_inserted_steps", None)
+        if replay_steps_raw is None:
+            replay_steps_raw = replay_stats.get("active_steps", None)
         now = time.time()
         actor_env_steps_per_sec: float | None = None
         if last_rollout_wall_time is not None:
@@ -1141,6 +1235,13 @@ def learner(
                 reported_env_steps=int(rollout_env_steps),
                 episode_id=int(rollout_stats["rollout"]["episode_id"]),
             )
+            if replay_steps_raw is not None:
+                actor_replay_steps = max(
+                    int(actor_replay_steps),
+                    int(replay_steps_raw),
+                )
+            elif not bool(key_rl_target_data_steps):
+                actor_replay_steps = max(int(actor_replay_steps), int(rollout_env_steps))
         rollout_metrics = extract_rollout_wandb_metrics(rollout_stats)
         if actor_env_steps_per_sec is not None:
             rollout_metrics["speed/actor_env_steps_per_sec"] = float(
@@ -1203,6 +1304,7 @@ def learner(
             logger=logger,
             max_episodes=cfg.offline.load_max_episodes,
             max_transitions=cfg.offline.load_max_transitions,
+            active_step_ranges=key_rl_active_step_ranges(cfg.key_rl),
         )
         if len(offline_replay_buffer) <= 0:
             logger.warning(
@@ -1425,6 +1527,18 @@ def learner(
         try:
             while len(replay_buffer) < training_starts:
                 check_async_eval_worker(async_eval, logger=logger)
+                if _should_stop_after_actor_done():
+                    logger.warning(
+                        "replay warmup ended early because actor is done: "
+                        "replay=%s training_starts=%s env_steps=%s "
+                        "actor_replay_steps=%s transport=%s",
+                        int(len(replay_buffer)),
+                        int(training_starts),
+                        int(env_steps),
+                        int(actor_replay_steps),
+                        _transport_status(),
+                    )
+                    break
                 current_replay_size = min(int(len(replay_buffer)), int(training_starts))
                 if current_replay_size > warmup_replay_size:
                     warmup_bar.update(current_replay_size - warmup_replay_size)
@@ -1432,6 +1546,7 @@ def learner(
                 warmup_bar.set_postfix(
                     replay=int(len(replay_buffer)),
                     env_steps=int(env_steps),
+                    actor_replay_steps=int(actor_replay_steps),
                     refresh=False,
                 )
                 time.sleep(replay_warmup_poll_interval_sec)
@@ -1441,10 +1556,12 @@ def learner(
         finally:
             warmup_bar.close()
         logger.info(
-            "replay warmup complete: replay=%s training_starts=%s env_steps=%s",
+            "replay warmup complete: replay=%s training_starts=%s env_steps=%s "
+            "actor_replay_steps=%s",
             int(len(replay_buffer)),
             int(training_starts),
             int(env_steps),
+            int(actor_replay_steps),
         )
 
     if not initial_network_published:
@@ -1463,12 +1580,13 @@ def learner(
                 _maybe_queue_async_eval()
                 logger.info(
                     "stopping learner: reason=%s update_steps=%s env_steps=%s "
-                    "actor_reported_env_steps=%s replay_latest_data_id=%s "
-                    "replay_size=%s transport=%s",
+                    "actor_reported_env_steps=%s actor_replay_steps=%s "
+                    "replay_latest_data_id=%s replay_size=%s transport=%s",
                     stop_reason,
                     int(update_steps),
                     int(env_steps),
                     int(actor_reported_env_steps),
+                    int(actor_replay_steps),
                     int(_committed_online_steps()),
                     int(len(replay_buffer)),
                     _transport_status(),
@@ -1530,6 +1648,12 @@ def learner(
                         update_profile_metrics=update_profile_metrics,
                     )
                 )
+                learner_metrics["replay/actor_replay_steps"] = float(
+                    actor_replay_steps
+                )
+                learner_metrics["replay/env_to_actor_replay_ratio"] = (
+                    float(env_steps) / float(max(1, actor_replay_steps))
+                )
                 if learner_metrics:
                     wandb_logger.log(to_jsonable(learner_metrics), step=update_steps)
                 append_jsonl(
@@ -1538,6 +1662,7 @@ def learner(
                         "source": "learner",
                         "update_steps": int(update_steps),
                         "env_steps": int(env_steps),
+                        "actor_replay_steps": int(actor_replay_steps),
                         "replay_size": int(len(replay_buffer)),
                         "updates_per_sec": float(updates_per_sec),
                         "timer": timer_metrics,
@@ -1623,6 +1748,7 @@ def learner(
             {
                 "update_steps": int(update_steps),
                 "env_steps": int(env_steps),
+                "actor_replay_steps": int(actor_replay_steps),
                 "replay_size": int(len(replay_buffer)),
                 "stop_reason": str(stop_reason),
                 "last_completed_episode_id": int(summary_last_completed_episode_id),

@@ -359,6 +359,27 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertEqual([t["dones"] for t in transitions], [False, False, True])
         self.assertEqual([t["masks"] for t in transitions], [1.0, 1.0, 0.0])
 
+    def test_assemble_chunk_step_transitions_terminalizes_key_rl_stage_boundary(self) -> None:
+        transitions = assemble_chunk_step_transitions(
+            episode_id=3,
+            episode_step_start=72,
+            residual_obs_before_chunk={"state": np.asarray([0.0], dtype=np.float32)},
+            executed_actions=np.asarray([[0.1], [0.2], [0.3]], dtype=np.float32),
+            rewards=[0.0, 0.0, 1.0],
+            dones=[False, False, False],
+            infos=[{"env_done": False}, {"env_done": False}, {"env_done": False}],
+            next_residual_observations=[
+                {"state": np.asarray([1.0], dtype=np.float32)},
+                {"state": np.asarray([2.0], dtype=np.float32)},
+                {"state": np.asarray([3.0], dtype=np.float32)},
+            ],
+            active_step_ranges=((30, 75), (110, 160)),
+        )
+
+        self.assertEqual([t["episode_step"] for t in transitions], [72, 73, 74])
+        self.assertEqual([t["dones"] for t in transitions], [False, False, False])
+        self.assertEqual([t["masks"] for t in transitions], [1.0, 1.0, 0.0])
+
     def test_raw_chunk_record_rejects_empty_chunk(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "no executed steps"):
             ChunkExecutionRecord.from_env_chunk_result(

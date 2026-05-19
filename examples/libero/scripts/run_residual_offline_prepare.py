@@ -80,10 +80,13 @@ def prepare_offline_data(
     prepare_stats: dict[str, object] = {
         "raw_dataset_path": str(task_spec.dataset_path),
         "prepared_dir": str(prepared_dir),
+        "active_step_ranges": None,
+        "key_rl_filter_applied": False,
         "episodes_total": 0,
         "steps_total": 0,
         "steps_unrepresentable": 0,
         "steps_filtered": 0,
+        "steps_skipped_key_rl": 0,
         "episodes_written": 0,
         "steps_written": 0,
         "elapsed_sec": 0.0,
@@ -138,6 +141,9 @@ def prepare_offline_data(
                 prepare_stats["steps_filtered"] = int(
                     prepare_stats["steps_filtered"]
                 ) + int(episode_stats["steps_filtered"])
+                prepare_stats["steps_skipped_key_rl"] = int(
+                    prepare_stats["steps_skipped_key_rl"]
+                ) + int(episode_stats["steps_skipped_key_rl"])
                 prepare_stats["steps_written"] = int(prepare_stats["steps_written"]) + int(
                     episode_stats["steps_written"]
                 )
@@ -168,12 +174,13 @@ def prepare_offline_data(
     )
     logger.info(
         "Offline prepare complete: episodes_total=%s steps_total=%s "
-        "steps_unrepresentable=%s steps_filtered=%s episodes_written=%s "
-        "steps_written=%s manifest=%s",
+        "steps_unrepresentable=%s steps_filtered=%s steps_skipped_key_rl=%s "
+        "episodes_written=%s steps_written=%s manifest=%s",
         int(prepare_stats["episodes_total"]),
         int(prepare_stats["steps_total"]),
         int(prepare_stats["steps_unrepresentable"]),
         int(prepare_stats["steps_filtered"]),
+        int(prepare_stats["steps_skipped_key_rl"]),
         int(prepare_stats["episodes_written"]),
         int(prepare_stats["steps_written"]),
         manifest_path,

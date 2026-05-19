@@ -186,6 +186,128 @@ def test_validate_and_load_prepared_replay_from_manifest() -> None:
         assert replay_buffer.inserted == transitions
 
 
+def test_load_prepared_offline_replay_filters_min_episode_step() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prepared_dir = Path(tmpdir) / "prepared"
+        prepared_dir.mkdir(parents=True, exist_ok=True)
+        transitions = [
+            {"episode_id": 0, "episode_step": 0, "value": "skip"},
+            {"episode_id": 0, "episode_step": 30, "value": "keep"},
+        ]
+        episode_path = prepared_dir / "episode_000000.pkl"
+        with open(episode_path, "wb") as fp:
+            pickle.dump(transitions, fp, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(prepared_dir / "manifest.json", "w", encoding="utf-8") as fp:
+            json.dump(
+                {
+                    "fingerprint": {},
+                    "episode_files": [episode_path.name],
+                    "prepare_stats": {"steps_written": 2},
+                },
+                fp,
+            )
+
+        replay_buffer = _FakeReplayBuffer()
+        stats = load_prepared_offline_replay(
+            replay_buffer=replay_buffer,
+            prepared_paths=(prepared_dir,),
+            logger=_FakeLogger(),
+            min_episode_step=30,
+        )
+
+        assert stats["steps_loaded"] == 1
+        assert stats["steps_skipped_min_episode_step"] == 1
+        assert replay_buffer.inserted == [transitions[1]]
+
+
+def test_load_prepared_offline_replay_filters_active_step_ranges() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prepared_dir = Path(tmpdir) / "prepared"
+        prepared_dir.mkdir(parents=True, exist_ok=True)
+        transitions = [
+            {
+                "episode_id": 0,
+                "episode_step": 0,
+                "masks": 1.0,
+                "value": "skip_early",
+            },
+            {
+                "episode_id": 0,
+                "episode_step": 30,
+                "masks": 1.0,
+                "value": "keep_stage1",
+            },
+            {
+                "episode_id": 0,
+                "episode_step": 74,
+                "masks": 1.0,
+                "value": "keep_stage1_boundary",
+            },
+            {
+                "episode_id": 0,
+                "episode_step": 90,
+                "masks": 1.0,
+                "value": "skip_middle",
+            },
+            {
+                "episode_id": 0,
+                "episode_step": 120,
+                "masks": 1.0,
+                "value": "keep_stage2",
+            },
+            {
+                "episode_id": 0,
+                "episode_step": 159,
+                "masks": 1.0,
+                "value": "keep_stage2_boundary",
+            },
+            {
+                "episode_id": 0,
+                "episode_step": 160,
+                "masks": 1.0,
+                "value": "skip_end",
+            },
+        ]
+        episode_path = prepared_dir / "episode_000000.pkl"
+        with open(episode_path, "wb") as fp:
+            pickle.dump(transitions, fp, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(prepared_dir / "manifest.json", "w", encoding="utf-8") as fp:
+            json.dump(
+                {
+                    "fingerprint": {},
+                    "episode_files": [episode_path.name],
+                    "prepare_stats": {"steps_written": len(transitions)},
+                },
+                fp,
+            )
+
+        replay_buffer = _FakeReplayBuffer()
+        stats = load_prepared_offline_replay(
+            replay_buffer=replay_buffer,
+            prepared_paths=(prepared_dir,),
+            logger=_FakeLogger(),
+            active_step_ranges=((30, 75), (110, 160)),
+        )
+
+        assert stats["steps_loaded"] == 4
+        assert stats["steps_skipped_active_step_ranges"] == 3
+        assert stats["steps_terminalized_active_step_ranges"] == 2
+        assert [item["value"] for item in replay_buffer.inserted] == [
+            "keep_stage1",
+            "keep_stage1_boundary",
+            "keep_stage2",
+            "keep_stage2_boundary",
+        ]
+        assert [item["masks"] for item in replay_buffer.inserted] == [
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+        ]
+        assert transitions[2]["masks"] == 1.0
+        assert transitions[5]["masks"] == 1.0
+
+
 def test_project_expert_action_clips_and_reports_unrepresentable() -> None:
     action_spec = SimpleNamespace(
         alpha=0.5,

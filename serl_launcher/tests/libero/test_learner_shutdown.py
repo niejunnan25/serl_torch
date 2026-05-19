@@ -87,3 +87,30 @@ def test_invalid_target_env_steps_do_not_stop() -> None:
         latest_data_id=0,
         transport_status=_transport_status(accepted=-1, committed=-1),
     )
+
+
+def test_actor_done_uses_explicit_target_data_steps_for_gated_replay() -> None:
+    assert actor_done_data_committed(
+        actor_done=True,
+        target_env_steps=100,
+        target_data_steps=30,
+        latest_data_id=30,
+        transport_status=_transport_status(accepted=29, committed=29),
+    )
+    assert not actor_done_data_committed(
+        actor_done=True,
+        target_env_steps=100,
+        target_data_steps=30,
+        latest_data_id=29,
+        transport_status=_transport_status(accepted=29, committed=29),
+    )
+
+
+def test_actor_done_with_zero_target_data_steps_can_stop() -> None:
+    assert actor_done_data_committed(
+        actor_done=True,
+        target_env_steps=100,
+        target_data_steps=0,
+        latest_data_id=0,
+        transport_status=_transport_status(accepted=-1, committed=-1),
+    )

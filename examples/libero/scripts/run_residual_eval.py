@@ -54,6 +54,9 @@ from serl_torch.examples.libero.env.observation import LIBERO_STATE_DIM
 from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_HEIGHT
 from serl_torch.examples.libero.env.observation import RESIDUAL_IMAGE_WIDTH
 from serl_torch.examples.libero.env.policy_input import build_libero_policy_input
+from serl_torch.examples.libero.runtime.key_rl import build_key_rl_progress
+from serl_torch.examples.libero.runtime.key_rl import key_rl_active
+from serl_torch.examples.libero.runtime.key_rl import validate_key_rl_chunk_boundary
 
 
 @dataclass
@@ -66,6 +69,8 @@ class _EvalLoopStats:
     policy_requests: int = 0
     policy_batch_requests: int = 0
     policy_samples: int = 0
+    key_rl_active_steps: int = 0
+    key_rl_skipped_base_only_steps: int = 0
     active_lane_counts: list[int] | None = None
 
 
@@ -106,6 +111,30 @@ def _positive_int(value: Any, field_name: str) -> int:
     if resolved <= 0:
         raise ValueError(f"{field_name} must be positive, got {resolved}")
     return resolved
+
+
+def _default_key_rl_cfg() -> SimpleNamespace:
+    def disabled_stage() -> SimpleNamespace:
+        return SimpleNamespace(
+            enabled=False,
+            start_step=0,
+            end_step=0,
+        )
+
+    return SimpleNamespace(
+        enabled=False,
+        mode="fixed_step",
+        start_step=0,
+        replay_mode="active_only",
+        require_chunk_boundary=True,
+        stage1=disabled_stage(),
+        stage2=disabled_stage(),
+        stage3=disabled_stage(),
+    )
+
+
+def _resolve_key_rl_cfg(cfg: Any) -> Any:
+    return getattr(cfg, "key_rl", _default_key_rl_cfg())
 
 
 def _checkpoint_step_from_path(checkpoint_path: Path) -> int | None:
@@ -164,7 +193,8 @@ def _build_decision_obs(
     image_keys: Any,
     residual_alpha: float,
     timer: Timer,
-) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    build_residual_obs: bool = True,
+) -> tuple[np.ndarray, dict[str, np.ndarray] | None]:
     with timer.context("decision_obs_extract"):
         robot_state = build_libero_state(obs)
         image_observations = extract_libero_images(obs)
@@ -181,6 +211,8 @@ def _build_decision_obs(
             base_actions=base_actions,
             chunk_horizon=chunk_horizon,
         )
+        if not build_residual_obs:
+            return np.asarray(base_actions, dtype=np.float32), None
         residual_obs = build_chunk_residual_obs(
             robot_state=robot_state,
             images=image_observations,
@@ -200,9 +232,17 @@ def _build_decision_obs_many(
     image_keys: Any,
     residual_alpha: float,
     timer: Timer,
-) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]], int, int, bool]:
+    build_residual_obs_flags: list[bool] | None = None,
+) -> tuple[list[np.ndarray], list[dict[str, np.ndarray] | None], int, int, bool]:
     if not observations:
         return [], [], 0, 0, False
+    if build_residual_obs_flags is None:
+        build_residual_obs_flags = [True] * len(observations)
+    if len(build_residual_obs_flags) != len(observations):
+        raise ValueError(
+            "build_residual_obs_flags length mismatch: "
+            f"got {len(build_residual_obs_flags)}, expected {len(observations)}"
+        )
 
     with timer.context("decision_obs_extract"):
         robot_states = [build_libero_state(obs) for obs in observations]
@@ -238,24 +278,27 @@ def _build_decision_obs_many(
         )
 
     base_action_chunks: list[np.ndarray] = []
-    residual_observations: list[dict[str, np.ndarray]] = []
+    residual_observations: list[dict[str, np.ndarray] | None] = []
     with timer.context("decision_obs_residual"):
-        for robot_state, image_observations, raw_actions in zip(
+        for robot_state, image_observations, raw_actions, build_residual_obs in zip(
             robot_states,
             image_batches,
             raw_action_chunks,
+            build_residual_obs_flags,
         ):
             base_actions = prepare_base_actions_chunk(
                 base_actions=raw_actions,
                 chunk_horizon=chunk_horizon,
             )
-            residual_obs = build_chunk_residual_obs(
-                robot_state=robot_state,
-                images=image_observations,
-                image_keys=image_keys,
-                base_actions=base_actions,
-                residual_alpha=residual_alpha,
-            )
+            residual_obs = None
+            if build_residual_obs:
+                residual_obs = build_chunk_residual_obs(
+                    robot_state=robot_state,
+                    images=image_observations,
+                    image_keys=image_keys,
+                    base_actions=base_actions,
+                    residual_alpha=residual_alpha,
+                )
             base_action_chunks.append(np.asarray(base_actions, dtype=np.float32))
             residual_observations.append(residual_obs)
     return (
@@ -369,6 +412,7 @@ def _run_serial_eval_loop(
     logger: logging.Logger,
 ) -> _EvalLoopStats:
     stats = _EvalLoopStats(episode_returns=[], episode_steps_list=[])
+    key_rl_cfg = _resolve_key_rl_cfg(cfg)
 
     for episode_id in range(episodes):
         init_episode_idx = start_episode_idx + episode_id
@@ -406,6 +450,11 @@ def _run_serial_eval_loop(
 
             with timer.context("total"):
                 with timer.context("sample_actions"):
+                    current_key_rl_active = key_rl_active(
+                        key_rl_cfg,
+                        episode_step=int(episode_steps),
+                    )
+                    needs_residual_obs = bool(current_key_rl_active and agent is not None)
                     if prefetched is None:
                         with timer.context("build_decision_obs"):
                             base_actions, residual_obs = _build_decision_obs(
@@ -416,6 +465,7 @@ def _run_serial_eval_loop(
                                 image_keys=image_keys,
                                 residual_alpha=residual_action_spec.alpha,
                                 timer=timer,
+                                build_residual_obs=needs_residual_obs,
                             )
                         stats.policy_requests += 1
                         stats.policy_samples += 1
@@ -424,7 +474,10 @@ def _run_serial_eval_loop(
                         residual_obs = prefetched["residual_obs"]
                         prefetched = None
 
-                    if agent is None:
+                    if not current_key_rl_active:
+                        residual_actions = None
+                        final_actions = np.asarray(base_actions, dtype=np.float32)
+                    elif agent is None:
                         residual_actions = np.zeros(
                             (
                                 int(chunk_horizon),
@@ -432,16 +485,24 @@ def _run_serial_eval_loop(
                             ),
                             dtype=np.float32,
                         )
+                        final_actions = residual_action_spec.compose_chunk(
+                            base_action_chunk=base_actions,
+                            residual_action=residual_actions,
+                        )
                     else:
+                        if residual_obs is None:
+                            raise RuntimeError(
+                                "residual eval observation was not built for an "
+                                "active key_rl step"
+                            )
                         residual_actions = agent.sample_action(
                             residual_obs,
                             deterministic=deterministic,
                         )
-
-                    final_actions = residual_action_spec.compose_chunk(
-                        base_action_chunk=base_actions,
-                        residual_action=residual_actions,
-                    )
+                        final_actions = residual_action_spec.compose_chunk(
+                            base_action_chunk=base_actions,
+                            residual_action=residual_actions,
+                        )
 
                 action_chunk = np.asarray(
                     final_actions[:execute_horizon],
@@ -462,6 +523,10 @@ def _run_serial_eval_loop(
 
                 episode_steps += int(executed_steps)
                 stats.total_env_steps += int(executed_steps)
+                if current_key_rl_active:
+                    stats.key_rl_active_steps += int(executed_steps)
+                else:
+                    stats.key_rl_skipped_base_only_steps += int(executed_steps)
                 episode_return += float(sum(rewards))
                 episode_success = bool(
                     episode_success
@@ -480,6 +545,10 @@ def _run_serial_eval_loop(
                     manual_cap_reached = True
 
                 if not (env_episode_done or manual_cap_reached):
+                    next_key_rl_active = key_rl_active(
+                        key_rl_cfg,
+                        episode_step=int(episode_steps),
+                    )
                     with timer.context("build_decision_obs"):
                         next_base_actions, next_residual_obs = _build_decision_obs(
                             obs=obs,
@@ -489,6 +558,9 @@ def _run_serial_eval_loop(
                             image_keys=image_keys,
                             residual_alpha=residual_action_spec.alpha,
                             timer=timer,
+                            build_residual_obs=bool(
+                                next_key_rl_active and agent is not None
+                            ),
                         )
                     stats.policy_requests += 1
                     stats.policy_samples += 1
@@ -567,6 +639,7 @@ def _run_parallel_eval_loop(
         episode_steps_list=[],
         active_lane_counts=[],
     )
+    key_rl_cfg = _resolve_key_rl_cfg(cfg)
     policy_batch_size = max(1, int(getattr(cfg.eval, "policy_batch_size", len(envs))))
     lanes = [_EvalLane(lane_id=idx, env=env) for idx, env in enumerate(envs)]
     next_episode_id = 0
@@ -627,6 +700,10 @@ def _run_parallel_eval_loop(
                     if lane.obs is None:
                         raise RuntimeError("active eval lane has no observation")
                     batch_observations.append(lane.obs)
+                batch_key_rl_active = [
+                    key_rl_active(key_rl_cfg, episode_step=int(lane.episode_steps))
+                    for lane in batch_lanes
+                ]
                 with timer.context("build_decision_obs"):
                     (
                         base_action_chunks,
@@ -642,18 +719,25 @@ def _run_parallel_eval_loop(
                         image_keys=image_keys,
                         residual_alpha=residual_action_spec.alpha,
                         timer=timer,
+                        build_residual_obs_flags=[
+                            bool(is_active and agent is not None)
+                            for is_active in batch_key_rl_active
+                        ],
                     )
                 stats.policy_requests += int(client_calls)
                 stats.policy_samples += int(policy_samples)
                 if used_infer_many:
                     stats.policy_batch_requests += 1
 
-                for lane, base_actions, residual_obs in zip(
+                for lane, base_actions, residual_obs, current_key_rl_active in zip(
                     batch_lanes,
                     base_action_chunks,
                     residual_observations,
+                    batch_key_rl_active,
                 ):
-                    if agent is None:
+                    if not current_key_rl_active:
+                        final_actions = np.asarray(base_actions, dtype=np.float32)
+                    elif agent is None:
                         residual_actions = np.zeros(
                             (
                                 int(chunk_horizon),
@@ -661,15 +745,24 @@ def _run_parallel_eval_loop(
                             ),
                             dtype=np.float32,
                         )
+                        final_actions = residual_action_spec.compose_chunk(
+                            base_action_chunk=base_actions,
+                            residual_action=residual_actions,
+                        )
                     else:
+                        if residual_obs is None:
+                            raise RuntimeError(
+                                "residual eval observation was not built for an "
+                                "active key_rl lane"
+                            )
                         residual_actions = agent.sample_action(
                             residual_obs,
                             deterministic=deterministic,
                         )
-                    final_actions = residual_action_spec.compose_chunk(
-                        base_action_chunk=base_actions,
-                        residual_action=residual_actions,
-                    )
+                        final_actions = residual_action_spec.compose_chunk(
+                            base_action_chunk=base_actions,
+                            residual_action=residual_actions,
+                        )
                     remaining_episode_budget = (
                         None
                         if max_env_steps_per_episode is None
@@ -700,6 +793,7 @@ def _run_parallel_eval_loop(
 
             lanes_to_restart: list[_EvalLane] = []
             for lane, chunk_result in sorted(completed, key=lambda item: item[0].lane_id):
+                lane_step_before = int(lane.episode_steps)
                 (
                     rewards,
                     _dones,
@@ -711,6 +805,10 @@ def _run_parallel_eval_loop(
                 lane.last_info = last_info
                 lane.episode_steps += int(executed_steps)
                 stats.total_env_steps += int(executed_steps)
+                if key_rl_active(key_rl_cfg, episode_step=lane_step_before):
+                    stats.key_rl_active_steps += int(executed_steps)
+                else:
+                    stats.key_rl_skipped_base_only_steps += int(executed_steps)
                 lane.episode_return += float(sum(rewards))
                 lane.episode_success = bool(
                     lane.episode_success
@@ -797,6 +895,7 @@ def run_residual_eval(
     )
     deterministic = bool(cfg.eval.deterministic)
     episode_log_file = str(cfg.logging.episode_log_file or "episode_logs.jsonl")
+    key_rl_cfg = _resolve_key_rl_cfg(cfg)
 
     checkpoint_input_path, checkpoint_file = _resolve_checkpoint_input(
         cfg.eval.checkpoint_path,
@@ -872,6 +971,11 @@ def run_residual_eval(
         action_dim = cfg.env.action_dim
         chunk_horizon = cfg.residual.chunk_horizon
         residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
+        validate_key_rl_chunk_boundary(
+            key_rl_cfg,
+            chunk_horizon=int(chunk_horizon),
+            context="key_rl",
+        )
 
         summary = {
             "role": "eval",
@@ -898,6 +1002,13 @@ def run_residual_eval(
             "parallel_envs": int(parallel_envs),
             "policy_batch_size": int(policy_batch_size),
             "eval_env_ports": eval_env_ports,
+            "key_rl": build_key_rl_progress(
+                key_rl_cfg=key_rl_cfg,
+                env_steps=0,
+                active_steps=0,
+                replay_inserted_steps=0,
+                skipped_base_only_steps=0,
+            ),
             "task": {
                 "suite_name": cfg.task.suite_name,
                 "task_id": int(cfg.task.task_id),
@@ -1031,6 +1142,15 @@ def run_residual_eval(
                             else 0.0
                         ),
                         "env_steps": int(stats.total_env_steps),
+                        "key_rl": build_key_rl_progress(
+                            key_rl_cfg=key_rl_cfg,
+                            env_steps=int(stats.total_env_steps),
+                            active_steps=int(stats.key_rl_active_steps),
+                            replay_inserted_steps=0,
+                            skipped_base_only_steps=int(
+                                stats.key_rl_skipped_base_only_steps
+                            ),
+                        ),
                         "policy_requests": int(stats.policy_requests),
                         "policy_batch_requests": int(stats.policy_batch_requests),
                         "policy_samples": int(stats.policy_samples),
