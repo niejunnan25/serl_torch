@@ -74,6 +74,11 @@ build_expected_markers() {
         [[ -n "$port" ]] && printf '%s\n' "--port $port"
         return 0
     fi
+
+    if [[ "$cmd_text" == *"reserve_cuda_memory.py"* ]]; then
+        printf '%s\n' "reserve_cuda_memory.py"
+        return 0
+    fi
 }
 
 pid_matches_expected() {
@@ -142,6 +147,7 @@ PID_DIR="$LAUNCHER_DIR/pids"
 declare -a ORDERED_NAMES=(
     actor
     processor
+    learner_gpu_memory_guard
     learner
     backfill_policy
     policy

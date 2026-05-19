@@ -33,6 +33,8 @@ DRY_RUN=0
 CLEAN_OUTPUT_DIR=0
 REUSE_OUTPUT_DIR=0
 CONDA_SH="${CONDA_SH:-$DEFAULT_CONDA_SH}"
+LEARNER_GPU_MEMORY_GUARD_FRACTION="${LEARNER_GPU_MEMORY_GUARD_FRACTION:-0.70}"
+LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC="${LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC:-10}"
 
 declare -a EXTRA_HYDRA_ARGS=()
 declare -a STARTED_PROCESS_NAMES=()
@@ -110,6 +112,7 @@ Usage:
     [--libero-root DIR] [--libero-datasets-root DIR] \
     [--policy-config NAME] [--policy-dir DIR] [--openpi-root DIR] \
     [--serl-conda-env NAME] \
+    [--learner-gpu-memory-guard-fraction FRACTION] \
     [--wait-timeout-sec N] \
     [--clean-output-dir | --reuse-output-dir] \
     [--dry-run] \
@@ -148,6 +151,10 @@ Notes:
       <exp_root>/actor
   - Raw rollout recycle is forced under:
       <exp_root>/rollout
+  - By default, a launcher-managed guard process reserves about 70% of the
+    visible learner GPU's total memory after the learner starts. Use
+      --learner-gpu-memory-guard-fraction 0.75
+    to change it, or pass 0 to disable it.
 EOF
 }
 
@@ -368,6 +375,31 @@ print(os.path.abspath(sys.argv[1]))
 PY
 }
 
+normalize_memory_guard_fraction() {
+    local raw_value="$1"
+    python3 - "$raw_value" <<'PY'
+import sys
+
+text = sys.argv[1].strip()
+if not text:
+    raise SystemExit("empty fraction")
+try:
+    if text.endswith("%"):
+        value = float(text[:-1]) / 100.0
+    else:
+        value = float(text)
+        if value > 1.0 and value <= 100.0:
+            value = value / 100.0
+except ValueError as exc:
+    raise SystemExit(f"not a number: {text}") from exc
+
+if value < 0.0 or value >= 1.0:
+    raise SystemExit("fraction must be in [0, 1), where 0 disables the guard")
+
+print(f"{value:.6f}")
+PY
+}
+
 infer_config_training_mode() {
     local config_name="$1"
     local config_base="${config_name##*/}"
@@ -516,6 +548,10 @@ while [[ $# -gt 0 ]]; do
             SERL_CONDA_ENV="$2"
             shift 2
             ;;
+        --learner-gpu-memory-guard-fraction)
+            LEARNER_GPU_MEMORY_GUARD_FRACTION="$2"
+            shift 2
+            ;;
         --learner-gpu)
             LEARNER_GPU="$2"
             shift 2
@@ -594,6 +630,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if ! LEARNER_GPU_MEMORY_GUARD_FRACTION="$(normalize_memory_guard_fraction "$LEARNER_GPU_MEMORY_GUARD_FRACTION")"; then
+    die "invalid --learner-gpu-memory-guard-fraction: ${LEARNER_GPU_MEMORY_GUARD_FRACTION:-}"
+fi
+if [[ ! "$LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC" =~ ^[0-9]+$ ]]; then
+    die "LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC must be a non-negative integer, got $LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC"
+fi
 
 [[ -n "$TRAINING_MODE" ]] || die "--mode is required"
 case "$TRAINING_MODE" in
@@ -874,6 +917,7 @@ async_eval_host=$CFG_ASYNC_EVAL_HOST
 async_eval_port=$CFG_ASYNC_EVAL_PORT
 async_eval_parallel_envs=$CFG_ASYNC_EVAL_PARALLEL_ENVS
 async_eval_ports=${CFG_ASYNC_EVAL_PORT_LIST[*]}
+learner_gpu_memory_guard_fraction=$LEARNER_GPU_MEMORY_GUARD_FRACTION
 EOF
 cp "$CONFIG_FILE" "$OUTPUT_ROOT/config_source.yaml"
 
@@ -923,12 +967,29 @@ build_training_cmd() {
 declare -a LEARNER_CMD=()
 declare -a ACTOR_CMD=()
 declare -a PROCESSOR_CMD=()
+declare -a LEARNER_GPU_MEMORY_GUARD_CMD=()
 
 build_training_cmd learner "$OUTPUT_ROOT/learner" "$LEARNER_GPU"
 build_training_cmd actor "$OUTPUT_ROOT/actor" "$ACTOR_GPU"
 if (( START_PROCESSOR )); then
     build_training_cmd processor "$OUTPUT_ROOT/processor" ""
 fi
+
+build_learner_gpu_memory_guard_cmd() {
+    local gpu_id="$1"
+    local fraction="$2"
+    local guard_shell_cmd=""
+    local -a cmd
+    cmd=()
+    cmd+=(env "CUDA_VISIBLE_DEVICES=$gpu_id")
+    guard_shell_cmd="$(build_conda_shell_command \
+        python "$LIBERO_DIR/tools/reserve_cuda_memory.py" \
+        --fraction "$fraction")"
+    cmd+=(
+        bash -lc "$guard_shell_cmd"
+    )
+    LEARNER_GPU_MEMORY_GUARD_CMD=("${cmd[@]}")
+}
 
 log_note "experiment root: $OUTPUT_ROOT"
 log_note "config file     : $CONFIG_FILE"
@@ -1049,6 +1110,26 @@ if (( ! DRY_RUN )); then
     assert_pid_running "learner"
 fi
 
+if [[ "$LEARNER_GPU_MEMORY_GUARD_FRACTION" != "0.000000" ]]; then
+    if [[ -z "$LEARNER_GPU" ]]; then
+        log_note "learner GPU memory guard requested at fraction=$LEARNER_GPU_MEMORY_GUARD_FRACTION but --learner-gpu is not set; skipping"
+    else
+        build_learner_gpu_memory_guard_cmd "$LEARNER_GPU" "$LEARNER_GPU_MEMORY_GUARD_FRACTION"
+        if (( ! DRY_RUN && LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC > 0 )); then
+            log_note "waiting ${LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC}s before starting learner GPU memory guard"
+            sleep "$LEARNER_GPU_MEMORY_GUARD_START_DELAY_SEC"
+        fi
+        start_logged_process \
+            "learner_gpu_memory_guard" \
+            "$SERVICES_DIR/learner_gpu_memory_guard.log" \
+            "${LEARNER_GPU_MEMORY_GUARD_CMD[@]}"
+        if (( ! DRY_RUN )); then
+            sleep 2
+            assert_pid_running "learner_gpu_memory_guard"
+        fi
+    fi
+fi
+
 if (( START_PROCESSOR )); then
     start_logged_process "processor" "$OUTPUT_ROOT/processor/launcher.log" "${PROCESSOR_CMD[@]}"
     if (( ! DRY_RUN )); then
@@ -1078,6 +1159,9 @@ fi
 log_note "actor log       : $OUTPUT_ROOT/actor/launcher.log"
 log_note "pid files       : $LAUNCHER_DIR/pids"
 log_note "watch learner   : $(format_cmd tail -f "$OUTPUT_ROOT/learner/launcher.log")"
+if [[ "$LEARNER_GPU_MEMORY_GUARD_FRACTION" != "0.000000" && -n "$LEARNER_GPU" ]]; then
+    log_note "watch GPU guard : $(format_cmd tail -f "$SERVICES_DIR/learner_gpu_memory_guard.log")"
+fi
 if (( START_PROCESSOR )); then
     log_note "watch processor : $(format_cmd tail -f "$OUTPUT_ROOT/processor/launcher.log")"
 fi
