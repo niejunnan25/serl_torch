@@ -47,6 +47,7 @@ from serl_launcher.utils.timer_utils import Timer
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import LiberoEvalConfig
 from serl_torch.examples.libero.config import parse_eval_cfg
+from serl_torch.examples.libero.config import resolve_action_downsample_selection
 from serl_torch.examples.libero.env.factory import create_env
 from serl_torch.examples.libero.env.observation import build_libero_state
 from serl_torch.examples.libero.env.observation import extract_libero_images
@@ -164,6 +165,8 @@ def _build_decision_obs(
     image_keys: Any,
     residual_alpha: float,
     timer: Timer,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     with timer.context("decision_obs_extract"):
         robot_state = build_libero_state(obs)
@@ -180,6 +183,8 @@ def _build_decision_obs(
         base_actions = prepare_base_actions_chunk(
             base_actions=base_actions,
             chunk_horizon=chunk_horizon,
+            downsample_factor=downsample_factor,
+            downsample_offset=downsample_offset,
         )
         residual_obs = build_chunk_residual_obs(
             robot_state=robot_state,
@@ -200,6 +205,8 @@ def _build_decision_obs_many(
     image_keys: Any,
     residual_alpha: float,
     timer: Timer,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]], int, int, bool]:
     if not observations:
         return [], [], 0, 0, False
@@ -248,6 +255,8 @@ def _build_decision_obs_many(
             base_actions = prepare_base_actions_chunk(
                 base_actions=raw_actions,
                 chunk_horizon=chunk_horizon,
+                downsample_factor=downsample_factor,
+                downsample_offset=downsample_offset,
             )
             residual_obs = build_chunk_residual_obs(
                 robot_state=robot_state,
@@ -362,6 +371,8 @@ def _run_serial_eval_loop(
     chunk_horizon: int,
     image_keys: Any,
     residual_action_spec: ResidualActionSpec,
+    downsample_factor: int,
+    downsample_offset: int,
     agent: Any,
     checkpoint_step: int | None,
     timer: Timer,
@@ -416,6 +427,8 @@ def _run_serial_eval_loop(
                                 image_keys=image_keys,
                                 residual_alpha=residual_action_spec.alpha,
                                 timer=timer,
+                                downsample_factor=downsample_factor,
+                                downsample_offset=downsample_offset,
                             )
                         stats.policy_requests += 1
                         stats.policy_samples += 1
@@ -489,6 +502,8 @@ def _run_serial_eval_loop(
                             image_keys=image_keys,
                             residual_alpha=residual_action_spec.alpha,
                             timer=timer,
+                            downsample_factor=downsample_factor,
+                            downsample_offset=downsample_offset,
                         )
                     stats.policy_requests += 1
                     stats.policy_samples += 1
@@ -556,6 +571,8 @@ def _run_parallel_eval_loop(
     chunk_horizon: int,
     image_keys: Any,
     residual_action_spec: ResidualActionSpec,
+    downsample_factor: int,
+    downsample_offset: int,
     agent: Any,
     checkpoint_step: int | None,
     timer: Timer,
@@ -642,6 +659,8 @@ def _run_parallel_eval_loop(
                         image_keys=image_keys,
                         residual_alpha=residual_action_spec.alpha,
                         timer=timer,
+                        downsample_factor=downsample_factor,
+                        downsample_offset=downsample_offset,
                     )
                 stats.policy_requests += int(client_calls)
                 stats.policy_samples += int(policy_samples)
@@ -871,6 +890,13 @@ def run_residual_eval(
         image_keys = cfg.obs.image_keys
         action_dim = cfg.env.action_dim
         chunk_horizon = cfg.residual.chunk_horizon
+        (
+            downsample_enabled,
+            downsample_factor,
+            downsample_offset,
+        ) = resolve_action_downsample_selection(
+            getattr(cfg, "action_downsample", None),
+        )
         residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
 
         summary = {
@@ -898,6 +924,11 @@ def run_residual_eval(
             "parallel_envs": int(parallel_envs),
             "policy_batch_size": int(policy_batch_size),
             "eval_env_ports": eval_env_ports,
+            "action_downsample": {
+                "enabled": bool(downsample_enabled),
+                "factor": int(downsample_factor),
+                "offset": int(downsample_offset),
+            },
             "task": {
                 "suite_name": cfg.task.suite_name,
                 "task_id": int(cfg.task.task_id),
@@ -962,6 +993,8 @@ def run_residual_eval(
                 chunk_horizon=chunk_horizon,
                 image_keys=image_keys,
                 residual_action_spec=residual_action_spec,
+                downsample_factor=downsample_factor,
+                downsample_offset=downsample_offset,
                 agent=agent,
                 checkpoint_step=checkpoint_step,
                 timer=timer,
@@ -981,6 +1014,8 @@ def run_residual_eval(
                 chunk_horizon=chunk_horizon,
                 image_keys=image_keys,
                 residual_action_spec=residual_action_spec,
+                downsample_factor=downsample_factor,
+                downsample_offset=downsample_offset,
                 agent=agent,
                 checkpoint_step=checkpoint_step,
                 timer=timer,

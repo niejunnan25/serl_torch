@@ -26,6 +26,9 @@ RESIDUAL_PREPARED_SIGNATURE_KEYS = (
     "policy_backend_type",
     "policy_backend_id",
     "chunk_horizon",
+    "action_downsample_enabled",
+    "action_downsample_factor",
+    "action_downsample_offset",
     "action_dim",
     "alpha",
     "action_mask",
@@ -77,6 +80,9 @@ def build_residual_prepared_fingerprint(
     vector_obs_keys: Sequence[str] | None,
     raw_dataset_path: str | Path,
     extra_fields: Mapping[str, Any] | None = None,
+    action_downsample_enabled: bool = False,
+    action_downsample_factor: int = 1,
+    action_downsample_offset: int = 0,
 ) -> dict[str, Any]:
     signature = build_residual_training_signature(
         task_key=task_key,
@@ -93,6 +99,9 @@ def build_residual_prepared_fingerprint(
         filter_unrepresentable_steps=filter_unrepresentable_steps,
         image_keys=image_keys,
         vector_obs_keys=vector_obs_keys,
+        action_downsample_enabled=action_downsample_enabled,
+        action_downsample_factor=action_downsample_factor,
+        action_downsample_offset=action_downsample_offset,
     )
     fingerprint = {
         "format_version": str(format_version),
@@ -124,12 +133,18 @@ def build_residual_training_signature(
     filter_unrepresentable_steps: bool,
     image_keys: Sequence[str],
     vector_obs_keys: Sequence[str] | None,
+    action_downsample_enabled: bool = False,
+    action_downsample_factor: int = 1,
+    action_downsample_offset: int = 0,
 ) -> dict[str, Any]:
     return {
         "task_key": str(task_key),
         "policy_backend_type": str(policy_backend_type),
         "policy_backend_id": str(policy_backend_id),
         "chunk_horizon": int(chunk_horizon),
+        "action_downsample_enabled": bool(action_downsample_enabled),
+        "action_downsample_factor": int(action_downsample_factor),
+        "action_downsample_offset": int(action_downsample_offset),
         "action_dim": int(action_dim),
         "alpha": float(alpha),
         "action_mask": (
@@ -163,6 +178,15 @@ def extract_residual_manifest_signature(
     signature["filter_unrepresentable_steps"] = bool(
         fingerprint.get("filter_unrepresentable_steps", False)
     )
+    signature["action_downsample_enabled"] = bool(
+        fingerprint.get("action_downsample_enabled", False)
+    )
+    signature["action_downsample_factor"] = int(
+        fingerprint.get("action_downsample_factor", 1)
+    )
+    signature["action_downsample_offset"] = int(
+        fingerprint.get("action_downsample_offset", 0)
+    )
     return signature
 
 
@@ -173,6 +197,9 @@ def resolve_residual_prepared_dir(
     policy_backend: str,
     chunk_horizon: int,
     alpha: float,
+    action_downsample_enabled: bool = False,
+    action_downsample_factor: int = 1,
+    action_downsample_offset: int = 0,
 ) -> Path:
     output_root_path = resolve_path(str(output_root), base=resolve_original_cwd())
     resolved_task_key = str(task_key)
@@ -183,8 +210,14 @@ def resolve_residual_prepared_dir(
     )
     backend = str(policy_backend).replace(":", "_")
     alpha_token = format_residual_alpha_token(alpha)
+    downsample_suffix = ""
+    if bool(action_downsample_enabled):
+        downsample_suffix = (
+            f"_ds{int(action_downsample_factor)}_off{int(action_downsample_offset)}"
+        )
     return (
-        task_root / f"{backend}_chunk{int(chunk_horizon)}_alpha{alpha_token}"
+        task_root
+        / f"{backend}_chunk{int(chunk_horizon)}_alpha{alpha_token}{downsample_suffix}"
     ).resolve()
 
 

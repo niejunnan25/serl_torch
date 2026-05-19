@@ -31,18 +31,37 @@ def prepare_base_actions_chunk(
     base_actions: np.ndarray,
     chunk_horizon: int,
     source: str = "base policy",
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> np.ndarray:
     base_actions_array = np.asarray(base_actions, dtype=np.float32)
     if base_actions_array.ndim != 2:
         raise ValueError(
             f"{source} must return a 2D action chunk, got shape {base_actions_array.shape}"
         )
-    if int(base_actions_array.shape[0]) < int(chunk_horizon):
+    horizon = int(chunk_horizon)
+    factor = int(downsample_factor)
+    offset = int(downsample_offset)
+    if horizon <= 0:
+        raise ValueError(f"chunk_horizon must be positive, got {chunk_horizon}")
+    if factor <= 0:
+        raise ValueError(f"downsample_factor must be positive, got {downsample_factor}")
+    if offset < 0 or offset >= factor:
+        raise ValueError(
+            "downsample_offset must satisfy 0 <= offset < downsample_factor, "
+            f"got offset={downsample_offset} factor={downsample_factor}"
+        )
+
+    last_required_index = offset + factor * (horizon - 1)
+    if int(base_actions_array.shape[0]) <= int(last_required_index):
         raise ValueError(
             f"{source} returned only {int(base_actions_array.shape[0])} actions, "
-            f"expected at least chunk_horizon={int(chunk_horizon)}"
+            f"expected index {int(last_required_index)} for "
+            f"chunk_horizon={horizon}, downsample_factor={factor}, "
+            f"downsample_offset={offset}"
         )
-    return np.asarray(base_actions_array[: int(chunk_horizon)], dtype=np.float32)
+    indices = offset + factor * np.arange(horizon)
+    return np.asarray(base_actions_array[indices], dtype=np.float32)
 
 
 def build_chunk_residual_obs(

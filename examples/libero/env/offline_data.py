@@ -43,6 +43,7 @@ from serl_launcher.utils.path_utils import resolve_path
 from serl_launcher.utils.serialization import to_jsonable
 
 from ..config import LiberoTrainConfig
+from ..config import resolve_action_downsample_selection
 from .observation import build_libero_state
 from .observation import extract_libero_images
 from .policy_input import build_libero_policy_input
@@ -133,6 +134,11 @@ def prepare_fingerprint(
     task_spec: LiberoTaskSpec,
     offline_format_version: str,
 ) -> dict[str, Any]:
+    (
+        downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(cfg.action_downsample)
     return build_residual_prepared_fingerprint(
         format_version=offline_format_version,
         task_key=str(task_spec.task_key),
@@ -153,10 +159,18 @@ def prepare_fingerprint(
         image_keys=cfg.obs.image_keys,
         vector_obs_keys=cfg.obs.vector_obs_keys,
         raw_dataset_path=task_spec.dataset_path,
+        action_downsample_enabled=bool(downsample_enabled),
+        action_downsample_factor=int(downsample_factor),
+        action_downsample_offset=int(downsample_offset),
     )
 
 
 def training_compatibility_signature(cfg: LiberoTrainConfig) -> dict[str, Any]:
+    (
+        downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(cfg.action_downsample)
     return build_residual_training_signature(
         task_key=f"{cfg.task.suite_name}_task_{cfg.task.task_id}",
         policy_backend_type=resolve_policy_backend_type(cfg),
@@ -174,6 +188,9 @@ def training_compatibility_signature(cfg: LiberoTrainConfig) -> dict[str, Any]:
         ),
         image_keys=cfg.obs.image_keys,
         vector_obs_keys=cfg.obs.vector_obs_keys,
+        action_downsample_enabled=bool(downsample_enabled),
+        action_downsample_factor=int(downsample_factor),
+        action_downsample_offset=int(downsample_offset),
     )
 
 
@@ -182,12 +199,20 @@ def prepared_dir_for_cfg(
     *,
     task_spec: LiberoTaskSpec,
 ) -> Path:
+    (
+        downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(cfg.action_downsample)
     return resolve_residual_prepared_dir(
         output_root=cfg.offline.prepare.output_root,
         task_key=str(task_spec.task_key),
         policy_backend=describe_policy_backend(cfg),
         chunk_horizon=int(cfg.residual.chunk_horizon),
         alpha=float(cfg.residual.alpha),
+        action_downsample_enabled=bool(downsample_enabled),
+        action_downsample_factor=int(downsample_factor),
+        action_downsample_offset=int(downsample_offset),
     )
 
 
@@ -227,6 +252,8 @@ def _precompute_base_chunks_for_steps(
     task_prompt: str,
     policy_client: Any,
     chunk_horizon: int,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> np.ndarray:
     num_steps = int(payload["actions"].shape[0])
     base_chunks: list[np.ndarray] = []
@@ -253,6 +280,8 @@ def _precompute_base_chunks_for_steps(
                 base_actions=action_chunk,
                 chunk_horizon=chunk_horizon,
                 source="offline base policy",
+                downsample_factor=downsample_factor,
+                downsample_offset=downsample_offset,
             )
         )
     return np.asarray(base_chunks, dtype=np.float32)
@@ -288,6 +317,8 @@ def prepare_demo_transitions(
     expert_reference_scale: float,
     clip_residual_to_unit: bool,
     filter_unrepresentable_steps: bool,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     payload = _load_demo_payload(demo)
     expert_actions = payload["actions"]
@@ -315,6 +346,8 @@ def prepare_demo_transitions(
         task_prompt=task_prompt,
         policy_client=policy_client,
         chunk_horizon=int(action_spec.chunk_horizon),
+        downsample_factor=downsample_factor,
+        downsample_offset=downsample_offset,
     )
     if base_chunks_per_step.shape[:2] != (
         int(num_steps),
@@ -432,6 +465,11 @@ def write_manifest(
     episode_files: Sequence[Path],
     prepare_stats: dict[str, Any],
 ) -> dict[str, Any]:
+    (
+        downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(cfg.action_downsample)
     manifest = {
         "format_version": OFFLINE_FORMAT_VERSION,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
@@ -458,6 +496,11 @@ def write_manifest(
             ),
             "action_limits": [float(v) for v in cfg.residual.action_limits],
             "clip_gripper": bool(cfg.residual.clip_gripper),
+        },
+        "action_downsample": {
+            "enabled": bool(downsample_enabled),
+            "factor": int(downsample_factor),
+            "offset": int(downsample_offset),
         },
         "offline": {
             "expert_reference_scale": float(cfg.offline.prepare.expert_reference_scale),

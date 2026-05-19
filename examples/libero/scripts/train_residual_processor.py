@@ -75,6 +75,7 @@ from serl_torch.examples.libero.config import LiberoTrainConfig
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import get_runtime_role
 from serl_torch.examples.libero.config import parse_train_cfg_allow_processor
+from serl_torch.examples.libero.config import resolve_action_downsample_selection
 from serl_torch.examples.libero.env.factory import create_env
 from serl_torch.examples.libero.env.observation import build_libero_state
 from serl_torch.examples.libero.env.observation import extract_libero_images
@@ -205,6 +206,13 @@ def actor(
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
     residual_alpha = cfg.residual.alpha
+    (
+        _downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(
+        cfg.action_downsample,
+    )
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
     runtime_cfg = cfg.runtime
     trainer_transport_cfg = runtime_cfg.trainer_transport
@@ -336,6 +344,8 @@ def actor(
                     base_actions = prepare_base_actions_chunk(
                         base_actions=base_actions,
                         chunk_horizon=chunk_horizon,
+                        downsample_factor=downsample_factor,
+                        downsample_offset=downsample_offset,
                     )
                     residual_obs = build_chunk_residual_obs(
                         robot_state=robot_state,
@@ -569,12 +579,21 @@ def processor(
         f"{cfg.policy.type}:{cfg.backfill_policy.host}:" f"{cfg.backfill_policy.port}"
     )
     logger.info("Processor dedicated backfill backend: %s", backfill_backend)
+    (
+        _downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(
+        cfg.action_downsample,
+    )
 
     assembler = BatchAwareLiberoTransitionAssembler(
         policy_client=policy_client,
         chunk_horizon=cfg.residual.chunk_horizon,
         image_keys=cfg.obs.image_keys,
         residual_alpha=cfg.residual.alpha,
+        downsample_factor=downsample_factor,
+        downsample_offset=downsample_offset,
     )
     processor_pipeline = RolloutProcessorPipeline.for_libero(assembler=assembler)
     recycle_output_root = Path(cfg.recycle.output_root)

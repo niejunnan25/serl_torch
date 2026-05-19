@@ -157,6 +157,24 @@ class _SerialOnlyPolicyClient:
         )
 
 
+class _LongChunkBatchPolicyClient:
+    def __init__(self) -> None:
+        self.infer_many_calls = 0
+
+    def infer_many(
+        self,
+        policy_inputs: list[object],
+    ) -> tuple[list[np.ndarray], dict[str, object]]:
+        self.infer_many_calls += 1
+        actions: list[np.ndarray] = []
+        for index, _policy_input in enumerate(policy_inputs):
+            start = float(index * 100)
+            actions.append(
+                np.arange(start, start + 10, dtype=np.float32).reshape(10, 1)
+            )
+        return actions, {"backend": "fake_long_batch"}
+
+
 def _fake_chunk_result(
     *,
     observations: list[dict[str, object]],
@@ -598,6 +616,37 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         self.assertTrue(np.allclose(base_actions[0][:, 0], [1.0, 1.25]))
         self.assertTrue(np.allclose(base_actions[1][:, 0], [2.0, 2.25]))
 
+    def test_batch_aware_backfill_applies_action_downsample(self) -> None:
+        policy_client = _LongChunkBatchPolicyClient()
+        observations = [
+            _fake_libero_obs(1.0),
+            _fake_libero_obs(2.0),
+        ]
+
+        (
+            base_actions,
+            residual_observations,
+        ) = backfill_post_step_residual_obs_batch_aware(
+            observations=observations,
+            task_prompt="pick",
+            policy_client=policy_client,
+            chunk_horizon=5,
+            image_keys=("image_rgb_0", "image_rgb_1"),
+            residual_alpha=0.2,
+            downsample_factor=2,
+            downsample_offset=1,
+        )
+
+        self.assertEqual(policy_client.infer_many_calls, 1)
+        self.assertTrue(np.allclose(base_actions[0][:, 0], [1, 3, 5, 7, 9]))
+        self.assertTrue(np.allclose(base_actions[1][:, 0], [101, 103, 105, 107, 109]))
+        self.assertTrue(
+            np.allclose(
+                residual_observations[0]["base_action_chunk"][0, :, 0],
+                [1, 3, 5, 7, 9],
+            )
+        )
+
     def test_batch_aware_assembler_process_chunk_batches_start_and_post_step_obs(
         self,
     ) -> None:
@@ -716,6 +765,59 @@ class LiberoTransitionAssemblyTest(unittest.TestCase):
         )
         self.assertTrue(
             np.allclose(results[1].prefetched.base_actions[:, 0], [6.0, 6.5])
+        )
+
+    def test_batch_aware_assembler_downsamples_current_and_next_observations(
+        self,
+    ) -> None:
+        policy_client = _LongChunkBatchPolicyClient()
+        assembler = BatchAwareLiberoTransitionAssembler(
+            policy_client=policy_client,
+            chunk_horizon=5,
+            image_keys=("image_rgb_0", "image_rgb_1"),
+            residual_alpha=0.1,
+            downsample_factor=2,
+            downsample_offset=1,
+        )
+        raw = ChunkExecutionRecord(
+            episode_id=7,
+            episode_step_start=0,
+            residual_obs_before_chunk={},
+            action_chunk=np.asarray([[0.1]], dtype=np.float32),
+            post_step_observations=[_fake_libero_obs(1.0)],
+            rewards=[1.0],
+            dones=[False],
+            infos=[{"env_done": False}],
+            final_obs=_fake_libero_obs(1.0),
+            chunk_done=False,
+            chunk_truncated=False,
+            reward_sum=1.0,
+            chunk_info={"env_done": False},
+            executed_steps=1,
+            start_obs=_fake_libero_obs(0.0),
+        )
+
+        result = assembler.process_chunk(raw=raw, task_prompt="move")
+
+        self.assertTrue(
+            np.allclose(
+                result.transitions[0]["observations"]["base_action_chunk"][0, :, 0],
+                [1, 3, 5, 7, 9],
+            )
+        )
+        self.assertTrue(
+            np.allclose(
+                result.transitions[0]["next_observations"]["base_action_chunk"][
+                    0,
+                    :,
+                    0,
+                ],
+                [101, 103, 105, 107, 109],
+            )
+        )
+        assert result.prefetched is not None
+        self.assertTrue(
+            np.allclose(result.prefetched.base_actions[:, 0], [101, 103, 105, 107, 109])
         )
 
 

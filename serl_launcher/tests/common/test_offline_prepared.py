@@ -60,6 +60,9 @@ def test_residual_prepared_metadata_helpers_build_shared_signature() -> None:
     assert fingerprint["task_description"] == "pick object"
     assert fingerprint["action_mask"] == [True, False]
     assert fingerprint["action_limits"] == [1.0, 2.0]
+    assert fingerprint["action_downsample_enabled"] is False
+    assert fingerprint["action_downsample_factor"] == 1
+    assert fingerprint["action_downsample_offset"] == 0
     assert fingerprint["image_keys"] == ["agentview", "wrist"]
     assert fingerprint["vector_obs_keys"] == ["robot"]
     assert fingerprint["raw_dataset_path"] == "/tmp/raw.hdf5"
@@ -88,6 +91,46 @@ def test_residual_prepared_metadata_helpers_build_shared_signature() -> None:
     assert extract_residual_manifest_signature({}) is None
 
 
+def test_residual_prepared_metadata_includes_action_downsample_signature() -> None:
+    signature = build_residual_training_signature(
+        task_key="suite_task_1",
+        policy_backend_type="openpi",
+        policy_backend_id="openpi:v1",
+        chunk_horizon=5,
+        action_dim=7,
+        alpha=0.2,
+        action_mask=(True,) * 7,
+        action_limits=(1.0,) * 7,
+        clip_gripper=True,
+        expert_reference_scale=1.0,
+        clip_residual_to_unit=True,
+        filter_unrepresentable_steps=False,
+        image_keys=("agentview",),
+        vector_obs_keys=None,
+        action_downsample_enabled=True,
+        action_downsample_factor=2,
+        action_downsample_offset=1,
+    )
+
+    assert signature["action_downsample_enabled"] is True
+    assert signature["action_downsample_factor"] == 2
+    assert signature["action_downsample_offset"] == 1
+
+    old_manifest_signature = extract_residual_manifest_signature(
+        {
+            "fingerprint": {
+                key: value
+                for key, value in signature.items()
+                if not key.startswith("action_downsample_")
+            }
+        }
+    )
+    assert old_manifest_signature is not None
+    assert old_manifest_signature["action_downsample_enabled"] is False
+    assert old_manifest_signature["action_downsample_factor"] == 1
+    assert old_manifest_signature["action_downsample_offset"] == 0
+
+
 def test_residual_prepared_dir_uses_shared_chunk_alpha_naming() -> None:
     prepared_dir = resolve_residual_prepared_dir(
         output_root="offline_data",
@@ -100,6 +143,18 @@ def test_residual_prepared_dir_uses_shared_chunk_alpha_naming() -> None:
     assert format_residual_alpha_token(0.2) == "0p2"
     assert prepared_dir.name == "joyra_office_chunk30_alpha0p2"
     assert prepared_dir.parent.name == "suite_task_1"
+
+    downsample_dir = resolve_residual_prepared_dir(
+        output_root="offline_data",
+        task_key="suite_task_1",
+        policy_backend="joyra:office",
+        chunk_horizon=5,
+        alpha=0.2,
+        action_downsample_enabled=True,
+        action_downsample_factor=2,
+        action_downsample_offset=1,
+    )
+    assert downsample_dir.name == "joyra_office_chunk5_alpha0p2_ds2_off1"
 
 
 def test_validate_prepared_paths_rejects_manifestless_directory() -> None:

@@ -20,6 +20,50 @@ class ResidualObservationHelpersTest(unittest.TestCase):
         self.assertEqual(prepared.shape, (3, 3))
         np.testing.assert_array_equal(prepared, base_actions[:3])
 
+    def test_prepare_base_actions_chunk_downsamples_even_indices(self) -> None:
+        base_actions = np.arange(30, dtype=np.float32).reshape(10, 3)
+        prepared = prepare_base_actions_chunk(
+            base_actions=base_actions,
+            chunk_horizon=5,
+            downsample_factor=2,
+            downsample_offset=0,
+        )
+
+        np.testing.assert_array_equal(prepared, base_actions[[0, 2, 4, 6, 8]])
+
+    def test_prepare_base_actions_chunk_downsamples_odd_indices(self) -> None:
+        base_actions = np.arange(30, dtype=np.float32).reshape(10, 3)
+        prepared = prepare_base_actions_chunk(
+            base_actions=base_actions,
+            chunk_horizon=5,
+            downsample_factor=2,
+            downsample_offset=1,
+        )
+
+        np.testing.assert_array_equal(prepared, base_actions[[1, 3, 5, 7, 9]])
+
+    def test_prepare_base_actions_chunk_rejects_short_downsample_source(self) -> None:
+        base_actions = np.arange(27, dtype=np.float32).reshape(9, 3)
+
+        with self.assertRaisesRegex(ValueError, "expected index 9"):
+            prepare_base_actions_chunk(
+                base_actions=base_actions,
+                chunk_horizon=5,
+                downsample_factor=2,
+                downsample_offset=1,
+            )
+
+    def test_prepare_base_actions_chunk_rejects_invalid_downsample_offset(self) -> None:
+        base_actions = np.arange(30, dtype=np.float32).reshape(10, 3)
+
+        with self.assertRaisesRegex(ValueError, "0 <= offset < downsample_factor"):
+            prepare_base_actions_chunk(
+                base_actions=base_actions,
+                chunk_horizon=5,
+                downsample_factor=2,
+                downsample_offset=2,
+            )
+
     def test_build_chunk_residual_obs_assembles_schema(self) -> None:
         residual_obs = build_chunk_residual_obs(
             robot_state=np.asarray([1.0, 2.0, 3.0], dtype=np.float32),

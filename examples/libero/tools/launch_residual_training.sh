@@ -137,10 +137,11 @@ Notes:
       step      -> train_residual_step.py
       chunk     -> train_residual_chunk.py
       processor -> train_residual_processor.py
-  - The selected mode must match the config name:
+  - If the config name declares a mode, it must match the selected mode:
       train_residual_step -> step, train_residual_chunk -> chunk,
       train_residual_processor -> processor,
       names containing chunk/processor/step -> the same mode.
+      Neutral names are allowed when --mode is explicit.
   - The experiment root defaults to:
       examples/libero/outputs/<relative_config_dir>/<config_stem>/
     For configs at the root of examples/libero/configs, this remains:
@@ -677,9 +678,8 @@ fi
 
 CONFIG_TRAINING_MODE="$(infer_config_training_mode "$CONFIG_COMPOSE_NAME")"
 if [[ -z "$CONFIG_TRAINING_MODE" ]]; then
-    die "cannot infer training mode from config name '$CONFIG_COMPOSE_NAME'; use a residual config named with step, chunk, or processor"
-fi
-if [[ "$CONFIG_TRAINING_MODE" != "$TRAINING_MODE" ]]; then
+    CONFIG_TRAINING_MODE="$TRAINING_MODE"
+elif [[ "$CONFIG_TRAINING_MODE" != "$TRAINING_MODE" ]]; then
     die "--mode $TRAINING_MODE does not match config '$CONFIG_COMPOSE_NAME' (expected --mode $CONFIG_TRAINING_MODE)"
 fi
 

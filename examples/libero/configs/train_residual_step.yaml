@@ -70,6 +70,11 @@ residual:
   clip_gripper: true
   chunk_horizon: 5
 
+action_downsample:
+  enabled: false
+  factor: 1
+  offset: 0
+
 encoder:
   type: resnet
   shared: true

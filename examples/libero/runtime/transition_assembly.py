@@ -141,6 +141,15 @@ def _build_policy_endpoint_cfg(
     )
 
 
+def _resolve_action_downsample_cfg(cfg: Any) -> tuple[int, int]:
+    downsample_cfg = getattr(cfg, "action_downsample", None)
+    if downsample_cfg is None or not bool(getattr(downsample_cfg, "enabled", False)):
+        return 1, 0
+    return int(getattr(downsample_cfg, "factor", 1)), int(
+        getattr(downsample_cfg, "offset", 0)
+    )
+
+
 def infer_chunk_residual_obs(
     *,
     obs: dict[str, Any],
@@ -149,6 +158,8 @@ def infer_chunk_residual_obs(
     chunk_horizon: int,
     image_keys: tuple[str, ...],
     residual_alpha: float,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     robot_state = build_libero_state(obs)
     image_observations = extract_libero_images(obs)
@@ -161,6 +172,8 @@ def infer_chunk_residual_obs(
     base_actions = prepare_base_actions_chunk(
         base_actions=base_actions,
         chunk_horizon=chunk_horizon,
+        downsample_factor=downsample_factor,
+        downsample_offset=downsample_offset,
     )
     residual_obs = build_chunk_residual_obs(
         robot_state=robot_state,
@@ -180,6 +193,8 @@ def infer_chunk_residual_obs_many(
     chunk_horizon: int,
     image_keys: tuple[str, ...],
     residual_alpha: float,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
     return infer_chunk_residual_obs_many_with_prompts(
         observations=observations,
@@ -188,6 +203,8 @@ def infer_chunk_residual_obs_many(
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
         residual_alpha=residual_alpha,
+        downsample_factor=downsample_factor,
+        downsample_offset=downsample_offset,
     )
 
 
@@ -199,6 +216,8 @@ def infer_chunk_residual_obs_many_with_prompts(
     chunk_horizon: int,
     image_keys: tuple[str, ...],
     residual_alpha: float,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
     if not observations:
         return [], []
@@ -221,6 +240,8 @@ def infer_chunk_residual_obs_many_with_prompts(
                 chunk_horizon=chunk_horizon,
                 image_keys=image_keys,
                 residual_alpha=residual_alpha,
+                downsample_factor=downsample_factor,
+                downsample_offset=downsample_offset,
             )
             base_action_chunks.append(base_actions)
             residual_observations.append(residual_obs)
@@ -257,6 +278,8 @@ def infer_chunk_residual_obs_many_with_prompts(
         next_base_actions = prepare_base_actions_chunk(
             base_actions=raw_actions,
             chunk_horizon=chunk_horizon,
+            downsample_factor=downsample_factor,
+            downsample_offset=downsample_offset,
         )
         next_residual_obs = build_chunk_residual_obs(
             robot_state=robot_state,
@@ -330,11 +353,15 @@ class LiberoTransitionAssembler:
         chunk_horizon: int,
         image_keys: tuple[str, ...],
         residual_alpha: float,
+        downsample_factor: int = 1,
+        downsample_offset: int = 0,
     ) -> None:
         self.policy_client = policy_client
         self.chunk_horizon = int(chunk_horizon)
         self.image_keys = tuple(image_keys)
         self.residual_alpha = float(residual_alpha)
+        self.downsample_factor = int(downsample_factor)
+        self.downsample_offset = int(downsample_offset)
 
     def infer_decision_obs(
         self,
@@ -349,6 +376,8 @@ class LiberoTransitionAssembler:
             chunk_horizon=self.chunk_horizon,
             image_keys=self.image_keys,
             residual_alpha=self.residual_alpha,
+            downsample_factor=self.downsample_factor,
+            downsample_offset=self.downsample_offset,
         )
         return PrefetchedDecisionObs(
             base_actions=base_actions,
@@ -368,6 +397,8 @@ class LiberoTransitionAssembler:
             chunk_horizon=self.chunk_horizon,
             image_keys=self.image_keys,
             residual_alpha=self.residual_alpha,
+            downsample_factor=self.downsample_factor,
+            downsample_offset=self.downsample_offset,
         )
 
     def process_chunk(
@@ -432,6 +463,8 @@ class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
             chunk_horizon=self.chunk_horizon,
             image_keys=self.image_keys,
             residual_alpha=self.residual_alpha,
+            downsample_factor=self.downsample_factor,
+            downsample_offset=self.downsample_offset,
         )
 
     def process_chunk(
@@ -497,6 +530,8 @@ class BatchAwareLiberoTransitionAssembler(LiberoTransitionAssembler):
                 chunk_horizon=self.chunk_horizon,
                 image_keys=self.image_keys,
                 residual_alpha=self.residual_alpha,
+                downsample_factor=self.downsample_factor,
+                downsample_offset=self.downsample_offset,
             )
             offset = 0
             for idx, observation_count in batchable_specs:
@@ -543,11 +578,14 @@ class LiberoActorTransitionAssembler:
         logger: logging.Logger,
     ) -> None:
         self._logger = logger
+        downsample_factor, downsample_offset = _resolve_action_downsample_cfg(cfg)
         self._sync_assembler = BatchAwareLiberoTransitionAssembler(
             policy_client=policy_client,
             chunk_horizon=int(cfg.residual.chunk_horizon),
             image_keys=tuple(cfg.obs.image_keys),
             residual_alpha=float(cfg.residual.alpha),
+            downsample_factor=downsample_factor,
+            downsample_offset=downsample_offset,
         )
         self._prefetched: PrefetchedDecisionObs | None = None
         self._last_submitted_chunk_seq: int | None = None
@@ -699,6 +737,8 @@ class LiberoActorTransitionAssembler:
             chunk_horizon=self._sync_assembler.chunk_horizon,
             image_keys=self._sync_assembler.image_keys,
             residual_alpha=self._sync_assembler.residual_alpha,
+            downsample_factor=self._sync_assembler.downsample_factor,
+            downsample_offset=self._sync_assembler.downsample_offset,
         )
         return next_residual_observations
 
@@ -741,6 +781,8 @@ def backfill_post_step_residual_obs(
     chunk_horizon: int,
     image_keys: tuple[str, ...],
     residual_alpha: float,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
     base_action_chunks: list[np.ndarray] = []
     residual_observations: list[dict[str, np.ndarray]] = []
@@ -752,6 +794,8 @@ def backfill_post_step_residual_obs(
             chunk_horizon=chunk_horizon,
             image_keys=image_keys,
             residual_alpha=residual_alpha,
+            downsample_factor=downsample_factor,
+            downsample_offset=downsample_offset,
         )
         base_action_chunks.append(next_base_actions)
         residual_observations.append(next_residual_obs)
@@ -766,6 +810,8 @@ def backfill_post_step_residual_obs_batch_aware(
     chunk_horizon: int,
     image_keys: tuple[str, ...],
     residual_alpha: float,
+    downsample_factor: int = 1,
+    downsample_offset: int = 0,
 ) -> tuple[list[np.ndarray], list[dict[str, np.ndarray]]]:
     return infer_chunk_residual_obs_many(
         observations=observations,
@@ -774,6 +820,8 @@ def backfill_post_step_residual_obs_batch_aware(
         chunk_horizon=chunk_horizon,
         image_keys=image_keys,
         residual_alpha=residual_alpha,
+        downsample_factor=downsample_factor,
+        downsample_offset=downsample_offset,
     )
 
 

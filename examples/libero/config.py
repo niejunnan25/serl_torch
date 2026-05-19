@@ -97,6 +97,13 @@ class ResidualConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionDownsampleConfig:
+    enabled: bool
+    factor: int
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
 class ResnetConfig:
     model_name: str
     pretrained: bool
@@ -321,6 +328,7 @@ class LiberoTrainConfig:
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    action_downsample: ActionDownsampleConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -341,6 +349,7 @@ class LiberoEvalConfig:
     env: EnvConfig
     obs: ObsConfig
     residual: ResidualConfig
+    action_downsample: ActionDownsampleConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -943,6 +952,38 @@ def _parse_residual_cfg(cfg: DictConfig, *, action_dim: int) -> ResidualConfig:
             "residual.chunk_horizon",
         ),
     )
+
+
+def _parse_action_downsample_cfg(cfg: DictConfig) -> ActionDownsampleConfig:
+    downsample_cfg = cfg.get("action_downsample", {}) or {}
+    factor = _positive_int(
+        downsample_cfg.get("factor", 1),
+        "action_downsample.factor",
+    )
+    offset = _nonnegative_int(
+        downsample_cfg.get("offset", 0),
+        "action_downsample.offset",
+    )
+    if int(offset) >= int(factor):
+        raise ValueError(
+            "action_downsample.offset must be smaller than action_downsample.factor: "
+            f"offset={int(offset)} factor={int(factor)}"
+        )
+    return ActionDownsampleConfig(
+        enabled=bool(downsample_cfg.get("enabled", False)),
+        factor=int(factor),
+        offset=int(offset),
+    )
+
+
+def resolve_action_downsample_selection(
+    action_downsample: ActionDownsampleConfig | None,
+) -> tuple[bool, int, int]:
+    if action_downsample is None:
+        return False, 1, 0
+    if not bool(action_downsample.enabled):
+        return False, 1, 0
+    return True, int(action_downsample.factor), int(action_downsample.offset)
 
 
 def _parse_encoder_cfg(cfg: DictConfig) -> EncoderConfig:
@@ -1561,6 +1602,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     runtime = _parse_runtime_cfg(cfg)
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    action_downsample = _parse_action_downsample_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
     offline = _parse_offline_cfg(cfg)
     policy = _parse_policy_cfg(cfg)
@@ -1585,6 +1627,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         env=env,
         obs=obs,
         residual=residual,
+        action_downsample=action_downsample,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
@@ -1609,6 +1652,7 @@ def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:
     env = _parse_env_cfg(cfg)
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
+    action_downsample = _parse_action_downsample_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
 
     if encoder.use_proprio and obs.vector_obs_keys is None:
@@ -1626,6 +1670,7 @@ def parse_eval_cfg(cfg: DictConfig) -> LiberoEvalConfig:
         env=env,
         obs=obs,
         residual=residual,
+        action_downsample=action_downsample,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
@@ -1670,6 +1715,7 @@ def train_cfg_to_eval_cfg(
         env=eval_env,
         obs=train_cfg.obs,
         residual=train_cfg.residual,
+        action_downsample=train_cfg.action_downsample,
         encoder=train_cfg.encoder,
         network=train_cfg.network,
         sac=train_cfg.sac,
@@ -1683,6 +1729,7 @@ def train_cfg_to_eval_cfg(
 
 
 __all__ = [
+    "ActionDownsampleConfig",
     "AsyncEvalCheckpointConfig",
     "AsyncEvalConfig",
     "AsyncEvalEnvConfig",
@@ -1724,5 +1771,6 @@ __all__ = [
     "parse_eval_cfg",
     "parse_train_cfg",
     "parse_train_cfg_allow_processor",
+    "resolve_action_downsample_selection",
     "train_cfg_to_eval_cfg",
 ]

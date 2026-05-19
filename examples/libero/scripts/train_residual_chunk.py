@@ -69,6 +69,7 @@ if str(REPO_PARENT) not in sys.path:
 from serl_torch.examples.libero.config import LiberoTrainConfig
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import parse_train_cfg
+from serl_torch.examples.libero.config import resolve_action_downsample_selection
 from serl_torch.examples.libero.env.factory import create_env
 from serl_torch.examples.libero.env.observation import build_libero_state
 from serl_torch.examples.libero.env.observation import extract_libero_images
@@ -133,6 +134,13 @@ def actor(
     action_dim = cfg.env.action_dim
     chunk_horizon = cfg.residual.chunk_horizon
     residual_alpha = float(cfg.residual.alpha)
+    (
+        _downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(
+        cfg.action_downsample,
+    )
     residual_action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=action_dim)
     transition_assembler = LiberoActorTransitionAssembler(
         cfg=cfg,
@@ -340,6 +348,8 @@ def actor(
                         base_actions = prepare_base_actions_chunk(
                             base_actions=base_actions,
                             chunk_horizon=chunk_horizon,
+                            downsample_factor=downsample_factor,
+                            downsample_offset=downsample_offset,
                         )
                         residual_obs = build_chunk_residual_obs(
                             robot_state=robot_state,

@@ -28,6 +28,7 @@ from serl_launcher.residual.typed_action import ResidualActionSpec
 from serl_launcher.utils.seeding import set_global_seeds
 from serl_torch.examples.libero.config import cfg_to_log_payload
 from serl_torch.examples.libero.config import parse_train_cfg
+from serl_torch.examples.libero.config import resolve_action_downsample_selection
 from serl_torch.examples.libero.env.offline_data import OFFLINE_FORMAT_VERSION
 from serl_torch.examples.libero.env.offline_data import prepare_demo_transitions
 from serl_torch.examples.libero.env.offline_data import prepare_fingerprint
@@ -77,6 +78,11 @@ def prepare_offline_data(
     action_spec = ResidualActionSpec.from_cfg(cfg, action_dim=cfg.env.action_dim)
     image_keys = cfg.obs.image_keys
     policy_client = build_policy_client(cfg, logger=logger)
+    (
+        _downsample_enabled,
+        downsample_factor,
+        downsample_offset,
+    ) = resolve_action_downsample_selection(cfg.action_downsample)
     prepare_stats: dict[str, object] = {
         "raw_dataset_path": str(task_spec.dataset_path),
         "prepared_dir": str(prepared_dir),
@@ -127,6 +133,8 @@ def prepare_offline_data(
                     filter_unrepresentable_steps=bool(
                         cfg.offline.prepare.filter_unrepresentable_steps
                     ),
+                    downsample_factor=downsample_factor,
+                    downsample_offset=downsample_offset,
                 )
                 prepare_stats["episodes_total"] = int(prepare_stats["episodes_total"]) + 1
                 prepare_stats["steps_total"] = int(prepare_stats["steps_total"]) + int(

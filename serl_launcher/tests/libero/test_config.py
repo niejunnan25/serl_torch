@@ -154,6 +154,58 @@ class LiberoConfigTest(unittest.TestCase):
 
         self.assertEqual(parsed.runtime.role, "processor")
 
+    def test_parse_train_cfg_reads_action_downsample_defaults_and_override(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+
+        parsed_default = parse_train_cfg(cfg)
+        self.assertFalse(parsed_default.action_downsample.enabled)
+        self.assertEqual(parsed_default.action_downsample.factor, 1)
+        self.assertEqual(parsed_default.action_downsample.offset, 0)
+
+        cfg.action_downsample = {"enabled": True, "factor": 2, "offset": 1}
+        parsed_override = parse_train_cfg(cfg)
+        self.assertTrue(parsed_override.action_downsample.enabled)
+        self.assertEqual(parsed_override.action_downsample.factor, 2)
+        self.assertEqual(parsed_override.action_downsample.offset, 1)
+
+    def test_parse_eval_cfg_reads_action_downsample(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "eval_residual.yaml"
+        )
+        cfg.action_downsample = {"enabled": True, "factor": 2, "offset": 0}
+
+        parsed = parse_eval_cfg(cfg)
+
+        self.assertTrue(parsed.action_downsample.enabled)
+        self.assertEqual(parsed.action_downsample.factor, 2)
+        self.assertEqual(parsed.action_downsample.offset, 0)
+
+    def test_parse_train_cfg_rejects_invalid_action_downsample_offset(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.action_downsample = {"enabled": True, "factor": 2, "offset": 2}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "action_downsample.offset must be smaller",
+        ):
+            parse_train_cfg(cfg)
+
     def test_parse_train_cfg_rejects_invalid_processor_transport_values(self) -> None:
         cfg = OmegaConf.load(
             Path(__file__).resolve().parents[3]

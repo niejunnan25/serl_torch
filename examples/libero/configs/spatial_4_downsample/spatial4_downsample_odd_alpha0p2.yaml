@@ -1,0 +1,60 @@
+# @package _global_
+defaults:
+  - /spatial_4_0514_runtime/spatial4_chunk_alpha0p2_unfiltered_offline_noent_std5p0_ports53400@_global_
+  - _self_
+
+runtime:
+  trainer_port: 62104
+  broadcast_port: 62105
+  trainer_transport:
+    data_port: 62106
+
+processor_transport:
+  port: 62107
+
+wandb:
+  exp_name: spatial4_downsample_odd_alpha0p2
+  group: libero_spatial_task4_downsample
+
+policy:
+  port: 62101
+
+backfill_policy:
+  port: 62102
+
+env:
+  remote:
+    port: 62100
+
+action_downsample:
+  enabled: true
+  factor: 2
+  offset: 1
+
+replay:
+  prepared_chunk:
+    offline_enabled: false
+
+offline:
+  enabled: false
+  prepared_path: null
+  ratio: 0.0
+  pretrain_steps: 0
+
+training:
+  async_eval:
+    env:
+      remote:
+        port: 62103
+
+launch:
+  output_root: outputs/spatial_4_downsample/spatial4_downsample_odd_alpha0p2
+
+notes:
+  experiment_note: action downsample odd; base policy selects a1,a3,a5,a7,a9 and trains online only
+  changed_fields:
+  - action_downsample.enabled=true
+  - action_downsample.factor=2
+  - action_downsample.offset=1
+  - offline.enabled=false
+  - replay.prepared_chunk.offline_enabled=false
