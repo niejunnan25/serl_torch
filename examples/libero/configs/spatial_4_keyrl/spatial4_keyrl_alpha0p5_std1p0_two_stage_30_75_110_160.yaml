@@ -1,30 +1,30 @@
 # @package _global_
 defaults:
-  - /spatial_4_0514_runtime/spatial4_chunk_alpha0p2_unfiltered_offline_noent_std1p0_ports53300@_global_
+  - /spatial_4_0514_runtime/spatial4_chunk_alpha0p5_unfiltered_offline_noent_std1p0_ports53800@_global_
   - _self_
 
 runtime:
-  trainer_port: 61104
-  broadcast_port: 61105
+  trainer_port: 63104
+  broadcast_port: 63105
   trainer_transport:
-    data_port: 61106
+    data_port: 63106
 
 processor_transport:
-  port: 61107
+  port: 63107
 
 wandb:
-  exp_name: spatial4_keyrl_alpha0p2_single_stage_30_75
+  exp_name: spatial4_keyrl_alpha0p5_std1p0_two_stage_30_75_110_160
   group: libero_spatial_task4_keyrl
 
 policy:
-  port: 61101
+  port: 63101
 
 backfill_policy:
-  port: 61102
+  port: 63102
 
 env:
   remote:
-    port: 61100
+    port: 63100
 
 key_rl:
   enabled: true
@@ -37,9 +37,9 @@ key_rl:
     start_step: 30
     end_step: 75
   stage2:
-    enabled: false
-    start_step: 0
-    end_step: 0
+    enabled: true
+    start_step: 110
+    end_step: 160
   stage3:
     enabled: false
     start_step: 0
@@ -49,17 +49,19 @@ training:
   async_eval:
     env:
       remote:
-        port: 61103
+        port: 63103
 
 launch:
-  output_root: outputs/spatial_4_keyrl/spatial4_keyrl_alpha0p2_single_stage_30_75
+  output_root: outputs/spatial_4_keyrl/spatial4_keyrl_alpha0p5_std1p0_two_stage_30_75_110_160
 
 notes:
-  experiment_note: "KeyRL single-stage ablation: [30,75)"
+  experiment_note: "KeyRL two-stage ablation: alpha=0.5, std_max=1.0, [30,75), [110,160)"
   changed_fields:
+  - residual.alpha=0.5
+  - sac.std_max=1.0
   - key_rl.enabled=true
   - key_rl.mode=fixed_stages
   - key_rl.stage1=[30,75)
-  - key_rl.stage2=disabled
+  - key_rl.stage2=[110,160)
   - wandb.group=libero_spatial_task4_keyrl
   - launch.output_root=outputs/spatial_4_keyrl/...

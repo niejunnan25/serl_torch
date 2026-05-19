@@ -1,0 +1,67 @@
+# @package _global_
+defaults:
+  - /spatial_4_0514_runtime/spatial4_chunk_alpha0p1_unfiltered_offline_noent_std0p5_ports53500@_global_
+  - _self_
+
+runtime:
+  trainer_port: 62004
+  broadcast_port: 62005
+  trainer_transport:
+    data_port: 62006
+
+processor_transport:
+  port: 62007
+
+wandb:
+  exp_name: spatial4_keyrl_alpha0p1_std0p5_single_stage_30_75
+  group: libero_spatial_task4_keyrl
+
+policy:
+  port: 62001
+
+backfill_policy:
+  port: 62002
+
+env:
+  remote:
+    port: 62000
+
+key_rl:
+  enabled: true
+  mode: fixed_stages
+  start_step: 0
+  replay_mode: active_only
+  require_chunk_boundary: true
+  stage1:
+    enabled: true
+    start_step: 30
+    end_step: 75
+  stage2:
+    enabled: false
+    start_step: 0
+    end_step: 0
+  stage3:
+    enabled: false
+    start_step: 0
+    end_step: 0
+
+training:
+  async_eval:
+    env:
+      remote:
+        port: 62003
+
+launch:
+  output_root: outputs/spatial_4_keyrl/spatial4_keyrl_alpha0p1_std0p5_single_stage_30_75
+
+notes:
+  experiment_note: "KeyRL single-stage ablation: alpha=0.1, std_max=0.5, [30,75)"
+  changed_fields:
+  - residual.alpha=0.1
+  - sac.std_max=0.5
+  - key_rl.enabled=true
+  - key_rl.mode=fixed_stages
+  - key_rl.stage1=[30,75)
+  - key_rl.stage2=disabled
+  - wandb.group=libero_spatial_task4_keyrl
+  - launch.output_root=outputs/spatial_4_keyrl/...
