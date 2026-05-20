@@ -1,6 +1,6 @@
-# LIBERO Spatial Task 4 KeyRL 实验说明
+## LIBERO Spatial Task 4 KeyRL 实验说明
 
-## 目的
+### 目的
 
 这组实验用于验证第一版 KeyRL / key-action residual RL：
 
@@ -12,7 +12,7 @@ residual policy 只在预设关键阶段启用；
 
 核心问题是：只在关键交互窗口训练 residual RL，是否比全程介入更稳定、更有效。
 
-## KeyRL 设置
+### KeyRL 设置
 
 当前只做固定窗口验证，不做 learned key detector。
 
@@ -50,7 +50,7 @@ residual policy 只在预设关键阶段启用；
 
 已有 full prepared offline replay 可以复用；加载时会按 active window 过滤，不需要为每个窗口重新生成离线数据。
 
-## 实验矩阵
+### 实验矩阵
 
 ```text
 alpha:   0.1 / 0.2 / 0.5
@@ -78,7 +78,7 @@ stage:
   two_stage 验证加上后期放置/释放窗口是否更好。
 ```
 
-## 配置列表
+### 配置列表
 
 | 配置 | 状态 | 说明 |
 | --- | --- | --- |
@@ -97,7 +97,7 @@ stage:
 
 备注：前 4 组已运行实验最初用的是旧文件名，没有 `std1p0` 后缀；它们实际继承的是 `std_max=1.0`，等价于上表中的四个 `std1p0` 配置。
 
-## 输出目录
+### 输出目录
 
 每组实验输出到：
 
@@ -107,7 +107,7 @@ stage:
 
 W&B 的 `exp_name` 也使用相同的 config stem。
 
-## 主要观察点
+### 主要观察点
 
 优先看：
 
@@ -131,7 +131,7 @@ alpha0p1 / alpha0p2 / alpha0p5 差异
 5. alpha=0.5 是否带来更强修正，还是主要带来不稳定？
 ```
 
-## 当前假设
+### 当前假设
 
 目前早期观察是：
 
