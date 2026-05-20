@@ -28,6 +28,7 @@ class RolloutStatsPayload(TypedDict):
     env_info: dict[str, Any]
     residual: dict[str, Any]
     replay: dict[str, Any]
+    reward_model: dict[str, Any]
 
 
 class ActorProgressPayload(TypedDict):
@@ -68,6 +69,7 @@ def build_rollout_stats_payload(
     env_info: Mapping[str, Any] | None = None,
     residual: Mapping[str, Any] | None = None,
     replay: Mapping[str, Any] | None = None,
+    reward_model: Mapping[str, Any] | None = None,
 ) -> RolloutStatsPayload:
     """Build a transport-safe actor->learner rollout stats payload."""
 
@@ -89,12 +91,19 @@ def build_rollout_stats_payload(
         if isinstance(serialized_replay, Mapping):
             replay_payload = dict(serialized_replay)
 
+    reward_model_payload: dict[str, Any] = {}
+    if reward_model is not None:
+        serialized_reward_model = to_jsonable(dict(reward_model))
+        if isinstance(serialized_reward_model, Mapping):
+            reward_model_payload = dict(serialized_reward_model)
+
     return {
         "env_steps": int(env_steps),
         "rollout": dict(rollout),
         "env_info": env_info_payload,
         "residual": residual_payload,
         "replay": replay_payload,
+        "reward_model": reward_model_payload,
     }
 
 
@@ -142,12 +151,18 @@ def parse_rollout_stats_payload(
     if isinstance(replay, Mapping):
         replay_payload = dict(replay)
 
+    reward_model_payload: dict[str, Any] = {}
+    reward_model = payload.get("reward_model", None)
+    if isinstance(reward_model, Mapping):
+        reward_model_payload = dict(reward_model)
+
     return {
         "env_steps": int(env_steps),
         "rollout": rollout,
         "env_info": env_info_payload,
         "residual": residual_payload,
         "replay": replay_payload,
+        "reward_model": reward_model_payload,
     }
 
 

@@ -48,6 +48,12 @@ DEFAULT_ROLLOUT_METRICS = (
     "residual/saturation_rate",
     "action/mean_abs_delta_from_base",
     "action/max_abs_delta_from_base",
+    "reward_model/bonus_sum",
+    "reward_model/triggered",
+    "reward_model/trigger_step",
+    "reward_model/max_score",
+    "reward_model/scored_steps",
+    "reward_model/shaped_episode_return",
 )
 DEFAULT_ROLLOUT_METRIC_MAPPING = (
     ("episode_id", DEFAULT_ROLLOUT_AXIS_METRIC),
@@ -79,6 +85,15 @@ ROLLOUT_ENV_STEP_METRIC_MAPPING = (
     (
         "action/max_abs_delta_from_base",
         "action_by_env_steps/max_abs_delta_from_base",
+    ),
+    ("reward_model/bonus_sum", "reward_model_by_env_steps/bonus_sum"),
+    ("reward_model/triggered", "reward_model_by_env_steps/triggered"),
+    ("reward_model/trigger_step", "reward_model_by_env_steps/trigger_step"),
+    ("reward_model/max_score", "reward_model_by_env_steps/max_score"),
+    ("reward_model/scored_steps", "reward_model_by_env_steps/scored_steps"),
+    (
+        "reward_model/shaped_episode_return",
+        "reward_model_by_env_steps/shaped_episode_return",
     ),
 )
 
@@ -198,6 +213,24 @@ def extract_rollout_wandb_metrics(
                     ("saturation_rate", "residual/saturation_rate"),
                     ("action_delta_mean_abs", "action/mean_abs_delta_from_base"),
                     ("action_delta_max_abs", "action/max_abs_delta_from_base"),
+                ),
+            )
+        )
+    reward_model = payload.get("reward_model", None)
+    if isinstance(reward_model, Mapping):
+        metrics.update(
+            extract_numeric_metrics(
+                reward_model,
+                (
+                    ("bonus_sum", "reward_model/bonus_sum"),
+                    ("triggered", "reward_model/triggered"),
+                    ("trigger_step", "reward_model/trigger_step"),
+                    ("max_score", "reward_model/max_score"),
+                    ("scored_steps", "reward_model/scored_steps"),
+                    (
+                        "shaped_episode_return",
+                        "reward_model/shaped_episode_return",
+                    ),
                 ),
             )
         )

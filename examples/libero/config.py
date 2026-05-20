@@ -26,6 +26,7 @@ PolicyBackend = Literal["openpi", "joyra"]
 OptimizerType = Literal["adam", "adamw"]
 KeyRLMode = Literal["fixed_step", "fixed_stages"]
 KeyRLReplayMode = Literal["active_only"]
+RewardModelStage = Literal["stage1"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +116,19 @@ class KeyRLConfig:
     stage1: KeyRLStageConfig
     stage2: KeyRLStageConfig
     stage3: KeyRLStageConfig
+
+
+@dataclass(frozen=True, slots=True)
+class RewardModelConfig:
+    enabled: bool
+    checkpoint_path: str | None
+    views: tuple[str, ...]
+    threshold: float
+    bonus: float
+    stage: RewardModelStage
+    one_shot: bool
+    apply_only_when_key_rl_active: bool
+    device: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +357,7 @@ class LiberoTrainConfig:
     obs: ObsConfig
     residual: ResidualConfig
     key_rl: KeyRLConfig
+    reward_model: RewardModelConfig
     encoder: EncoderConfig
     network: NetworkConfig
     sac: SacConfig
@@ -1022,6 +1037,51 @@ def _parse_key_rl_cfg(cfg: DictConfig) -> KeyRLConfig:
     )
 
 
+def _parse_reward_model_cfg(cfg: DictConfig) -> RewardModelConfig:
+    reward_model_cfg = cfg.get("reward_model", {}) or {}
+    enabled = bool(reward_model_cfg.get("enabled", False))
+    checkpoint_path = _optional_str(reward_model_cfg.get("checkpoint_path", None))
+    if enabled and checkpoint_path is None:
+        raise ValueError(
+            "reward_model.checkpoint_path must be set when reward_model.enabled=true"
+        )
+    views = tuple(
+        _required_str(value, "reward_model.views[]")
+        for value in reward_model_cfg.get("views", ("wrist",))
+    )
+    if not views:
+        raise ValueError("reward_model.views must contain at least one view")
+    threshold = _float_value(
+        reward_model_cfg.get("threshold", 0.8),
+        "reward_model.threshold",
+    )
+    if threshold < 0.0 or threshold > 1.0:
+        raise ValueError(
+            f"reward_model.threshold must be in [0, 1], got {threshold}"
+        )
+    stage = _parse_choice(
+        reward_model_cfg.get("stage", "stage1"),
+        "reward_model.stage",
+        allowed=("stage1",),
+    )
+    return RewardModelConfig(
+        enabled=enabled,
+        checkpoint_path=checkpoint_path,
+        views=views,
+        threshold=threshold,
+        bonus=_nonnegative_float(
+            reward_model_cfg.get("bonus", 0.5),
+            "reward_model.bonus",
+        ),
+        stage=cast(RewardModelStage, stage),
+        one_shot=bool(reward_model_cfg.get("one_shot", True)),
+        apply_only_when_key_rl_active=bool(
+            reward_model_cfg.get("apply_only_when_key_rl_active", True)
+        ),
+        device=_optional_str(reward_model_cfg.get("device", None)),
+    )
+
+
 def _parse_encoder_cfg(cfg: DictConfig) -> EncoderConfig:
     encoder_cfg = cfg.get("encoder", {})
     resnet_cfg = encoder_cfg.get("resnet", None)
@@ -1639,6 +1699,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
     obs = _parse_obs_cfg(cfg)
     residual = _parse_residual_cfg(cfg, action_dim=env.action_dim)
     key_rl = _parse_key_rl_cfg(cfg)
+    reward_model = _parse_reward_model_cfg(cfg)
     encoder = _parse_encoder_cfg(cfg)
     offline = _parse_offline_cfg(cfg)
     policy = _parse_policy_cfg(cfg)
@@ -1664,6 +1725,7 @@ def parse_train_cfg(cfg: DictConfig) -> LiberoTrainConfig:
         obs=obs,
         residual=residual,
         key_rl=key_rl,
+        reward_model=reward_model,
         encoder=encoder,
         network=_parse_network_cfg(cfg),
         sac=_parse_sac_cfg(cfg),
@@ -1797,6 +1859,8 @@ __all__ = [
     "RemoteEnvConfig",
     "ReplayConfig",
     "ReplayPreparedChunkConfig",
+    "RewardModelConfig",
+    "RewardModelStage",
     "ResidualConfig",
     "ResnetConfig",
     "RuntimeConfig",

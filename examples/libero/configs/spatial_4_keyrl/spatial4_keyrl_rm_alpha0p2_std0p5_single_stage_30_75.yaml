@@ -1,0 +1,32 @@
+# @package _global_
+defaults:
+  - /spatial_4_keyrl/spatial4_keyrl_alpha0p2_std0p5_single_stage_30_75@_global_
+  - _self_
+
+wandb:
+  exp_name: spatial4_keyrl_rm_alpha0p2_std0p5_single_stage_30_75
+  group: libero_spatial_task4_keyrl_reward_model
+
+reward_model:
+  enabled: true
+  checkpoint_path: null
+  views: [wrist]
+  threshold: 0.8
+  bonus: 0.5
+  stage: stage1
+  one_shot: true
+  apply_only_when_key_rl_active: true
+  device: null
+
+launch:
+  output_root: outputs/spatial_4_keyrl/spatial4_keyrl_rm_alpha0p2_std0p5_single_stage_30_75
+
+notes:
+  experiment_note: "KeyRL stage1 reward-model shaping: alpha=0.2, std_max=0.5, [30,75), wrist RM"
+  changed_fields:
+  - reward_model.enabled=true
+  - reward_model.views=[wrist]
+  - reward_model.threshold=0.8
+  - reward_model.bonus=0.5
+  - reward_model.stage=stage1
+  - reward_model.checkpoint_path must be provided as an override

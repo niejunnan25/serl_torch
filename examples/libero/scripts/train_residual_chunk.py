@@ -110,6 +110,15 @@ from serl_torch.examples.libero.runtime.key_rl import build_key_rl_progress
 from serl_torch.examples.libero.runtime.key_rl import key_rl_active
 from serl_torch.examples.libero.runtime.key_rl import key_rl_active_step_ranges
 from serl_torch.examples.libero.runtime.key_rl import validate_key_rl_chunk_boundary
+from serl_torch.examples.libero.runtime.stage_reward_model import (
+    StageRewardEpisodeState,
+)
+from serl_torch.examples.libero.runtime.stage_reward_model import (
+    build_stage_reward_model_runtime,
+)
+from serl_torch.examples.libero.runtime.stage_reward_model import (
+    stage_reward_episode_payload,
+)
 from serl_torch.examples.libero.runtime.transition_assembly import (
     AssemblyResult,
 )
@@ -143,6 +152,7 @@ def actor(
         chunk_horizon=int(chunk_horizon),
         context="key_rl",
     )
+    stage_reward_model = build_stage_reward_model_runtime(cfg, logger=logger)
     transition_assembler = LiberoActorTransitionAssembler(
         cfg=cfg,
         policy_client=policy_client,
@@ -211,6 +221,9 @@ def actor(
     active_steps = 0
     replay_inserted_steps = 0
     skipped_base_only_steps = 0
+    reward_model_bonus_sum = 0.0
+    reward_model_triggered_episodes = 0
+    reward_model_max_score = 0.0
     episode_id = 0
     success_count = 0
     current_task_prompt: str | None = None
@@ -227,6 +240,9 @@ def actor(
         "active_steps": 0,
         "replay_inserted_steps": 0,
         "skipped_base_only_steps": 0,
+        "reward_model_bonus_sum": 0.0,
+        "reward_model_triggered_episodes": 0,
+        "reward_model_max_score": 0.0,
         "episodes": 0,
         "successes": 0,
         "timer_log_path": str(actor_timer_log_path),
@@ -330,11 +346,13 @@ def actor(
             current_task_prompt = str(task_prompt)
             prefetched = None
             episode_return = 0.0
+            shaped_episode_return = 0.0
             episode_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
             episode_chunk_seq = 0
             episode_residual_stats = ResidualActionStatsAccumulator()
+            episode_reward_model_state = StageRewardEpisodeState()
 
             while env_steps < max_env_steps:
                 if transition_assembler.async_transition_assembly_enabled:
@@ -431,10 +449,20 @@ def actor(
                         )
                 episode_chunk_seq += 1
                 previous_env_steps = int(env_steps)
+                replay_chunk = raw_chunk
+                if stage_reward_model is not None:
+                    with timer.context("reward_model"):
+                        replay_chunk, _reward_model_chunk_stats = (
+                            stage_reward_model.shape_chunk(
+                                raw_chunk=raw_chunk,
+                                episode_state=episode_reward_model_state,
+                                key_active=bool(key_active),
+                            )
+                        )
                 with timer.context("assemble_transitions"):
                     if key_active:
                         assembled_chunks = transition_assembler.handle_chunk(
-                            raw=raw_chunk,
+                            raw=replay_chunk,
                             task_prompt=task_prompt,
                         )
                     else:
@@ -469,6 +497,7 @@ def actor(
                 progress_bar.update(int(raw_chunk.executed_steps))
                 episode_steps += int(raw_chunk.executed_steps)
                 episode_return += float(raw_chunk.reward_sum)
+                shaped_episode_return += float(replay_chunk.reward_sum)
                 episode_success = bool(
                     episode_success
                     or any(
@@ -531,6 +560,18 @@ def actor(
                 replay_inserted_steps=int(replay_inserted_steps),
                 skipped_base_only_steps=int(skipped_base_only_steps),
             )
+            reward_model_payload = stage_reward_episode_payload(
+                enabled=stage_reward_model is not None,
+                episode_state=episode_reward_model_state,
+                shaped_episode_return=float(shaped_episode_return),
+                env_episode_return=float(episode_return),
+            )
+            reward_model_bonus_sum += float(reward_model_payload["bonus_sum"])
+            reward_model_triggered_episodes += int(reward_model_payload["triggered"])
+            reward_model_max_score = max(
+                float(reward_model_max_score),
+                float(reward_model_payload["max_score"]),
+            )
             episode_stats = build_rollout_stats_payload(
                 env_steps=int(env_steps),
                 rollout=build_rollout_payload(
@@ -545,6 +586,7 @@ def actor(
                 env_info=last_info,
                 residual=episode_residual_stats.summary(),
                 replay=replay_progress,
+                reward_model=reward_model_payload,
             )
 
             append_jsonl(
@@ -578,7 +620,8 @@ def actor(
             )
             logger.info(
                 "episode=%s success=%s steps=%s return=%.3f env_steps=%s "
-                "active_steps=%s replay_inserted_steps=%s skipped_base_only_steps=%s",
+                "active_steps=%s replay_inserted_steps=%s skipped_base_only_steps=%s "
+                "rm_bonus=%.3f rm_trigger_step=%s rm_max_score=%.3f",
                 int(episode_id),
                 bool(episode_success),
                 int(episode_steps),
@@ -587,6 +630,9 @@ def actor(
                 int(active_steps),
                 int(replay_inserted_steps),
                 int(skipped_base_only_steps),
+                float(reward_model_payload["bonus_sum"]),
+                reward_model_payload["trigger_step"],
+                float(reward_model_payload["max_score"]),
             )
 
     finally:
@@ -639,6 +685,11 @@ def actor(
                 "active_steps": int(active_steps),
                 "replay_inserted_steps": int(replay_inserted_steps),
                 "skipped_base_only_steps": int(skipped_base_only_steps),
+                "reward_model_bonus_sum": float(reward_model_bonus_sum),
+                "reward_model_triggered_episodes": int(
+                    reward_model_triggered_episodes
+                ),
+                "reward_model_max_score": float(reward_model_max_score),
                 "key_rl": build_key_rl_progress(
                     key_rl_cfg=cfg.key_rl,
                     env_steps=int(env_steps),

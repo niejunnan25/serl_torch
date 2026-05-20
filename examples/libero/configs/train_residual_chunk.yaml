@@ -85,6 +85,18 @@ key_rl:
     enabled: false
     start_step: 0
     end_step: 0
+
+reward_model:
+  enabled: false
+  checkpoint_path: null
+  views: [wrist]
+  threshold: 0.8
+  bonus: 0.5
+  stage: stage1
+  one_shot: true
+  apply_only_when_key_rl_active: true
+  device: null
+
 encoder:
   type: resnet
   shared: true

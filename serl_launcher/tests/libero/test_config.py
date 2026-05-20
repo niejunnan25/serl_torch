@@ -106,6 +106,15 @@ class LiberoConfigTest(unittest.TestCase):
             self.assertFalse(stage.enabled)
             self.assertEqual(stage.start_step, 0)
             self.assertEqual(stage.end_step, 0)
+        self.assertFalse(parsed.reward_model.enabled)
+        self.assertIsNone(parsed.reward_model.checkpoint_path)
+        self.assertEqual(parsed.reward_model.views, ("wrist",))
+        self.assertEqual(parsed.reward_model.threshold, 0.8)
+        self.assertEqual(parsed.reward_model.bonus, 0.5)
+        self.assertEqual(parsed.reward_model.stage, "stage1")
+        self.assertTrue(parsed.reward_model.one_shot)
+        self.assertTrue(parsed.reward_model.apply_only_when_key_rl_active)
+        self.assertIsNone(parsed.reward_model.device)
 
     def test_parse_train_cfg_reads_key_rl_override(self) -> None:
         cfg = OmegaConf.load(
@@ -126,6 +135,51 @@ class LiberoConfigTest(unittest.TestCase):
         self.assertEqual(parsed.key_rl.replay_mode, "active_only")
         self.assertTrue(parsed.key_rl.require_chunk_boundary)
         self.assertFalse(parsed.key_rl.stage1.enabled)
+
+    def test_parse_train_cfg_reads_reward_model_override(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.reward_model.enabled = True
+        cfg.reward_model.checkpoint_path = "/tmp/stage1_reward_model.pt"
+        cfg.reward_model.views = ["wrist"]
+        cfg.reward_model.threshold = 0.75
+        cfg.reward_model.bonus = 0.25
+        cfg.reward_model.device = "cuda:0"
+
+        parsed = parse_train_cfg(cfg)
+
+        self.assertTrue(parsed.reward_model.enabled)
+        self.assertEqual(
+            parsed.reward_model.checkpoint_path,
+            "/tmp/stage1_reward_model.pt",
+        )
+        self.assertEqual(parsed.reward_model.views, ("wrist",))
+        self.assertEqual(parsed.reward_model.threshold, 0.75)
+        self.assertEqual(parsed.reward_model.bonus, 0.25)
+        self.assertEqual(parsed.reward_model.stage, "stage1")
+        self.assertEqual(parsed.reward_model.device, "cuda:0")
+
+    def test_parse_train_cfg_rejects_enabled_reward_model_without_checkpoint(self) -> None:
+        cfg = OmegaConf.load(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "libero"
+            / "configs"
+            / "train_residual_chunk.yaml"
+        )
+        cfg.reward_model.enabled = True
+        cfg.reward_model.checkpoint_path = None
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "reward_model.checkpoint_path must be set",
+        ):
+            parse_train_cfg(cfg)
 
     def test_parse_train_cfg_reads_key_rl_fixed_stages_override(self) -> None:
         cfg = OmegaConf.load(
