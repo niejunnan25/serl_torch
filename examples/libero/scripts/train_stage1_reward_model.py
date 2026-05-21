@@ -148,6 +148,31 @@ def _column_for_view(view: str) -> str:
         ) from exc
 
 
+def _resolve_labeled_image_path(
+    path_text: str,
+    *,
+    labels_root: Path,
+    demo: str,
+    column: str,
+) -> Path:
+    path = Path(path_text)
+    if path.exists():
+        return path
+
+    parts = path.parts
+    if "labled" in parts:
+        relative = Path(*parts[parts.index("labled") + 1 :])
+        candidate = labels_root / relative
+        if candidate.exists():
+            return candidate
+
+    view_dir = "wrist" if column == "wrist_image" else "agentview"
+    candidate = labels_root / view_dir / str(demo) / path.name
+    if candidate.exists():
+        return candidate
+    return path
+
+
 def _load_examples(
     labels_csv: Path,
     *,
@@ -156,13 +181,24 @@ def _load_examples(
 ) -> list[RewardModelExample]:
     view_columns = tuple(_column_for_view(view) for view in views)
     examples: list[RewardModelExample] = []
+    labels_root = labels_csv.parent
     with labels_csv.open("r", encoding="utf-8", newline="") as fp:
         reader = csv.DictReader(fp)
         for row in reader:
             raw_label = int(row["label"])
             if raw_label not in {-1, 1}:
                 continue
-            image_paths = tuple(str(Path(row[column])) for column in view_columns)
+            image_paths = tuple(
+                str(
+                    _resolve_labeled_image_path(
+                        row[column],
+                        labels_root=labels_root,
+                        demo=str(row["demo"]),
+                        column=column,
+                    )
+                )
+                for column in view_columns
+            )
             missing_paths = [path for path in image_paths if not Path(path).exists()]
             if missing_paths:
                 raise FileNotFoundError(
