@@ -3,11 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import numpy as np
+
 from serl_torch.examples.libero.runtime.stage_reward_model import (
     StageRewardEpisodeState,
 )
 from serl_torch.examples.libero.runtime.stage_reward_model import (
     apply_stage_reward_scores,
+)
+from serl_torch.examples.libero.runtime.stage_reward_model import (
+    observations_to_reward_model_obs,
 )
 
 
@@ -130,3 +135,41 @@ def test_stage_reward_skips_key_inactive_chunks() -> None:
 
     assert shaped is raw
     assert stats.bonus_sum == 0.0
+
+
+def test_reward_model_raw_wrist_image_uses_libero_preprocess_rotation() -> None:
+    wrist = np.asarray(
+        [
+            [[1, 0, 0], [2, 0, 0]],
+            [[3, 0, 0], [4, 0, 0]],
+        ],
+        dtype=np.uint8,
+    )
+    agentview = np.zeros_like(wrist)
+
+    out = observations_to_reward_model_obs(
+        [{"wrist_image": wrist, "agentview_image": agentview}],
+        views=("wrist",),
+        image_size=2,
+    )
+
+    assert out["image_rgb_1"].shape == (1, 1, 2, 2, 3)
+    assert out["image_rgb_1"][0, 0, :, :, 0].tolist() == [[4, 3], [2, 1]]
+
+
+def test_reward_model_canonical_image_rgb_is_already_preprocessed() -> None:
+    wrist = np.asarray(
+        [
+            [[1, 0, 0], [2, 0, 0]],
+            [[3, 0, 0], [4, 0, 0]],
+        ],
+        dtype=np.uint8,
+    )
+
+    out = observations_to_reward_model_obs(
+        [{"image_rgb_1": wrist}],
+        views=("wrist",),
+        image_size=2,
+    )
+
+    assert out["image_rgb_1"][0, 0, :, :, 0].tolist() == [[1, 2], [3, 4]]

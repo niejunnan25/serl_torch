@@ -42,6 +42,14 @@ _VIEW_COLUMNS = {
 }
 
 
+def _model_obs_key_for_view(view: str) -> str:
+    if str(view) in ("wrist", "wrist_image", "image_rgb_1"):
+        return "image_rgb_1"
+    if str(view) in ("agentview", "image", "image_rgb_0"):
+        return "image_rgb_0"
+    return str(view)
+
+
 @dataclass(frozen=True)
 class RewardModelExample:
     demo: str
@@ -75,7 +83,7 @@ class StageRewardImageDataset(Dataset[tuple[dict[str, torch.Tensor], torch.Tenso
                     (self.image_size, self.image_size),
                     resample=Image.BILINEAR,
                 )
-            obs[str(view)] = np.asarray(image, dtype=np.uint8)
+            obs[_model_obs_key_for_view(str(view))] = np.asarray(image, dtype=np.uint8)
         model_obs = observations_to_reward_model_obs(
             [obs],
             views=self.views,

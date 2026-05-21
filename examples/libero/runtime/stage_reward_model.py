@@ -149,8 +149,8 @@ def observations_to_reward_model_obs(
     for obs in observations:
         obs_dict = dict(obs)
         extracted_images: dict[str, np.ndarray] | None = None
-        for view, slot_key in view_slots:
-            image = _lookup_preprocessed_image(obs_dict, view=view, slot_key=slot_key)
+        for _view, slot_key in view_slots:
+            image = _lookup_preprocessed_image(obs_dict, slot_key=slot_key)
             if image is None:
                 if extracted_images is None:
                     extracted_images = extract_libero_images(obs_dict)
@@ -167,17 +167,14 @@ def observations_to_reward_model_obs(
 def _lookup_preprocessed_image(
     obs: dict[str, Any],
     *,
-    view: str,
     slot_key: str,
 ) -> np.ndarray | None:
-    candidates = (
-        slot_key,
-        str(view),
-        _VIEW_ALIASES.get(str(view), str(view)),
-    )
-    for candidate in candidates:
-        if candidate in obs:
-            return np.asarray(obs[candidate], dtype=np.uint8)
+    # Only canonical image_rgb_* keys mean the image has already gone through the
+    # same preprocessing path used by the base-policy request. Raw LIBERO keys
+    # such as wrist_image / agentview_image must still be routed through
+    # extract_libero_images() so rotation and resize behavior stays aligned.
+    if slot_key in obs:
+        return np.asarray(obs[slot_key], dtype=np.uint8)
     return None
 
 
