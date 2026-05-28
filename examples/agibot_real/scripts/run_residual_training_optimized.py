@@ -3,6 +3,8 @@ from __future__ import annotations
 """Copy-style AgiBot residual DRQ training script."""
 
 from collections import deque
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import sys
@@ -84,6 +86,9 @@ from serl_torch.examples.agibot_real.transition_assembly import AssemblyResult
 from serl_torch.examples.agibot_real.transition_assembly import RawChunkRecord
 from serl_torch.examples.agibot_real.transition_assembly import (
     count_executed_steps_from_infos,
+)
+from serl_torch.examples.agibot_real.transition_assembly import (
+    infer_chunk_residual_obs,
 )
 
 
@@ -268,6 +273,94 @@ def actor(
                     )
             committed_env_steps += int(assembled_chunk.env_steps_delta)
 
+    deferred_hitl_policy = None
+    deferred_hitl_executor: ThreadPoolExecutor | None = None
+    if bool(cfg.hitl.enabled):
+        deferred_hitl_policy = build_agibot_base_policy(
+            cfg,
+            logger=logger,
+            host=str(cfg.backfill_policy.host),
+            port=int(cfg.backfill_policy.port),
+        )
+        deferred_hitl_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="agibot-hitl-deferred",
+        )
+    deferred_hitl_backlog: deque[dict[str, Any]] = deque()
+    deferred_hitl_future: Future[tuple[RawChunkRecord, str]] | None = None
+    deferred_hitl_last_log_t = 0.0
+
+    def _build_deferred_hitl_raw_chunk(
+        deferred: dict[str, Any],
+    ) -> tuple[RawChunkRecord, str]:
+        if deferred_hitl_policy is None:
+            raise RuntimeError("deferred HITL policy is not initialized")
+        task_prompt_for_chunk = str(deferred["task_prompt"])
+        _base_actions, residual_obs_before_chunk = infer_chunk_residual_obs(
+            obs=dict(deferred["obs_before_chunk"]),
+            task_prompt=task_prompt_for_chunk,
+            base_policy=deferred_hitl_policy,
+            image_keys=image_keys,
+            residual_alpha=float(cfg.residual.alpha),
+        )
+        raw_chunk = RawChunkRecord.from_step_chunk_result(
+            episode_id=int(deferred["episode_id"]),
+            episode_step_start=int(deferred["episode_step_start"]),
+            residual_obs_before_chunk=residual_obs_before_chunk,
+            action_chunk=np.asarray(deferred["action_chunk"], dtype=np.float32),
+            chunk_result=dict(deferred["chunk_result"]),
+        )
+        return raw_chunk, task_prompt_for_chunk
+
+    def _submit_deferred_hitl_chunks(
+        deferred_hitl_chunks: list[dict[str, Any]],
+    ) -> None:
+        if not deferred_hitl_chunks:
+            return
+        logger.info(
+            "Queueing deferred HITL transition chunks: count=%s",
+            len(deferred_hitl_chunks),
+        )
+        for deferred in deferred_hitl_chunks:
+            deferred_hitl_backlog.append(dict(deferred))
+        deferred_hitl_chunks.clear()
+
+    def _drain_deferred_hitl_futures(*, block: bool) -> None:
+        nonlocal deferred_hitl_future
+        nonlocal deferred_hitl_last_log_t
+        if deferred_hitl_executor is None:
+            return
+        while True:
+            if deferred_hitl_future is None and deferred_hitl_backlog:
+                deferred_hitl_future = deferred_hitl_executor.submit(
+                    _build_deferred_hitl_raw_chunk,
+                    dict(deferred_hitl_backlog.popleft()),
+                )
+            if deferred_hitl_future is None:
+                break
+            if not block and not deferred_hitl_future.done():
+                now = time.monotonic()
+                if now - float(deferred_hitl_last_log_t) >= 5.0:
+                    logger.info(
+                        "Deferred HITL backlog pending=%s in_flight=1",
+                        len(deferred_hitl_backlog),
+                    )
+                    deferred_hitl_last_log_t = now
+                break
+            raw_chunk, task_prompt_for_chunk = deferred_hitl_future.result()
+            deferred_hitl_future = None
+            with timer.context("assemble_transitions"):
+                assembled_chunks = transition_assembler.handle_chunk(
+                    raw=raw_chunk,
+                    task_prompt=str(task_prompt_for_chunk),
+                )
+            if transition_assembler.async_transition_assembly_enabled:
+                _commit_assembled_chunks(assembled_chunks)
+            else:
+                _commit_assembled_chunks(assembled_chunks)
+            if not block:
+                break
+
     progress_bar = tqdm(
         total=int(max_env_steps),
         desc="actor env_steps",
@@ -296,28 +389,15 @@ def actor(
             episode_steps = 0
             episode_success = False
             last_info: dict[str, Any] = {}
+            deferred_hitl_chunks: list[dict[str, Any]] = []
 
             while env_steps < max_env_steps:
                 if transition_assembler.async_transition_assembly_enabled:
                     with timer.context("commit_replay"):
                         _commit_assembled_chunks(transition_assembler.drain_ready())
+                with timer.context("commit_replay"):
+                    _drain_deferred_hitl_futures(block=False)
                 timer.tick("total")
-                with timer.context("prepare_action_chunk"):
-                    decision_obs = transition_assembler.pop_prefetched_decision_obs()
-                    if decision_obs is None:
-                        decision_obs = transition_assembler.infer_decision_obs(
-                            obs=obs,
-                            task_prompt=task_prompt,
-                        )
-                    residual_actions = agent.sample_action(
-                        decision_obs.residual_obs,
-                        deterministic=False,
-                    )
-                    final_actions = residual_action_spec.compose_chunk(
-                        base_action_chunk=decision_obs.base_actions,
-                        residual_action=residual_actions,
-                    )
-
                 episode_done = False
                 should_log_timer = False
                 remaining_env_steps = max(0, int(max_env_steps - env_steps))
@@ -325,17 +405,40 @@ def actor(
                     timer.tock("total")
                     break
 
-                action_chunk = np.asarray(final_actions, dtype=np.float32)[
-                    :remaining_env_steps
-                ]
+                decision_obs = None
                 hitl_infos: list[dict[str, Any]] = []
-                hitl_chunk = hitl_runtime.poll_action_chunk()
-                if hitl_chunk is not None:
-                    action_chunk = np.asarray(hitl_chunk.actions, dtype=np.float32)[
-                        :remaining_env_steps
-                    ]
-                    hitl_infos = [dict(info) for info in hitl_chunk.infos]
+                with timer.context("prepare_action_chunk"):
+                    hitl_chunk = hitl_runtime.poll_action_chunk()
+                    if hitl_chunk is not None:
+                        action_chunk = np.asarray(
+                            hitl_chunk.actions,
+                            dtype=np.float32,
+                        )[:remaining_env_steps]
+                        hitl_infos = [dict(info) for info in hitl_chunk.infos]
+                    else:
+                        if deferred_hitl_chunks:
+                            _submit_deferred_hitl_chunks(deferred_hitl_chunks)
+                        with timer.context("commit_replay"):
+                            _drain_deferred_hitl_futures(block=False)
+                        decision_obs = transition_assembler.pop_prefetched_decision_obs()
+                        if decision_obs is None:
+                            decision_obs = transition_assembler.infer_decision_obs(
+                                obs=obs,
+                                task_prompt=task_prompt,
+                            )
+                        residual_actions = agent.sample_action(
+                            decision_obs.residual_obs,
+                            deterministic=False,
+                        )
+                        final_actions = residual_action_spec.compose_chunk(
+                            base_action_chunk=decision_obs.base_actions,
+                            residual_action=residual_actions,
+                        )
+                        action_chunk = np.asarray(final_actions, dtype=np.float32)[
+                            :remaining_env_steps
+                        ]
 
+                obs_before_chunk = dict(obs)
                 with timer.context("step_env"):
                     chunk_result = env.step_chunk(action_chunk)
 
@@ -360,6 +463,9 @@ def actor(
                         raise RuntimeError(
                             "step_chunk returned no executed actions without a terminal outcome"
                         )
+                    _submit_deferred_hitl_chunks(deferred_hitl_chunks)
+                    with timer.context("commit_replay"):
+                        _drain_deferred_hitl_futures(block=True)
                     with timer.context("commit_replay"):
                         commit_finished_episode_chunks(
                             transition_assembler=transition_assembler,
@@ -393,10 +499,72 @@ def actor(
                         )
                     break
 
+                if hitl_infos:
+                    deferred_hitl_chunks.append(
+                        {
+                            "episode_id": int(episode_id),
+                            "episode_step_start": int(episode_steps),
+                            "obs_before_chunk": dict(obs_before_chunk),
+                            "action_chunk": np.asarray(
+                                action_chunk,
+                                dtype=np.float32,
+                            ).copy(),
+                            "chunk_result": dict(chunk_result),
+                            "task_prompt": str(task_prompt),
+                        }
+                    )
+                    previous_env_steps = int(env_steps)
+                    env_steps += int(executed_steps)
+                    progress_bar.update(int(executed_steps))
+                    episode_steps += int(executed_steps)
+                    episode_return += float(chunk_result["reward_sum"])
+                    episode_success = bool(
+                        episode_success
+                        or any(bool(info.get("success", False)) for info in chunk_infos)
+                    )
+                    last_info = dict(chunk_result["info"])
+
+                    for step_offset in range(1, int(executed_steps) + 1):
+                        next_env_step = int(previous_env_steps + step_offset)
+                        if next_env_step % log_period == 0:
+                            should_log_timer = True
+
+                    if (
+                        bool(chunk_result["done"] or chunk_result["truncated"])
+                        or env_steps >= max_env_steps
+                    ):
+                        episode_done = True
+
+                    timer.tock("total")
+
+                    if should_log_timer:
+                        append_jsonl(
+                            actor_timer_log_path,
+                            {
+                                "source": "actor",
+                                "env_steps": int(env_steps),
+                                "episode_id": int(episode_id),
+                                "episode_steps": int(episode_steps),
+                                "timer": timer.get_average_times(),
+                                "transport": _transport_status(),
+                            },
+                        )
+
+                    if episode_done:
+                        break
+                    continue
+
                 raw_chunk = RawChunkRecord.from_step_chunk_result(
                     episode_id=int(episode_id),
                     episode_step_start=int(episode_steps),
-                    residual_obs_before_chunk=decision_obs.residual_obs,
+                    residual_obs_before_chunk=(
+                        transition_assembler.infer_decision_obs(
+                            obs=obs_before_chunk,
+                            task_prompt=task_prompt,
+                        ).residual_obs
+                        if decision_obs is None
+                        else decision_obs.residual_obs
+                    ),
                     action_chunk=action_chunk,
                     chunk_result=chunk_result,
                 )
@@ -453,6 +621,9 @@ def actor(
                 if episode_done:
                     break
 
+            _submit_deferred_hitl_chunks(deferred_hitl_chunks)
+            with timer.context("commit_replay"):
+                _drain_deferred_hitl_futures(block=True)
             next_reset_error: Exception | None = None
             should_prefetch_next_reset = bool(
                 transition_assembler.async_transition_assembly_enabled
@@ -533,6 +704,7 @@ def actor(
     finally:
         if current_task_prompt is not None:
             try:
+                _drain_deferred_hitl_futures(block=True)
                 _commit_assembled_chunks(
                     transition_assembler.finish_episode(
                         block=True,
@@ -574,6 +746,16 @@ def actor(
             pass
         try:
             base_policy.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if deferred_hitl_policy is not None:
+                deferred_hitl_policy.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if deferred_hitl_executor is not None:
+                deferred_hitl_executor.shutdown(wait=True)
         except Exception:  # noqa: BLE001
             pass
         try:

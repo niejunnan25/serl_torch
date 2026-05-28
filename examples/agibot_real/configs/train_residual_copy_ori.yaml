@@ -19,9 +19,9 @@ runtime:
   broadcast_port: 5489
   data_store_queue_size: 2000
   trainer_transport:
-    mode: sync_commit
+    mode: async_commit
     data_port: 5490
-    control_timeout_ms: 800
+    control_timeout_ms: 2000
     data_queue_capacity: 8
     data_socket_hwm: 8
     commit_poll_ms: 20
@@ -30,8 +30,8 @@ runtime:
 
 wandb:
   project: agibot_real
-  exp_name: ${task.name}_residual_optimized
-  group: residual_optimized
+  exp_name: ${task.name}_residual_copy
+  group: residual_copy
   debug: false
 
 policy:
@@ -43,40 +43,12 @@ policy:
 backfill_policy:
   enabled: true
   host: ${policy.host}
-  # By default async backfill shares the main policy server so the optimized config
-  # works out of the box with a single JoyRA instance. For lower control-time
-  # contention on real robot, override this to a dedicated backfill server port.
   port: ${policy.port}
-  # This is a backlog / staleness cap, not a speed knob. With chunk_horizon=30 and
-  # task.hz=30, each pending chunk is roughly 1 second of rollout, so 10 means the
-  # actor can tolerate about 10 seconds of lag before backpressure kicks in. If you
-  # run a dedicated backfill server on real robot, start around 4 unless profiling
-  # shows you really need more.
-  max_pending_chunks: 10
+  # This remains a backlog / staleness guard even with async_commit transport.
+  # Start around 4 on real robot and only raise it if profiling shows the actor
+  # is being needlessly back-pressured.
+  max_pending_chunks: 4
   mode: thread
-
-hitl:
-  enabled: false
-  type: quest_vr
-  hand: right
-  # VR is only sampled when the grip button is already active at an action
-  # boundary. Keep HITL chunks short so teleoperation remains closed-loop.
-  vr_chunk_horizon: 1
-  max_delta: 100.0
-  max_step: 0.008
-  smoothing: 0.30
-  command_deadband: 0.001
-  max_rot_delta_deg: 360.0
-  max_rot_step_deg: 2.8
-  rot_smoothing: 0.16
-  rotation_deadband_deg: 0.7
-  rot_map: -ry,-rx,-rz
-  gripper_open: 0.0
-  gripper_closed: 120.0
-  gripper_deadband: 0.5
-  scaling_factor: 0.5
-  control_freq: 30
-  coordinate_mapping: sim
 
 robot:
   assets_root: null
@@ -190,7 +162,6 @@ training:
     dtype: bfloat16
 
   torch_compile:
-    # Actor path ignores this flag; learner compiles actor+critic for long-running runs.
     enabled: true
     target: actor_critic
     backend: inductor
@@ -207,7 +178,7 @@ logging:
   episode_log_file: episode_logs.jsonl
 
 launch:
-  output_root: outputs/agibot_real_optimized
+  output_root: outputs/agibot_real_copy
 
 hydra:
   run:

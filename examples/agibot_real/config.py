@@ -750,7 +750,7 @@ def _parse_hitl_cfg(cfg: DictConfig) -> HitlConfig:
     hand = _parse_choice(
         hitl_cfg.get("hand", "right"),
         "hitl.hand",
-        allowed=("right", "left"),
+        allowed=("right", "left", "both"),
     )
     return HitlConfig(
         enabled=bool(hitl_cfg.get("enabled", False)),
@@ -783,7 +783,7 @@ def _parse_hitl_cfg(cfg: DictConfig) -> HitlConfig:
             hitl_cfg.get("rotation_deadband_deg", 0.8),
             "hitl.rotation_deadband_deg",
         ),
-        rot_map=_required_str(hitl_cfg.get("rot_map", "-ry,-rz,rx"), "hitl.rot_map"),
+        rot_map=_required_str(hitl_cfg.get("rot_map", "-ry,-rx,-rz"), "hitl.rot_map"),
         gripper_open=_float_value(
             hitl_cfg.get("gripper_open", 0.0),
             "hitl.gripper_open",

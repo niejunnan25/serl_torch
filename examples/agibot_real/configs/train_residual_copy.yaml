@@ -1,26 +1,26 @@
 global_seed: 0
 
 task:
-  name: office_setting
+  name: makeup
   task_key: null
-  prompt: The right arm picks up the white mouse from the desk and places the mouse on the black mouse pad
+  prompt: The left arm picks up the BB cream from the desk and places the BB cream into the middle compartment at the front of the top layer of the storage box
   control_mode: camera_position
   hz: 30.0
-  trajectory_time: null
+  trajectory_time: 0.035
   use_smooth_trajectory: false
-  max_episode_steps: 500
+  max_episode_steps: 300
   reset_hook: serl_torch.examples.agibot_real.robot.reset_hooks:reset_to_task_initial_pose
   success_hook: null
 
 runtime:
   role: actor
   trainer_host: 127.0.0.1
-  trainer_port: 5488
-  broadcast_port: 5489
+  trainer_port: 5501
+  broadcast_port: 5502
   data_store_queue_size: 2000
   trainer_transport:
     mode: async_commit
-    data_port: 5490
+    data_port: 5503
     control_timeout_ms: 2000
     data_queue_capacity: 8
     data_socket_hwm: 8
@@ -50,6 +50,28 @@ backfill_policy:
   max_pending_chunks: 4
   mode: thread
 
+hitl:
+  enabled: true
+  type: quest_vr
+  hand: right
+  # Keep HITL chunks short so teleoperation stays closed-loop.
+  vr_chunk_horizon: 1
+  max_delta: 100.0
+  max_step: 0.006
+  smoothing: 0.40
+  command_deadband: 0.001
+  max_rot_delta_deg: 360.0
+  max_rot_step_deg: 2.0
+  rot_smoothing: 0.12
+  rotation_deadband_deg: 0.8
+  rot_map: -ry,-rz,rx
+  gripper_open: 0.0
+  gripper_closed: 120.0
+  gripper_deadband: 0.5
+  scaling_factor: 0.6
+  control_freq: 30
+  coordinate_mapping: sim
+
 robot:
   assets_root: null
   retargeter_urdf_path: null
@@ -78,11 +100,90 @@ obs:
   stack_horizon: 1
 
 residual:
-  alpha: 0.1
+  alpha: 0.005
   action_mask: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
   action_limits: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   clip_gripper: true
   chunk_horizon: 30
+
+action_filter:
+  # EMA low-pass for executed actions. Smaller alpha => stronger smoothing.
+  enabled: true
+  alpha: 0.25
+  # Optional per-step action delta clamp after EMA; null disables clamp.
+  max_delta: null
+  # Skip filtering for the first N executed env steps.
+  warmup_steps: 0
+  # Reset filter state on each new episode.
+  reset_each_episode: true
+
+composite_rtc:
+  # Top-level switch for Composite RTC (see docs/composite_rtc.md). When
+  # disabled the actor falls back to vanilla RTC / pure flow-matching.
+  enabled: false
+  # 'off' | 'linear' | 'model'. Must match the server-side
+  # --composite_rtc_mode flag exactly.
+  mode: off
+  # Window over which the client averages "controller steps executed during
+  # inference" to estimate prefix_len. Matches the 4090 client behaviour.
+  # In rolling mode this is largely shadowed by the actual unexecuted-suffix
+  # length at request-trigger time, but is still used as a fallback when
+  # the rolling actor cannot supply an explicit override (e.g. very first
+  # chunk of an episode).
+  prefix_len_window: 3
+  # Disk location (relative to learner checkpoint_dir if not absolute) where
+  # the learner dumps the residual snapshot for ``mode='model'``. Ignored in
+  # 'off' / 'linear' modes.
+  snapshot_path: residual_snapshot.pt
+  linear:
+    # Whether to ship the per-step Jacobian / bias along with the request.
+    # When both are False the server falls back to a constant-residual
+    # approximation (i.e. residual is treated as a constant in B during the
+    # current denoise pass).
+    send_jacobian: true
+    send_bias: true
+    # When true, the actor uses PyTorch autograd through the SAC actor to
+    # compute the *real* per-step Jacobian J = dR_phi/dB (full first-order
+    # Taylor expansion). When false (default), it uses a cheap zeroth-order
+    # approximation J=0, bias=R_phi(obs) — equivalent to treating the
+    # residual as a constant in B within a single denoise pass.
+    use_full_jacobian: false
+  model:
+    # Identifier registered on the JoyRA server side via
+    # ``register_residual_builder``. Only used when mode='model'.
+    factory: ""
+
+actor:
+  # Rolling (4090-style) control loop. The lockstep default
+  # ``env.step_chunk(chunk)`` blocks until the whole chunk plays before the
+  # next inference is fired -- there is no overlap between chunks, so
+  # Composite RTC's head transparently BYPASSes guidance every request.
+  # When ``rolling.enabled=true`` the actor runs the controller's
+  # background loop (``task.controller.enabled`` must therefore be true)
+  # at ``env.hz`` while a separate inference thread fetches the next
+  # chunk; new chunks atomically replace the controller's unplayed queue
+  # via ``submit_chunk_rolling``, mirroring 4090's
+  # ``control_thread.set_actions(chunk, index=use_index)``. The previous
+  # chunk's unexecuted suffix is then shipped as ``remaining_action_chunk``
+  # so the server can RTC-inpaint the new chunk's leading steps onto it,
+  # which is the canonical condition for Composite RTC engagement.
+  rolling:
+    enabled: false
+    # Trigger the next inference when (queue_depth + inflight) drops to
+    # <= ``trigger_remaining_steps``. ``0`` means "auto", which falls
+    # back to ``ceil(chunk_horizon * trigger_ratio)``.
+    trigger_remaining_steps: 0
+    # Fractional trigger: physical overlap between consecutive chunks
+    # will be roughly ``trigger_ratio * chunk_horizon``. ``0.5`` is the
+    # 4090 reference setting (15-step overlap at H=30).
+    trigger_ratio: 0.5
+    # Outer-loop poll frequency. Must be >= env.hz to avoid lagging
+    # behind on transitions / trigger checks. 100 Hz matches 4090.
+    loop_hz: 100.0
+    # Size of the inference thread pool. Keep at 1 to match 4090 (one
+    # chunk in flight at a time -- the entire point of RTC is to hide
+    # that single inference under physical overlap).
+    inference_max_workers: 1
 
 encoder:
   type: resnet
@@ -98,8 +199,8 @@ encoder:
     bottleneck_dim: 256
 
 network:
-  policy_hidden_dims: [256, 256, 256]
-  critic_hidden_dims: [256, 256, 256]
+  policy_hidden_dims: [256, 256]
+  critic_hidden_dims: [256, 256]
   policy_activation: tanh
   critic_activation: tanh
   policy_layer_norm: true
@@ -108,14 +209,14 @@ network:
 sac:
   learning_rate: 3.0e-4
   std_min: 1.0e-5
-  std_max: 5.0
+  std_max: 1.0
   discount: 0.99
   soft_target_update_rate: 0.005
   temperature_init: 0.01
-  backup_entropy: true
+  backup_entropy: false
   critic_ensemble_size: 2
   critic_subsample_size: 2
-  utd_ratio: 2
+  utd_ratio: 4
   otf_num_samples: 1
   cql_n_actions: 10
   cql_temperature: 1.0
@@ -134,7 +235,7 @@ replay:
 
 offline:
   enabled: false
-  prepared_path: null
+  prepared_path: /home/zhailinbo/ZJAY/RL/serl_torch/outputs/agibot_real_copy/offline_data/office_setting/joyra_joyra_office_setting_chunk30_alpha0p005
   ratio: 0.5
   capacity: 50000
   load_max_episodes: null
@@ -142,11 +243,10 @@ offline:
   pretrain_steps: 0
 
   prepare:
-    raw_dataset_path: null
-    output_root: data/residual/offline_data
+    raw_dataset_path: /home/zhailinbo/ZJAY/RL/data/agibot_real/task_3463_mouse
+    output_root: /home/zhailinbo/ZJAY/RL/serl_torch/outputs/agibot_real_copy/offline_data
     expert_reference_scale: 1.0
     clip_residual_to_unit: true
-    filter_unrepresentable_steps: false
 
 training:
   training_starts: 1000
@@ -177,8 +277,16 @@ logging:
   summary_file: summary.json
   episode_log_file: episode_logs.jsonl
 
+video:
+  enabled: true
+  camera_key: image/head
+  fps: ${task.hz}
+  output_dir: videos
+  max_pending_frames: 128
+  drop_frames_when_busy: true
+
 launch:
-  output_root: outputs/agibot_real_copy
+  output_root: /home/zhailinbo/ZJAY/RL/serl_torch/outputs/agibot_real_copy
 
 hydra:
   run:

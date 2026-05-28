@@ -91,9 +91,15 @@ class QuestVRHitlRuntime:
             self._vr_client = None
 
     def _snapshot_active(self, signals: dict[str, Any]) -> bool:
+        right_active = bool(dict(signals.get("button_states") or {}).get("RG", False))
+        left_active = bool(
+            dict(signals.get("left_button_states") or {}).get("LG", False)
+        )
         if self.hand == "right":
-            return bool(dict(signals.get("button_states") or {}).get("RG", False))
-        return bool(dict(signals.get("left_button_states") or {}).get("LG", False))
+            return right_active
+        if self.hand == "left":
+            return left_active
+        return bool(right_active or left_active)
 
     def poll_action_chunk(self) -> HitlActionChunk | None:
         if (not self.enabled) or self._vr_client is None or self._controller is None:
@@ -117,7 +123,11 @@ class QuestVRHitlRuntime:
             loop_t0 = time.monotonic()
             state_vec, _raw = build_state_vec_from_robot_node(self.env.robot_node)
             signals = snapshot.signals if step_idx == 0 else self._vr_client.snapshot().signals
-            result = self._controller.update(signals=signals, state_vec=state_vec)
+            result = self._controller.update(
+                signals=signals,
+                state_vec=state_vec,
+                raw_controller=self._vr_client.raw_controller,
+            )
             actions.append(np.asarray(result.camera_action, dtype=np.float32).reshape(14))
             info = dict(result.info)
             info["hitl_chunk_step"] = int(step_idx)

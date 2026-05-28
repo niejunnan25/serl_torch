@@ -42,11 +42,11 @@ ROT_AXIS_INDEX = {
 @dataclass(frozen=True, slots=True)
 class VRCameraActionConfig:
     hand: str = "right"
-    max_delta: float = 0.10
+    max_delta: float = 100.0
     max_step: float = 0.006
     smoothing: float = 0.40
     command_deadband: float = 0.001
-    max_rot_delta_deg: float = 35.0
+    max_rot_delta_deg: float = 360.0
     max_rot_step_deg: float = 2.0
     rot_smoothing: float = 0.12
     rotation_deadband_deg: float = 0.8
@@ -98,6 +98,43 @@ def limit_vec_norm(vector: np.ndarray, max_norm: float) -> np.ndarray:
     if norm > max_norm > 0.0:
         return vector_arr * (float(max_norm) / norm)
     return vector_arr
+
+
+def controller_rotation_matrix(raw_controller: Any, hand: str) -> np.ndarray | None:
+    transforms, _buttons = raw_controller.vr.get_transformations_and_buttons()
+    key = "r" if hand == "right" else "l"
+    if not transforms or key not in transforms:
+        return None
+    transform = np.asarray(transforms[key], dtype=np.float64)
+    if transform.shape != (4, 4):
+        return None
+    correction = (
+        raw_controller.init_transfer_right_hand
+        if hand == "right"
+        else raw_controller.init_transfer_left_hand
+    )
+    return np.asarray(transform[:3, :3], dtype=np.float64) @ np.asarray(
+        correction,
+        dtype=np.float64,
+    )
+
+
+def copy_rotation(retargeter: BodyRetargeter, rotation: Any) -> Any:
+    return retargeter.R.from_quat(rotation.as_quat())
+
+
+def rotation_step_towards(
+    retargeter: BodyRetargeter,
+    current: Any,
+    desired: Any,
+    *,
+    smoothing: float,
+    max_step_rad: float,
+) -> Any:
+    relative = current.inv() * desired
+    step_rotvec = np.asarray(relative.as_rotvec(), dtype=np.float64) * float(smoothing)
+    step_rotvec = limit_vec_norm(step_rotvec, float(max_step_rad))
+    return current * retargeter.R.from_rotvec(step_rotvec)
 
 
 def trigger_to_gripper(
@@ -304,7 +341,7 @@ class VRCameraActionController:
         self.retargeter = retargeter
         self.config = config or VRCameraActionConfig()
         hand = str(self.config.hand).strip().lower()
-        if hand not in {"right", "left"}:
+        if hand not in {"right", "left", "both"}:
             raise ValueError(f"Unsupported hand={self.config.hand!r}")
         self.hand = hand
         self.rot_map = parse_rot_map(self.config.rot_map)
@@ -317,66 +354,149 @@ class VRCameraActionController:
         self.target_left_euler = left_euler.copy()
         self.target_right_pos = right_pos.copy()
         self.target_right_euler = right_euler.copy()
+        self.target_left_rot = self.retargeter.R.from_euler("xyz", self.target_left_euler)
+        self.target_right_rot = self.retargeter.R.from_euler("xyz", self.target_right_euler)
         self.commanded_left_pos = self.target_left_pos.copy()
         self.commanded_left_euler = self.target_left_euler.copy()
         self.commanded_right_pos = self.target_right_pos.copy()
         self.commanded_right_euler = self.target_right_euler.copy()
 
         self.hand_action = np.asarray(initial_grippers, dtype=np.float32).reshape(2)
-        self.current_hand_idx = 1 if self.hand == "right" else 0
-        self.commanded_gripper = float(self.hand_action[self.current_hand_idx])
-        self.anchor_pos: np.ndarray | None = None
-        self.anchor_euler: np.ndarray | None = None
+        self.commanded_grippers = self.hand_action.copy()
+        self.left_anchor_pos: np.ndarray | None = None
+        self.left_anchor_rot: Any | None = None
+        self.left_anchor_euler: np.ndarray | None = None
+        self.left_anchor_vr_rot: Any | None = None
+        self.right_anchor_pos: np.ndarray | None = None
+        self.right_anchor_rot: Any | None = None
+        self.right_anchor_euler: np.ndarray | None = None
+        self.right_anchor_vr_rot: Any | None = None
+        self.last_left_active = False
+        self.last_right_active = False
         self.last_active = False
+
+    def _hand_enabled(self, hand: str) -> bool:
+        return bool(self.hand == hand or self.hand == "both")
+
+    def _right_active(self, signals: dict[str, Any]) -> bool:
+        if not self._hand_enabled("right"):
+            return False
+        return bool(dict(signals.get("button_states") or {}).get("RG", False))
+
+    def _left_active(self, signals: dict[str, Any]) -> bool:
+        if not self._hand_enabled("left"):
+            return False
+        return bool(dict(signals.get("left_button_states") or {}).get("LG", False))
 
     def _active(self, signals: dict[str, Any]) -> bool:
         if self.hand == "right":
-            return bool(dict(signals.get("button_states") or {}).get("RG", False))
-        return bool(dict(signals.get("left_button_states") or {}).get("LG", False))
+            return self._right_active(signals)
+        if self.hand == "left":
+            return self._left_active(signals)
+        return bool(self._right_active(signals) or self._left_active(signals))
 
-    def _vr_delta(self, signals: dict[str, Any]) -> np.ndarray:
-        key = "position_delta" if self.hand == "right" else "left_position_delta"
+    def _vr_delta(self, signals: dict[str, Any], hand: str) -> np.ndarray:
+        key = "position_delta" if hand == "right" else "left_position_delta"
         delta = np.asarray(signals.get(key, np.zeros(3)), dtype=np.float32).reshape(3)
         return delta * VR_TO_BASE_SIGN
 
-    def _vr_rot_delta(self, signals: dict[str, Any]) -> np.ndarray:
-        key = "rotation_delta" if self.hand == "right" else "left_rotation_delta"
+    def _vr_rot_delta(self, signals: dict[str, Any], hand: str) -> np.ndarray:
+        key = "rotation_delta" if hand == "right" else "left_rotation_delta"
         delta = np.asarray(signals.get(key, np.zeros(3)), dtype=np.float32).reshape(3)
         return np.asarray(
             [sign * float(delta[index]) for sign, index in self.rot_map],
             dtype=np.float32,
         )
 
+    def _mapped_grip_local_rot_delta(
+        self,
+        *,
+        raw_controller: Any | None,
+        hand: str,
+        anchor_vr_rot: Any | None,
+        max_rot_delta: float,
+    ) -> np.ndarray:
+        if raw_controller is None or anchor_vr_rot is None:
+            return np.zeros(3, dtype=np.float64)
+        current_vr_matrix = controller_rotation_matrix(raw_controller, hand)
+        if current_vr_matrix is None:
+            return np.zeros(3, dtype=np.float64)
+        current_vr_rot = self.retargeter.R.from_matrix(current_vr_matrix)
+        delta_c = anchor_vr_rot.inv() * current_vr_rot
+        mapped = np.asarray(
+            [sign * float(delta_c.as_rotvec()[index]) for sign, index in self.rot_map],
+            dtype=np.float64,
+        )
+        return limit_vec_norm(mapped, max_rot_delta)
+
+    def _sync_targets_to_current_pose(self, state_vec: np.ndarray) -> None:
+        left_pos, left_euler, right_pos, right_euler = current_base_poses(
+            self.retargeter,
+            state_vec,
+        )
+        self.target_left_pos = left_pos.copy()
+        self.target_left_euler = left_euler.copy()
+        self.target_right_pos = right_pos.copy()
+        self.target_right_euler = right_euler.copy()
+        self.target_left_rot = self.retargeter.R.from_euler("xyz", self.target_left_euler)
+        self.target_right_rot = self.retargeter.R.from_euler("xyz", self.target_right_euler)
+        self.commanded_left_pos = self.target_left_pos.copy()
+        self.commanded_left_euler = self.target_left_euler.copy()
+        self.commanded_right_pos = self.target_right_pos.copy()
+        self.commanded_right_euler = self.target_right_euler.copy()
+
     def update(
         self,
         *,
         signals: dict[str, Any],
         state_vec: np.ndarray,
+        raw_controller: Any | None = None,
     ) -> VRCameraActionResult:
         cfg = self.config
-        active = self._active(signals)
+        right_active = self._right_active(signals)
+        left_active = self._left_active(signals)
+        active = bool(right_active or left_active)
+        became_right_active = bool(right_active and not self.last_right_active)
+        became_left_active = bool(left_active and not self.last_left_active)
         became_active = bool(active and not self.last_active)
         became_inactive = bool((not active) and self.last_active)
-        if became_active:
-            if self.hand == "right":
-                self.anchor_pos = self.target_right_pos.copy()
-                self.anchor_euler = self.target_right_euler.copy()
-            else:
-                self.anchor_pos = self.target_left_pos.copy()
-                self.anchor_euler = self.target_left_euler.copy()
-        elif became_inactive:
-            self.anchor_pos = None
-            self.anchor_euler = None
+        if became_right_active or became_left_active:
+            self._sync_targets_to_current_pose(state_vec)
+        if became_right_active:
+            self.right_anchor_pos = self.target_right_pos.copy()
+            self.right_anchor_rot = copy_rotation(self.retargeter, self.target_right_rot)
+            self.right_anchor_euler = self.target_right_euler.copy()
+            self.right_anchor_vr_rot = None
+        if became_left_active:
+            self.left_anchor_pos = self.target_left_pos.copy()
+            self.left_anchor_rot = copy_rotation(self.retargeter, self.target_left_rot)
+            self.left_anchor_euler = self.target_left_euler.copy()
+            self.left_anchor_vr_rot = None
+        if not right_active:
+            self.right_anchor_pos = None
+            self.right_anchor_rot = None
+            self.right_anchor_euler = None
+            self.right_anchor_vr_rot = None
+        if not left_active:
+            self.left_anchor_pos = None
+            self.left_anchor_rot = None
+            self.left_anchor_euler = None
+            self.left_anchor_vr_rot = None
 
-        trigger_key = "trigger" if self.hand == "right" else "left_trigger"
-        self.hand_action[self.current_hand_idx] = trigger_to_gripper(
-            signals.get(trigger_key, 0.0),
-            open_value=float(cfg.gripper_open),
-            closed_value=float(cfg.gripper_closed),
-        )
-        gripper_delta = abs(
-            float(self.hand_action[self.current_hand_idx])
-            - float(self.commanded_gripper)
+        if self._hand_enabled("right"):
+            self.hand_action[1] = trigger_to_gripper(
+                signals.get("trigger", 0.0),
+                open_value=float(cfg.gripper_open),
+                closed_value=float(cfg.gripper_closed),
+            )
+        if self._hand_enabled("left"):
+            self.hand_action[0] = trigger_to_gripper(
+                signals.get("left_trigger", 0.0),
+                open_value=float(cfg.gripper_open),
+                closed_value=float(cfg.gripper_closed),
+            )
+        gripper_delta = float(
+            np.max(np.abs(self.hand_action - self.commanded_grippers))
         )
 
         pos_command_delta = 0.0
@@ -388,53 +508,79 @@ class VRCameraActionController:
         max_rot_step = np.deg2rad(abs(float(cfg.max_rot_step_deg)))
         rot_smoothing = float(np.clip(float(cfg.rot_smoothing), 0.0, 1.0))
 
-        if active and self.anchor_pos is not None and self.anchor_euler is not None:
-            delta = limit_vec_norm(self._vr_delta(signals), max_delta)
-            rot_delta = limit_vec_norm(self._vr_rot_delta(signals), max_rot_delta)
-            desired_pos = self.anchor_pos + delta
-            desired_euler = self.anchor_euler + rot_delta
-            if self.hand == "right":
-                filtered_pos = self.target_right_pos + smoothing * (
-                    desired_pos - self.target_right_pos
-                )
-                self.target_right_pos = self.target_right_pos + limit_vec_norm(
-                    filtered_pos - self.target_right_pos,
-                    max_step,
-                )
-                filtered_euler = self.target_right_euler + rot_smoothing * (
-                    desired_euler - self.target_right_euler
-                )
-                self.target_right_euler = self.target_right_euler + limit_vec_norm(
-                    filtered_euler - self.target_right_euler,
-                    max_rot_step,
-                )
-                pos_command_delta = float(
-                    np.linalg.norm(self.target_right_pos - self.commanded_right_pos)
-                )
-                rot_command_delta = float(
-                    np.linalg.norm(self.target_right_euler - self.commanded_right_euler)
-                )
-            else:
-                filtered_pos = self.target_left_pos + smoothing * (
-                    desired_pos - self.target_left_pos
-                )
-                self.target_left_pos = self.target_left_pos + limit_vec_norm(
-                    filtered_pos - self.target_left_pos,
-                    max_step,
-                )
-                filtered_euler = self.target_left_euler + rot_smoothing * (
-                    desired_euler - self.target_left_euler
-                )
-                self.target_left_euler = self.target_left_euler + limit_vec_norm(
-                    filtered_euler - self.target_left_euler,
-                    max_rot_step,
-                )
-                pos_command_delta = float(
-                    np.linalg.norm(self.target_left_pos - self.commanded_left_pos)
-                )
-                rot_command_delta = float(
-                    np.linalg.norm(self.target_left_euler - self.commanded_left_euler)
-                )
+        if (
+            right_active
+            and self.right_anchor_pos is not None
+            and self.right_anchor_euler is not None
+        ):
+            delta = limit_vec_norm(self._vr_delta(signals, "right"), max_delta)
+            rot_delta = limit_vec_norm(self._vr_rot_delta(signals, "right"), max_rot_delta)
+            desired_pos = self.right_anchor_pos + delta
+            desired_euler = self.right_anchor_euler + rot_delta
+            filtered_pos = self.target_right_pos + smoothing * (
+                desired_pos - self.target_right_pos
+            )
+            self.target_right_pos = self.target_right_pos + limit_vec_norm(
+                filtered_pos - self.target_right_pos,
+                max_step,
+            )
+            filtered_euler = self.target_right_euler + rot_smoothing * (
+                desired_euler - self.target_right_euler
+            )
+            rot_step = limit_vec_norm(
+                filtered_euler - self.target_right_euler,
+                max_rot_step,
+            )
+            self.target_right_euler = self.target_right_euler + rot_step
+            self.target_right_rot = self.retargeter.R.from_euler(
+                "xyz",
+                self.target_right_euler,
+            )
+            pos_command_delta = max(
+                pos_command_delta,
+                float(np.linalg.norm(self.target_right_pos - self.commanded_right_pos)),
+            )
+            rot_command_delta = max(
+                rot_command_delta,
+                float(np.linalg.norm(self.target_right_euler - self.commanded_right_euler)),
+            )
+
+        if (
+            left_active
+            and self.left_anchor_pos is not None
+            and self.left_anchor_euler is not None
+        ):
+            delta = limit_vec_norm(self._vr_delta(signals, "left"), max_delta)
+            rot_delta = limit_vec_norm(self._vr_rot_delta(signals, "left"), max_rot_delta)
+            desired_pos = self.left_anchor_pos + delta
+            desired_euler = self.left_anchor_euler + rot_delta
+            filtered_pos = self.target_left_pos + smoothing * (
+                desired_pos - self.target_left_pos
+            )
+            self.target_left_pos = self.target_left_pos + limit_vec_norm(
+                filtered_pos - self.target_left_pos,
+                max_step,
+            )
+            filtered_euler = self.target_left_euler + rot_smoothing * (
+                desired_euler - self.target_left_euler
+            )
+            rot_step = limit_vec_norm(
+                filtered_euler - self.target_left_euler,
+                max_rot_step,
+            )
+            self.target_left_euler = self.target_left_euler + rot_step
+            self.target_left_rot = self.retargeter.R.from_euler(
+                "xyz",
+                self.target_left_euler,
+            )
+            pos_command_delta = max(
+                pos_command_delta,
+                float(np.linalg.norm(self.target_left_pos - self.commanded_left_pos)),
+            )
+            rot_command_delta = max(
+                rot_command_delta,
+                float(np.linalg.norm(self.target_left_euler - self.commanded_left_euler)),
+            )
 
         camera_action = base_targets_to_camera_action(
             retargeter=self.retargeter,
@@ -452,13 +598,13 @@ class VRCameraActionController:
             or gripper_delta >= abs(float(cfg.gripper_deadband))
         )
         if should_send:
-            if self.hand == "right":
-                self.commanded_right_pos = self.target_right_pos.copy()
-                self.commanded_right_euler = self.target_right_euler.copy()
-            else:
-                self.commanded_left_pos = self.target_left_pos.copy()
-                self.commanded_left_euler = self.target_left_euler.copy()
-            self.commanded_gripper = float(self.hand_action[self.current_hand_idx])
+            self.commanded_right_pos = self.target_right_pos.copy()
+            self.commanded_right_euler = self.target_right_euler.copy()
+            self.commanded_left_pos = self.target_left_pos.copy()
+            self.commanded_left_euler = self.target_left_euler.copy()
+            self.commanded_grippers = self.hand_action.copy()
+        self.last_right_active = bool(right_active)
+        self.last_left_active = bool(left_active)
         self.last_active = bool(active)
         return VRCameraActionResult(
             camera_action=camera_action,
@@ -476,6 +622,8 @@ class VRCameraActionController:
                 "hitl_became_inactive": bool(became_inactive),
                 "hitl_source": "quest_vr",
                 "hitl_hand": self.hand,
+                "hitl_right_active": bool(right_active),
+                "hitl_left_active": bool(left_active),
                 "hitl_pos_command_delta": float(pos_command_delta),
                 "hitl_rot_command_delta": float(rot_command_delta),
                 "hitl_gripper_delta": float(gripper_delta),
@@ -491,7 +639,10 @@ __all__ = [
     "build_state_vec_from_robot_node",
     "current_base_poses",
     "execute_camera_action",
+    "controller_rotation_matrix",
+    "copy_rotation",
     "limit_vec_norm",
     "parse_rot_map",
+    "rotation_step_towards",
     "trigger_to_gripper",
 ]
