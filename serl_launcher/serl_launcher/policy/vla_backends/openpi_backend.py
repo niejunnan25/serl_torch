@@ -53,6 +53,21 @@ def _numpy_to_batched_torch(tree: dict[str, Any], device: torch.device) -> dict[
     )
 
 
+def _tensor_tree_to_device(tree: Any, device: torch.device) -> Any:
+    def convert(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            tensor = torch.from_numpy(np.array(value, copy=True)).to(device)
+        elif torch.is_tensor(value):
+            tensor = value.to(device)
+        else:
+            return value
+        if torch.is_floating_point(tensor):
+            return tensor.to(torch.float32)
+        return tensor
+
+    return _tree_map(convert, tree)
+
+
 def _to_pytorch_image_layout(image: torch.Tensor) -> torch.Tensor:
     # OpenPI Observation.from_dict already converts torch.uint8 NHWC images to
     # float32 NCHW. Non-uint8 tensors from fake/torch datasets need the same
@@ -68,6 +83,15 @@ def _normalize_image_layouts(obs_torch: dict[str, Any]) -> dict[str, Any]:
         obs_torch = dict(obs_torch)
         obs_torch["image"] = {key: _to_pytorch_image_layout(value) for key, value in images.items()}
     return obs_torch
+
+
+def _checkpoint_assets_dir(assets_base_dir: str | None) -> Path | None:
+    """Return a checkpoint-local OpenPI assets root when one is available."""
+    if not assets_base_dir:
+        return None
+    candidate = Path(assets_base_dir).expanduser()
+    checkpoint_assets = candidate / "assets"
+    return checkpoint_assets if checkpoint_assets.is_dir() else None
 
 
 @dataclass(frozen=True)
@@ -174,6 +198,13 @@ class OpenPIBackend:
     ) -> Any:
         train_cfg = self.get_train_config(config_name)
         replace_kwargs: dict[str, Any] = {}
+        data_factory = train_cfg.data
+        checkpoint_assets = _checkpoint_assets_dir(assets_base_dir)
+        if checkpoint_assets is not None and hasattr(data_factory, "assets"):
+            data_factory = dataclasses.replace(
+                data_factory,
+                assets=dataclasses.replace(data_factory.assets, assets_dir=str(checkpoint_assets)),
+            )
         for key, value in {
             "batch_size": batch_size,
             "num_workers": num_workers,
@@ -185,15 +216,17 @@ class OpenPIBackend:
                 replace_kwargs[key] = value
         if repo_id_override:
             if repo_id_override == "fake":
-                replace_kwargs["data"] = self._train_config.FakeDataConfig(repo_id="fake")
+                data_factory = self._train_config.FakeDataConfig(repo_id="fake")
             else:
                 try:
-                    replace_kwargs["data"] = dataclasses.replace(train_cfg.data, repo_id=repo_id_override)
+                    data_factory = dataclasses.replace(data_factory, repo_id=repo_id_override)
                 except TypeError as exc:
                     raise ValueError(
                         "The selected OpenPI data config does not support repo_id_override; "
                         f"got {type(train_cfg.data).__name__}"
                     ) from exc
+        if data_factory is not train_cfg.data:
+            replace_kwargs["data"] = data_factory
         if not replace_kwargs:
             return train_cfg
         return dataclasses.replace(train_cfg, **replace_kwargs)
@@ -258,20 +291,24 @@ class OpenPIBackend:
             raise ValueError("OpenPI dataloader did not provide normalization stats.")
         return dataloader
 
+    def observation_to_device(self, observation: Any, device: str | torch.device) -> Any:
+        """Move an OpenPI dataloader observation or raw observation dict to a device."""
+        torch_device = torch.device(device)
+        if hasattr(observation, "to_dict"):
+            obs_dict = observation.to_dict()
+        elif isinstance(observation, dict):
+            obs_dict = observation
+        else:
+            raise TypeError(f"Unsupported observation type: {type(observation)!r}")
+        obs_torch = _normalize_image_layouts(_tensor_tree_to_device(obs_dict, torch_device))
+        return self._model_module.Observation.from_dict(obs_torch)
+
     def observation_to_device_dict(self, observation: Any, device: str | torch.device) -> dict[str, Any]:
         torch_device = torch.device(device)
-        obs_dict: dict[str, Any] = {
-            "image": {key: _to_pytorch_image_layout(value.to(torch_device)) for key, value in observation.images.items()},
-            "image_mask": {key: value.to(torch_device) for key, value in observation.image_masks.items()},
-            "state": observation.state.to(torch_device),
-        }
-        for field_name in (
-            "tokenized_prompt",
-            "tokenized_prompt_mask",
-            "token_ar_mask",
-            "token_loss_mask",
-        ):
-            value = getattr(observation, field_name, None)
-            if value is not None:
-                obs_dict[field_name] = value.to(torch_device)
-        return obs_dict
+        if hasattr(observation, "to_dict"):
+            obs_dict = observation.to_dict()
+        elif isinstance(observation, dict):
+            obs_dict = observation
+        else:
+            raise TypeError(f"Unsupported observation type: {type(observation)!r}")
+        return _normalize_image_layouts(_tensor_tree_to_device(obs_dict, torch_device))

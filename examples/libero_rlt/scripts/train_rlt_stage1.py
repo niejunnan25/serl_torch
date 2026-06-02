@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -148,6 +149,10 @@ def main() -> None:
     np.random.seed(int(cfg.global_seed))
     torch.manual_seed(int(cfg.global_seed))
 
+    lerobot_home = _optional_str(cfg.vla.get("lerobot_home", None))
+    if lerobot_home:
+        os.environ["HF_LEROBOT_HOME"] = str(Path(lerobot_home).expanduser().resolve())
+
     output_dir = Path(str(cfg.training.output_dir)).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "config.json").open("w", encoding="utf-8") as f:
@@ -191,9 +196,8 @@ def main() -> None:
             data_iter = iter(dataloader)
             observation, actions = next(data_iter)
 
-        obs_torch = backend.observation_to_device_dict(observation, device)
-        actions = actions.to(device)
-        obs_obj = base_policy.to_observation(obs_torch)
+        obs_obj = backend.observation_to_device(observation, device)
+        actions = actions.to(device=device, dtype=torch.float32)
 
         with torch.no_grad():
             prefix_embeddings, suffix_embeddings = base_policy.extract_embeddings(obs_obj, actions=actions)

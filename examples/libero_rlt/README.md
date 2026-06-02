@@ -27,14 +27,14 @@ The feature server websocket output remains:
 
 ## Required Artifacts
 
-- External OpenPI checkout with a compatible embedding extractor (`model.extract_embeddings`).
+- External OpenPI RLT checkout with a compatible embedding extractor (`model.extract_embeddings`), for example `/vla/users/niejunnan/codebase/openpi-rlt`.
 - OpenPI policy checkpoint compatible with the chosen `vla.config_name`, e.g. `pi0_libero`.
 - Stage 1 RLT encoder checkpoint for Stage 2. Existing checkpoints with `encoder_state_dict` remain supported.
 - LIBERO runtime environment.
 
 ## Stage 1 Training
 
-Run Stage 1 with a Python environment that has the OpenPI dependencies installed. On the development cluster this is usually an OpenPI `.venv`; the `serl_torch` conda env may not contain packages such as `numpydantic`. The `vla.openpi_root` checkout must expose `model.extract_embeddings()`. For smoke tests without a cached LeRobot LIBERO dataset, set `vla.repo_id_override=fake`; real training should leave it unset and use a real OpenPI/LeRobot dataset.
+Run Stage 1 with a Python environment that has the OpenPI dependencies installed. On the development cluster this is usually an OpenPI `.venv`; the `serl_torch` conda env may not contain packages such as `numpydantic`. The `vla.openpi_root` checkout must expose `model.extract_embeddings()`. For smoke tests without a cached LeRobot LIBERO dataset, set `vla.repo_id_override=fake`; real training should leave it unset and set `vla.lerobot_home` to the local LeRobot cache root. On the development cluster, `/vla/users/niejunnan/datasets/libero` is exposed as `physical-intelligence/libero` through `HF_LEROBOT_HOME=/vla/users/niejunnan/datasets`.
 
 Example smoke command:
 
@@ -44,12 +44,30 @@ cd /vla/users/niejunnan/codebase/serl_torch-rlt-stage1-adapter
 /vla/users/niejunnan/codebase/openpi-modified/.venv/bin/python3 \
   examples/libero_rlt/scripts/train_rlt_stage1.py \
   --config examples/libero_rlt/configs/stage1_rlt.yaml \
-  vla.openpi_root=/vla/users/yixin/openpi \
+  vla.openpi_root=/vla/users/niejunnan/codebase/openpi-rlt \
   vla.config_name=pi0_libero \
   vla.checkpoint_path=/vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch \
   vla.repo_id_override=fake \
+  vla.lerobot_home=/vla/users/niejunnan/datasets \
   training.output_dir=/tmp/rlt_stage1_smoke_codex \
   training.steps=2 \
+  training.batch_size=1 \
+  training.num_workers=0
+```
+
+
+
+Real-data Stage 1 smoke:
+
+```bash
+/vla/users/niejunnan/codebase/openpi-modified/.venv/bin/python3 \
+  examples/libero_rlt/scripts/train_rlt_stage1.py \
+  --config examples/libero_rlt/configs/stage1_rlt.yaml \
+  vla.openpi_root=/vla/users/niejunnan/codebase/openpi-rlt \
+  vla.lerobot_home=/vla/users/niejunnan/datasets \
+  vla.repo_id_override=null \
+  training.output_dir=/tmp/rlt_stage1_real_smoke \
+  training.steps=20 \
   training.batch_size=1 \
   training.num_workers=0
 ```
@@ -76,7 +94,7 @@ bash examples/libero_rlt/tools/launch_rlt_training.sh \
   --config-name smoke_rlt \
   --gpu 0 \
   --learner-gpu 1 \
-  --openpi-root /path/to/openpi \
+  --openpi-root /vla/users/niejunnan/codebase/openpi-rlt \
   --vla-config pi0_libero \
   --vla-checkpoint /path/to/pi0_libero_checkpoint \
   --rlt-encoder-path /path/to/rlt_stage1_checkpoint.pt \
@@ -105,7 +123,7 @@ bash examples/libero_rlt/tools/launch_rlt_training.sh \
   --vla-port 8777 \
   --eval-env-port 21001 \
   --eval-vla-port 8877 \
-  --openpi-root /path/to/openpi \
+  --openpi-root /vla/users/niejunnan/codebase/openpi-rlt \
   --vla-config pi0_libero \
   --vla-checkpoint /path/to/pi0_libero_checkpoint \
   --rlt-encoder-path /path/to/rlt_stage1_checkpoint.pt \

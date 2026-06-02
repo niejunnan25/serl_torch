@@ -9,6 +9,7 @@ vla:
   checkpoint_base_dir: ./checkpoints
   exp_name: rlt_stage1
   repo_id_override: null
+  lerobot_home: /vla/users/niejunnan/datasets
   device: cuda
 
 rlt:
