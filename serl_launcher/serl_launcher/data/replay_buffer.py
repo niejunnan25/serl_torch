@@ -1,5 +1,5 @@
 import collections
-from typing import Optional, Union
+from typing import Mapping, Optional, Union
 
 try:
     import gym
@@ -17,6 +17,18 @@ def _init_replay_dict(obs_space: gym.Space, capacity: int) -> Union[np.ndarray, 
     if isinstance(obs_space, gym.spaces.Dict):
         return {k: _init_replay_dict(v, capacity) for k, v in obs_space.spaces.items()}
     raise TypeError(f"Unsupported space type: {type(obs_space)}")
+
+
+def _init_extra_field_dict(
+    extra_fields: Optional[Mapping[str, gym.Space]],
+    capacity: int,
+) -> DatasetDict:
+    if not extra_fields:
+        return {}
+    return {
+        str(key): _init_replay_dict(space, capacity)
+        for key, space in extra_fields.items()
+    }
 
 
 def _insert_recursively(dataset_dict: DatasetDict, data_dict: DatasetDict, insert_index: int):
@@ -49,6 +61,7 @@ class ReplayBuffer(Dataset):
         action_space: gym.Space,
         capacity: int,
         next_observation_space: Optional[gym.Space] = None,
+        extra_fields: Optional[Mapping[str, gym.Space]] = None,
     ):
         if next_observation_space is None:
             next_observation_space = observation_space
@@ -63,6 +76,7 @@ class ReplayBuffer(Dataset):
             masks=np.empty((capacity,), dtype=np.float32),
             dones=np.empty((capacity,), dtype=bool),
         )
+        dataset_dict.update(_init_extra_field_dict(extra_fields, capacity))
 
         super().__init__(dataset_dict)
 

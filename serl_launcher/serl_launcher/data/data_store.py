@@ -1,6 +1,6 @@
 from threading import Lock
 import time
-from typing import Iterable, Optional, TypeVar
+from typing import Iterable, Mapping, Optional, TypeVar
 
 try:
     import gym
@@ -122,8 +122,15 @@ class ReplayBufferDataStore(ReplayBuffer, DataStoreBase):
         action_space: gym.Space,
         capacity: int,
         rlds_logger: Optional[RLDSLogger] = None,
+        extra_fields: Optional[Mapping[str, gym.Space]] = None,
     ):
-        ReplayBuffer.__init__(self, observation_space, action_space, capacity)
+        ReplayBuffer.__init__(
+            self,
+            observation_space,
+            action_space,
+            capacity,
+            extra_fields=extra_fields,
+        )
         DataStoreBase.__init__(self, capacity)
         self._lock = Lock()
         self._logger = None

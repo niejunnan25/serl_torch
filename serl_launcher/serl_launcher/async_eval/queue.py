@@ -49,6 +49,8 @@ def load_completed_async_eval_indices(summary_jsonl: Path) -> set[int]:
     completed: set[int] = set()
     for payload in _load_jsonl_dict_records(summary_jsonl):
         eval_index_raw = payload.get("eval_index", None)
+        if eval_index_raw is None and isinstance(payload.get("request"), dict):
+            eval_index_raw = payload["request"].get("eval_index", None)
         try:
             if eval_index_raw is not None:
                 completed.add(int(eval_index_raw))
