@@ -1,40 +1,95 @@
 # LIBERO RLT Runbook
 
-This example runs the RL-Token Stage 2 policy optimization path on LIBERO using
-the shared `serl_torch` actor/learner, replay, checkpoint, and async-eval
-infrastructure.
+This example runs RL-Token on LIBERO with `serl_torch` actor/learner, replay,
+checkpoint, and async-eval infrastructure. OpenPI is treated as an external VLA
+provider: pass an `openpi_root` checkout and checkpoint paths, but do not vendor
+or modify OpenPI inside this repo.
+
+## Components
+
+Stage 1 trains only `RLTokenEncoder + RLTokenDecoder` on frozen OpenPI VLA
+embeddings. Stage 2 freezes the VLA and Stage 1 encoder, then trains the RLT
+actor/critic over `z_rl + reference_action`.
+
+Runtime services for Stage 2:
+
+- LIBERO env server, started through `examples/libero/tools/serve_env.sh`.
+- OpenPI VLA feature server, started by `examples/libero_rlt/scripts/serve_vla_features.py`.
+- Learner process, running `examples/libero_rlt/scripts/run_rlt_training.py`.
+- Actor process, running the same script with `runtime.role=actor`.
+- Optional async eval env/VLA servers and eval worker.
+
+The feature server websocket output remains:
+
+- `z_rl`: frozen Stage 1 encoder output.
+- `reference_action`: unnormalized OpenPI reference action chunk.
+- `proprio`: raw proprio slice for logging/schema compatibility.
 
 ## Required Artifacts
 
-- A Pi0/OpenPI policy checkpoint compatible with `pi0_libero`.
-- A frozen RLT Stage 1 encoder checkpoint.
-- A LIBERO remote env server runtime. The launch script starts the env server
-  through `examples/libero/tools/serve_env.sh`.
-- The OpenPI Python environment used by the VLA feature server.
+- External OpenPI checkout with a compatible embedding extractor (`model.extract_embeddings`).
+- OpenPI policy checkpoint compatible with the chosen `vla.config_name`, e.g. `pi0_libero`.
+- Stage 1 RLT encoder checkpoint for Stage 2. Existing checkpoints with `encoder_state_dict` remain supported.
+- LIBERO runtime environment.
 
-The checked-in configs include example artifact paths from the development
-cluster. Override them with `--pi0-path` and `--rlt-encoder-path` when launching.
+## Stage 1 Training
 
-## Launch
+Run Stage 1 with a Python environment that has the OpenPI dependencies installed. On the development cluster this is usually an OpenPI `.venv`; the `serl_torch` conda env may not contain packages such as `numpydantic`. The `vla.openpi_root` checkout must expose `model.extract_embeddings()`. For smoke tests without a cached LeRobot LIBERO dataset, set `vla.repo_id_override=fake`; real training should leave it unset and use a real OpenPI/LeRobot dataset.
+
+Example smoke command:
+
+```bash
+cd /vla/users/niejunnan/codebase/serl_torch-rlt-stage1-adapter
+
+/vla/users/niejunnan/codebase/openpi-modified/.venv/bin/python3 \
+  examples/libero_rlt/scripts/train_rlt_stage1.py \
+  --config examples/libero_rlt/configs/stage1_rlt.yaml \
+  vla.openpi_root=/vla/users/yixin/openpi \
+  vla.config_name=pi0_libero \
+  vla.checkpoint_path=/vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch \
+  vla.repo_id_override=fake \
+  training.output_dir=/tmp/rlt_stage1_smoke_codex \
+  training.steps=2 \
+  training.batch_size=1 \
+  training.num_workers=0
+```
+
+A normal run removes the smoke overrides and sets `training.output_dir` to the experiment directory. The checkpoint format is:
+
+- `encoder_state_dict`
+- `decoder_state_dict`
+- `optimizer_state_dict`
+- `scheduler_state_dict`
+- `config`, including `rlt.input_dim`
+
+Stage 2 can load either `final_model.pt`, a numbered `checkpoint_*.pt`, or an encoder-only state dict if the architecture can be inferred.
+
+## Stage 2 Launch
 
 Start a smoke run without async eval:
 
 ```bash
-cd /vla/users/niejunnan/codebase/serl_torch-rlt-integration
+cd /vla/users/niejunnan/codebase/serl_torch-rlt-stage1-adapter
 
 bash examples/libero_rlt/tools/launch_rlt_training.sh \
   --session libero_rlt_smoke \
   --config-name smoke_rlt \
   --gpu 0 \
   --learner-gpu 1 \
-  --pi0-path /path/to/pi0_libero_checkpoint \
-  --rlt-encoder-path /path/to/rlt_stage1_encoder.pt \
-  --pi0-config pi0_libero \
+  --openpi-root /path/to/openpi \
+  --vla-config pi0_libero \
+  --vla-checkpoint /path/to/pi0_libero_checkpoint \
+  --rlt-encoder-path /path/to/rlt_stage1_checkpoint.pt \
   -- \
   rlt.warmup_steps=0 \
   training.max_env_steps=1000 \
   training.max_update_steps=1000
 ```
+
+Backward-compatible aliases are still accepted:
+
+- `--pi0-config` == `--vla-config`
+- `--pi0-path` == `--vla-checkpoint`
 
 Start with async eval:
 
@@ -50,9 +105,10 @@ bash examples/libero_rlt/tools/launch_rlt_training.sh \
   --vla-port 8777 \
   --eval-env-port 21001 \
   --eval-vla-port 8877 \
-  --pi0-path /path/to/pi0_libero_checkpoint \
-  --rlt-encoder-path /path/to/rlt_stage1_encoder.pt \
-  --pi0-config pi0_libero \
+  --openpi-root /path/to/openpi \
+  --vla-config pi0_libero \
+  --vla-checkpoint /path/to/pi0_libero_checkpoint \
+  --rlt-encoder-path /path/to/rlt_stage1_checkpoint.pt \
   -- \
   rlt.warmup_steps=0 \
   training.max_env_steps=300 \
@@ -67,16 +123,10 @@ bash examples/libero_rlt/tools/launch_rlt_training.sh \
 
 - `rlt.chunk_size`: number of actions predicted by the RLT actor.
 - `rlt.execute_horizon`: number of predicted actions executed before replanning.
-- Replay transitions store `executed_steps` and `discounts =
-  gamma ** executed_steps`; the learner uses the stored `discounts` for TD
-  bootstrap.
-- Terminal transitions skip next-state VLA inference because terminal TD targets
-  do not bootstrap.
-- The actor and learner share one run directory. The learner owns Hydra metadata;
-  the actor is launched with `hydra.output_subdir=null`.
-- Async eval writes queue, summary, worker log, and eval checkpoints inside the
-  run directory. `training.async_eval.checkpoint.keep <= 0` keeps all eval
-  checkpoints.
+- Replay transitions store `executed_steps` and `discounts = gamma ** executed_steps`; the learner uses the stored `discounts` for TD bootstrap.
+- Terminal transitions skip next-state VLA inference because terminal TD targets do not bootstrap.
+- The actor and learner share one run directory. The learner owns Hydra metadata; the actor is launched with `hydra.output_subdir=null`.
+- Async eval writes queue, summary, worker log, and eval checkpoints inside the run directory. `training.async_eval.checkpoint.keep <= 0` keeps all eval checkpoints.
 
 ## Runtime Outputs
 
@@ -88,6 +138,4 @@ bash examples/libero_rlt/tools/launch_rlt_training.sh \
 
 ## Review Scope
 
-This first integration pass intentionally covers LIBERO RLT only. Real-robot
-AgiBot/JoyRA code remains outside this review unit and should be staged in a
-separate follow-up.
+This integration pass covers LIBERO RLT, the OpenPI backend adapter, and Stage 1 encoder/decoder training. Real-robot AgiBot/JoyRA code remains outside this review unit and should be staged in a separate follow-up.

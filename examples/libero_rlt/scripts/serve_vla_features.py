@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve frozen Pi0 + frozen RL-token encoder features for LIBERO RLT."""
+"""Serve frozen OpenPI VLA + frozen RL-token encoder features for LIBERO RLT."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from examples.libero_rlt.vla_inference import (
+from examples.libero_rlt.vla_inference import (  # noqa: E402
     extract_rlt_features,
-    load_frozen_pi0,
     load_frozen_rlt_encoder,
+    load_frozen_vla,
 )
-from serl_launcher.policy.vla_features.server import VLAFeatureServer
+from serl_launcher.policy.vla_features.server import VLAFeatureServer  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -25,8 +25,14 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="VLA feature server for LIBERO RLT")
+    parser.add_argument("--openpi-root", type=str, default=None)
+    parser.add_argument("--vla-config", type=str, default=None)
+    parser.add_argument("--vla-checkpoint", type=str, default=None)
+
+    # Backward-compatible aliases for the committed Stage 2 launch path.
     parser.add_argument("--pi0-config", type=str, default="pi0_libero")
-    parser.add_argument("--pi0-path", type=str, required=True)
+    parser.add_argument("--pi0-path", type=str, default=None)
+
     parser.add_argument("--rlt-encoder-path", type=str, required=True)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
@@ -40,13 +46,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--ff-dim", type=int, default=2048)
     parser.add_argument("--dropout", type=float, default=0.0)
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    args.effective_vla_config = args.vla_config or args.pi0_config
+    args.effective_vla_checkpoint = args.vla_checkpoint or args.pi0_path
+    if not args.effective_vla_checkpoint:
+        parser.error("one of --vla-checkpoint or --pi0-path is required")
+    return args
 
 
 def main() -> None:
     args = parse_args()
-    logger.info("Loading frozen Pi0 + RLT encoder")
-    pi0_model, pi0_policy = load_frozen_pi0(args.pi0_config, args.pi0_path, args.device)
+    logger.info("Loading frozen OpenPI VLA + RLT encoder")
+    base_policy = load_frozen_vla(
+        args.effective_vla_config,
+        args.effective_vla_checkpoint,
+        args.device,
+        openpi_root=args.openpi_root,
+    )
     rl_token_encoder = load_frozen_rlt_encoder(
         args.rlt_encoder_path,
         args.device,
@@ -60,8 +77,7 @@ def main() -> None:
 
     def feature_fn(raw_obs):
         return extract_rlt_features(
-            pi0_model,
-            pi0_policy,
+            base_policy,
             rl_token_encoder,
             raw_obs,
             device=args.device,
@@ -76,6 +92,8 @@ def main() -> None:
         port=args.port,
         metadata={
             "type": "vla_feature_server",
+            "backend": "openpi",
+            "vla_config": args.effective_vla_config,
             "chunk_size": args.chunk_size,
             "action_dim": args.action_dim,
             "proprio_dim": args.proprio_dim,

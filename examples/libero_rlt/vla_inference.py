@@ -1,7 +1,7 @@
-"""Frozen Pi0 + RLT encoder loading and VLA feature extraction.
+"""Frozen OpenPI VLA + RLT encoder loading and feature extraction.
 
-This module encapsulates all Pi0/encoder inference logic so it can be
-shared between the actor process and the eval process.
+This module is shared by the actor and eval feature servers. OpenPI remains an
+external provider; serl_torch only wraps it through a backend adapter.
 """
 
 from __future__ import annotations
@@ -9,94 +9,50 @@ from __future__ import annotations
 import datetime as _datetime
 import logging
 import re
-import sys
-from pathlib import Path
 from typing import Any
+
 import numpy as np
 import torch
+
+from serl_launcher.agents.rlt.modeling import RLTokenEncoder
+from serl_launcher.policy.vla_backends import OpenPIBackend, OpenPIBasePolicy
+
 logger = logging.getLogger(__name__)
 
 if not hasattr(_datetime, "UTC"):
     _datetime.UTC = _datetime.timezone.utc
 
 
-
-
-from openpi.policies import policy_config as _policy_config
-from openpi.models import model as _model
-from openpi.training import config as _config
-from serl_launcher.agents.rlt.modeling import RLTokenEncoder
-
-
-def _tree_map(fn, tree):
-    if isinstance(tree, dict):
-        return {key: _tree_map(fn, value) for key, value in tree.items()}
-    if isinstance(tree, tuple):
-        return tuple(_tree_map(fn, value) for value in tree)
-    if isinstance(tree, list):
-        return [_tree_map(fn, value) for value in tree]
-    return fn(tree)
-
-
-@torch.no_grad()
-def _run_vla(
-    pi0_model: Any,
-    obs_pt: _model.Observation,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Run frozen VLA to get z_vla embeddings and reference action chunk.
-
-    Returns:
-        z_vla: (1, M, D) VLA token embeddings
-        ref_actions: (1, 50, 32) normalized reference actions
-    """
-    device = obs_pt.state.device if obs_pt.state is not None else torch.device("cuda")
-
-    ref_actions = pi0_model.sample_actions(
+def load_frozen_vla(
+    vla_config_name: str,
+    vla_checkpoint_path: str,
+    device: str = "cuda",
+    *,
+    openpi_root: str | None = None,
+) -> OpenPIBasePolicy:
+    """Load a frozen OpenPI VLA through the common backend adapter."""
+    backend = OpenPIBackend(openpi_root=openpi_root)
+    return backend.load_base_policy(
+        config_name=vla_config_name,
+        checkpoint_path=vla_checkpoint_path,
         device=device,
-        observation=obs_pt,
-        noise=None,
-        num_steps=10,
     )
-
-    images, img_masks, lang_tokens, lang_masks, state = pi0_model._preprocess_observation(
-        obs_pt,
-        train=False,
-    )
-    prefix_embs, _, _ = pi0_model.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-    timestep = torch.zeros(ref_actions.shape[0], dtype=torch.float32, device=device)
-    suffix_embs, _, _, _ = pi0_model.embed_suffix(state, ref_actions, timestep)
-
-    if prefix_embs.shape[-1] == suffix_embs.shape[-1]:
-        z_vla = torch.cat([prefix_embs, suffix_embs], dim=1)
-    else:
-        z_vla = prefix_embs
-
-    z_vla = z_vla.to(torch.float32)
-    return z_vla, ref_actions
 
 
 def load_frozen_pi0(
     pi0_config_name: str,
     pi0_checkpoint_path: str,
     device: str = "cuda",
-) -> tuple[Any, Any]:
-    """Load frozen Pi0 model and policy transforms.
-
-    Returns:
-        (pi0_model, pi0_policy) where pi0_model is the frozen PyTorch model
-        and pi0_policy provides _input_transform / _output_transform.
-    """
-    logger.info("Loading Pi0 policy config %r from %s", pi0_config_name, pi0_checkpoint_path)
-    pi0_policy = _policy_config.create_trained_policy(
-        _config.get_config(pi0_config_name),
+    *,
+    openpi_root: str | None = None,
+) -> OpenPIBasePolicy:
+    """Backward-compatible alias for existing Stage 2 scripts."""
+    return load_frozen_vla(
+        pi0_config_name,
         pi0_checkpoint_path,
+        device,
+        openpi_root=openpi_root,
     )
-    pi0_model = pi0_policy._model
-    pi0_model.eval()
-    for param in pi0_model.parameters():
-        param.requires_grad = False
-    logger.info("Frozen Pi0 model loaded on %s", device)
-    return pi0_model, pi0_policy
 
 
 def _get_nested(mapping: dict[str, Any], *keys: str) -> Any:
@@ -187,8 +143,7 @@ def load_frozen_rlt_encoder(
 
 @torch.no_grad()
 def extract_rlt_features(
-    pi0_model: Any,
-    pi0_policy: Any,
+    base_policy: OpenPIBasePolicy,
     rl_token_encoder: RLTokenEncoder,
     raw_obs: dict[str, Any],
     *,
@@ -197,50 +152,26 @@ def extract_rlt_features(
     action_dim: int = 7,
     proprio_dim: int = 8,
 ) -> dict[str, np.ndarray]:
-    """Run frozen Pi0 + encoder on a raw observation.
+    """Run frozen OpenPI VLA + frozen RLT encoder on a raw observation.
 
-    Returns dict with:
-        z_rl: (z_rl_dim,) numpy array
-        reference_action: (chunk_size * action_dim,) numpy array (unnormalized, flattened)
-        proprio: (proprio_dim,) numpy array
+    Returns:
+        z_rl: (z_rl_dim,) float32 array
+        reference_action: (chunk_size * action_dim,) unnormalized action chunk
+        proprio: (proprio_dim,) float32 array
     """
-    torch_device = torch.device(device)
-
-    # 1. Apply Pi0 input transforms (normalization, padding, prompts)
-    processed_obs = pi0_policy._input_transform(raw_obs)
-
-    # 2. Convert to PyTorch tensors with batch dim
-    obs_torch = _tree_map(
-        lambda x: torch.from_numpy(np.array(x, copy=True)).to(torch_device)[None, ...],
-        processed_obs,
+    feature_batch = base_policy.infer_features(raw_obs)
+    z_rl = rl_token_encoder(feature_batch.z_vla.to(torch.device(device)))
+    rl_state = feature_batch.obs_torch["state"][:, :proprio_dim]
+    ref_vla_unnorm = base_policy.unnormalize_actions(
+        feature_batch.obs_torch,
+        feature_batch.reference_actions,
     )
 
-    # 3. Cast to official observation format
-    obs_pt = _model.Observation.from_dict(obs_torch)
-
-    # 4. Run VLA inference
-    z_vla, ref_vla_norm = _run_vla(pi0_model, obs_pt)
-
-    # 5. Compute z_rl via frozen encoder
-    z_rl = rl_token_encoder(z_vla)  # (1, z_rl_dim)
-
-    # 6. Extract proprio
-    rl_state = obs_torch["state"][:, :proprio_dim]  # (1, proprio_dim)
-
-    # 7. Unnormalize reference actions
-    out_dict = {
-        "state": obs_torch["state"].detach().cpu()[0],
-        "actions": ref_vla_norm.detach().cpu()[0],
-    }
-    out_dict_unnorm = pi0_policy._output_transform(out_dict)
-    ref_vla_unnorm = out_dict_unnorm["actions"]  # (50, action_dim) or similar
-
-    # Take first chunk_size steps, flatten
-    ref_action_chunk = ref_vla_unnorm[:chunk_size, :action_dim]  # (chunk_size, action_dim)
-    ref_action_flat = ref_action_chunk.reshape(-1).astype(np.float32)  # (chunk_size * action_dim,)
+    ref_action_chunk = ref_vla_unnorm[:chunk_size, :action_dim]
+    ref_action_flat = ref_action_chunk.reshape(-1).astype(np.float32)
 
     return {
-        "z_rl": z_rl.squeeze(0).cpu().numpy().astype(np.float32),
+        "z_rl": z_rl.squeeze(0).detach().cpu().numpy().astype(np.float32),
         "reference_action": ref_action_flat,
-        "proprio": rl_state.squeeze(0).cpu().numpy().astype(np.float32),
+        "proprio": rl_state.squeeze(0).detach().cpu().numpy().astype(np.float32),
     }

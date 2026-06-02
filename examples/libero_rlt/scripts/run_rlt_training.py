@@ -345,6 +345,10 @@ def actor(cfg: LiberoRLTTrainConfig, *, run_dir: Path, logger: logging.Logger) -
         except Exception:
             pass
         try:
+            client.stop()
+        except Exception:
+            pass
+        try:
             env.close(clear_cache=False)
         except Exception:
             pass
