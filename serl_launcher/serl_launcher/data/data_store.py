@@ -59,6 +59,28 @@ def _batch_storage_view(packed_batch, keys: Iterable[str]):
     return {key: packed_batch[key] for key in keys}
 
 
+def _default_batch(default_value, count: int):
+    value = np.asarray(default_value)
+    return np.broadcast_to(value, (int(count), *value.shape)).copy()
+
+
+def _batch_storage_view_with_defaults(
+    packed_batch,
+    keys: Iterable[str],
+    defaults: Mapping[str, np.ndarray],
+    count: int,
+):
+    result = {}
+    for key in keys:
+        if key in packed_batch:
+            result[key] = packed_batch[key]
+        elif key in defaults:
+            result[key] = _default_batch(defaults[key], int(count))
+        else:
+            raise KeyError(f"batch_insert requires field {key!r}")
+    return result
+
+
 def _advance_step_type(current_step_type, transition):
     if current_step_type in {RLDSStepType.TERMINATION, RLDSStepType.TRUNCATION}:
         return RLDSStepType.RESTART
@@ -293,6 +315,7 @@ class StepWindowReplayBufferDataStore(StepWindowReplayBuffer, DataStoreBase):
         require_full_window: bool = False,
         next_observation_space: Optional[gym.Space] = None,
         rlds_logger: Optional[RLDSLogger] = None,
+        extra_fields: Optional[Mapping[str, gym.Space]] = None,
     ):
         StepWindowReplayBuffer.__init__(
             self,
@@ -304,6 +327,7 @@ class StepWindowReplayBufferDataStore(StepWindowReplayBuffer, DataStoreBase):
             sample_stride=sample_stride,
             require_full_window=require_full_window,
             next_observation_space=next_observation_space,
+            extra_fields=extra_fields,
         )
         DataStoreBase.__init__(self, capacity)
         self._lock = Lock()
@@ -349,7 +373,12 @@ class StepWindowReplayBufferDataStore(StepWindowReplayBuffer, DataStoreBase):
                     int(total_count),
                 )
             )
-            record_batch = _batch_storage_view(packed_kept, self.dataset_dict.keys())
+            record_batch = _batch_storage_view_with_defaults(
+                packed_kept,
+                self.dataset_dict.keys(),
+                getattr(self, "_extra_field_defaults", {}),
+                int(keep_count),
+            )
             ring_write_batch(
                 self.dataset_dict,
                 record_batch,
@@ -437,6 +466,7 @@ class MemoryEfficientStepWindowReplayBufferDataStore(
         next_observation_space: Optional[gym.Space] = None,
         image_keys: Iterable[str] = ("image",),
         rlds_logger: Optional[RLDSLogger] = None,
+        extra_fields: Optional[Mapping[str, gym.Space]] = None,
     ):
         MemoryEfficientStepWindowReplayBuffer.__init__(
             self,
@@ -449,6 +479,7 @@ class MemoryEfficientStepWindowReplayBufferDataStore(
             require_full_window=require_full_window,
             next_observation_space=next_observation_space,
             pixel_keys=tuple(image_keys),
+            extra_fields=extra_fields,
         )
         DataStoreBase.__init__(self, capacity)
         self._lock = Lock()
@@ -495,11 +526,12 @@ class MemoryEfficientStepWindowReplayBufferDataStore(
                     int(total_count),
                 )
             )
-            record_batch = {
-                key: value
-                for key, value in packed_kept.items()
-                if key in self.dataset_dict
-            }
+            record_batch = _batch_storage_view_with_defaults(
+                packed_kept,
+                (key for key in self.dataset_dict.keys() if key != "next_observations"),
+                getattr(self, "_extra_field_defaults", {}),
+                int(keep_count),
+            )
             record_batch["next_observations"] = {
                 key: value
                 for key, value in packed_kept["next_observations"].items()

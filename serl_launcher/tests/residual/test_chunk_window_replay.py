@@ -128,6 +128,89 @@ class ChunkReplayTest(unittest.TestCase):
         self.assertEqual(replay_buffer.window_size, 5)
         self.assertEqual(replay_buffer._step_action_shape, (6,))
 
+    def test_create_chunk_replay_buffer_forwards_sample_stride(self) -> None:
+        observation_space = gym.spaces.Dict(
+            {
+                "state": gym.spaces.Box(
+                    low=-1.0,
+                    high=1.0,
+                    shape=(4,),
+                    dtype=np.float32,
+                )
+            }
+        )
+        replay_buffer = create_chunk_replay_buffer(
+            observation_space=observation_space,
+            action_dim=6,
+            chunk_horizon=5,
+            discount=0.99,
+            image_keys=tuple(),
+            capacity=128,
+            sample_stride=2,
+        )
+
+        self.assertEqual(replay_buffer.sample_stride, 2)
+
+    def test_mc_returns_are_sampled_from_window_start(self) -> None:
+        observation_space = gym.spaces.Dict(
+            {
+                "state": gym.spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(2,),
+                    dtype=np.float32,
+                )
+            }
+        )
+        replay_buffer = create_chunk_replay_buffer(
+            observation_space=observation_space,
+            action_dim=2,
+            chunk_horizon=3,
+            discount=0.99,
+            image_keys=tuple(),
+            capacity=32,
+        )
+        for step in range(6):
+            replay_buffer.insert(
+                {
+                    "episode_id": 0,
+                    "episode_step": step,
+                    "observations": {
+                        "state": np.asarray([step, step + 1], dtype=np.float32),
+                    },
+                    "actions": np.asarray([step, -step], dtype=np.float32),
+                    "next_observations": {
+                        "state": np.asarray([step + 1, step + 2], dtype=np.float32),
+                    },
+                    "rewards": np.float32(1.0),
+                    "masks": np.float32(1.0),
+                    "dones": False,
+                    "mc_returns": np.float32(10.0 + step),
+                    "mc_returns_valid": bool(step % 2 == 0),
+                }
+            )
+
+        indices = np.asarray([0, 1, 2], dtype=np.int64)
+        dynamic = replay_buffer.sample(len(indices), indx=indices)
+        prepared = PreparedStepWindowReplayBufferSampler(replay_buffer).sample(
+            len(indices),
+            indx=indices,
+        )
+
+        expected_returns = np.asarray([10.0, 11.0, 12.0], dtype=np.float32)
+        expected_valid = np.asarray([True, False, True])
+        self.assertTrue(np.allclose(dynamic["mc_returns"], expected_returns))
+        self.assertTrue(np.array_equal(dynamic["mc_returns_valid"], expected_valid))
+        self.assertTrue(np.allclose(prepared["mc_returns"], expected_returns))
+        self.assertTrue(np.array_equal(prepared["mc_returns_valid"], expected_valid))
+
+    def test_missing_mc_returns_default_to_invalid_zero(self) -> None:
+        replay_buffer = self._make_step_replay()
+        batch = replay_buffer.sample(4, indx=np.asarray([0, 1, 2, 3], dtype=np.int64))
+
+        self.assertTrue(np.allclose(batch["mc_returns"], 0.0))
+        self.assertFalse(np.any(batch["mc_returns_valid"]))
+
     def test_reshape_chunk_batch_for_training_flattens_actions(self) -> None:
         batch = {
             "actions": np.zeros((4, 2, 3), dtype=np.float32),

@@ -283,8 +283,21 @@ def create_chunk_replay_buffer(
     discount: float,
     image_keys: tuple[str, ...],
     capacity: int,
+    sample_stride: int = 1,
+    include_mc_returns: bool = True,
 ) -> MemoryEfficientStepWindowReplayBufferDataStore:
     """Create a replay buffer configured for chunked residual training."""
+
+    extra_fields = {}
+    if include_mc_returns:
+        extra_fields = {
+            "mc_returns": gym.spaces.Box(
+                low=-np.inf, high=np.inf, shape=(), dtype=np.float32
+            ),
+            "mc_returns_valid": gym.spaces.Box(
+                low=0, high=1, shape=(), dtype=np.bool_
+            ),
+        }
 
     return MemoryEfficientStepWindowReplayBufferDataStore(
         observation_space=observation_space,
@@ -297,9 +310,10 @@ def create_chunk_replay_buffer(
         capacity=int(capacity),
         window_size=int(chunk_horizon),
         discount=float(discount),
-        sample_stride=1,
+        sample_stride=int(sample_stride),
         require_full_window=False,
         image_keys=image_keys,
+        extra_fields=extra_fields,
     )
 
 
@@ -547,6 +561,11 @@ class PreparedStepWindowReplayBufferSampler:
             "dones": np.array(self._dones[offsets], copy=True),
             "window_steps": np.array(self._window_steps[offsets], copy=True),
         }
+        for key in getattr(self.replay_buffer, "_extra_field_keys", ()):
+            batch[key] = np.array(
+                self.replay_buffer.dataset_dict[key][start_indices],
+                copy=True,
+            )
         _profile_add(
             profile,
             "prepared_cache_take_sec",
