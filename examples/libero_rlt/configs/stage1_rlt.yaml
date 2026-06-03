@@ -2,7 +2,7 @@ global_seed: 42
 
 vla:
   backend: openpi
-  openpi_root: /vla/users/yixin/openpi
+  openpi_root: /vla/users/niejunnan/codebase/openpi-rlt
   config_name: pi0_libero
   checkpoint_path: /vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch
   assets_base_dir: /vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch

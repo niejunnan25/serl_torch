@@ -32,6 +32,20 @@ The feature server websocket output remains:
 - Stage 1 RLT encoder checkpoint for Stage 2. Existing checkpoints with `encoder_state_dict` remain supported.
 - LIBERO runtime environment.
 
+## Token Length Compatibility
+
+Stage 1 may train the RLT encoder on a truncated prefix of VLA tokens. The
+default config uses `rlt.max_tokens: 512`. New Stage 1 checkpoints written by
+`train_rlt_stage1.py` store this value in `config.rlt.max_tokens`; Stage 2 then
+automatically applies the same truncation before calling the frozen encoder.
+This keeps Stage 1 and online Stage 2 feature extraction aligned even when the
+OpenPI feature extractor returns a longer token sequence.
+
+Legacy checkpoints from the older yixin OpenPI path usually do not contain the
+RLT config. Those checkpoints were trained with the Stage 1 prefix truncated to
+512 tokens, so pass `--rlt-max-tokens 512` when launching Stage 2 with them.
+Passing `--rlt-max-tokens 0` explicitly disables truncation.
+
 ## Stage 1 Training
 
 Run Stage 1 with a Python environment that has the OpenPI dependencies installed. On the development cluster this is usually an OpenPI `.venv`; the `serl_torch` conda env may not contain packages such as `numpydantic`. The `vla.openpi_root` checkout must expose `model.extract_embeddings()`. For smoke tests without a cached LeRobot LIBERO dataset, set `vla.repo_id_override=fake`; real training should leave it unset and set `vla.lerobot_home` to the local LeRobot cache root. On the development cluster, `/vla/users/niejunnan/datasets/libero` is exposed as `physical-intelligence/libero` through `HF_LEROBOT_HOME=/vla/users/niejunnan/datasets`.
@@ -108,6 +122,12 @@ Backward-compatible aliases are still accepted:
 
 - `--pi0-config` == `--vla-config`
 - `--pi0-path` == `--vla-checkpoint`
+
+For an older yixin Stage 1 checkpoint that lacks `config.rlt.max_tokens`, add:
+
+```bash
+  --rlt-max-tokens 512
+```
 
 Start with async eval:
 

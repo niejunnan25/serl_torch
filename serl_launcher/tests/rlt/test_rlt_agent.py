@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -15,6 +16,7 @@ for _path in (SERL_LAUNCHER_ROOT, REPO_ROOT):
         sys.path.insert(0, str(_path))
 
 from examples.libero_rlt.config import parse_train_cfg
+from examples.libero_rlt.vla_inference import extract_rlt_features, load_frozen_rlt_encoder
 from serl_launcher.agents.rlt.agent import RLTAgent
 from serl_launcher.agents.rlt.modeling import RLTokenDecoder, RLTokenEncoder
 from serl_launcher.async_eval.artifacts import (
@@ -220,6 +222,162 @@ def test_vla_feature_client_normalizes_result_arrays() -> None:
     assert result["z_rl"].shape == (2,)
     assert result["reference_action"].shape == (4,)
     assert result["proprio"].shape == (1,)
+
+
+def test_extract_rlt_features_applies_encoder_max_tokens() -> None:
+    class FakeBasePolicy:
+        def infer_features(self, raw_obs):
+            return SimpleNamespace(
+                z_vla=torch.randn(1, 5, 4),
+                obs_torch={"state": torch.zeros(1, 8)},
+                reference_actions=torch.zeros(1, 10, 7),
+            )
+
+        def unnormalize_actions(self, obs_torch, reference_actions):
+            return np.zeros((10, 7), dtype=np.float32)
+
+    class RecorderEncoder(torch.nn.Module):
+        max_tokens = 3
+
+        def __init__(self):
+            super().__init__()
+            self.seen_shape = None
+
+        def forward(self, z_vla):
+            self.seen_shape = tuple(z_vla.shape)
+            return torch.zeros(z_vla.shape[0], 6, device=z_vla.device)
+
+    encoder = RecorderEncoder()
+
+    features = extract_rlt_features(
+        FakeBasePolicy(),
+        encoder,
+        {},
+        device="cpu",
+        chunk_size=2,
+        action_dim=2,
+        proprio_dim=3,
+    )
+
+    assert encoder.seen_shape == (1, 3, 4)
+    assert features["z_rl"].shape == (6,)
+    assert features["reference_action"].shape == (4,)
+    assert features["proprio"].shape == (3,)
+
+
+def test_load_frozen_rlt_encoder_restores_max_tokens(tmp_path) -> None:
+    encoder = RLTokenEncoder(
+        input_dim=4,
+        rl_token_dim=4,
+        num_layers=1,
+        num_heads=2,
+        ff_dim=8,
+    )
+    checkpoint_path = tmp_path / "rlt_encoder.pt"
+    torch.save(
+        {
+            "encoder_state_dict": encoder.state_dict(),
+            "config": {
+                "rlt": {
+                    "input_dim": 4,
+                    "rl_token_dim": 4,
+                    "num_encoder_layers": 1,
+                    "num_heads": 2,
+                    "ff_dim": 8,
+                    "max_tokens": 3,
+                }
+            },
+        },
+        checkpoint_path,
+    )
+
+    loaded = load_frozen_rlt_encoder(str(checkpoint_path), device="cpu")
+
+    assert loaded.max_tokens == 3
+
+
+def test_load_frozen_rlt_encoder_max_tokens_override_wins(tmp_path) -> None:
+    encoder = RLTokenEncoder(
+        input_dim=4,
+        rl_token_dim=4,
+        num_layers=1,
+        num_heads=2,
+        ff_dim=8,
+    )
+    checkpoint_path = tmp_path / "rlt_encoder.pt"
+    torch.save(
+        {
+            "encoder_state_dict": encoder.state_dict(),
+            "config": {
+                "rlt": {
+                    "input_dim": 4,
+                    "rl_token_dim": 4,
+                    "num_encoder_layers": 1,
+                    "num_heads": 2,
+                    "ff_dim": 8,
+                    "max_tokens": 3,
+                }
+            },
+        },
+        checkpoint_path,
+    )
+
+    loaded = load_frozen_rlt_encoder(str(checkpoint_path), device="cpu", max_tokens=2)
+
+    assert loaded.max_tokens == 2
+
+
+def test_load_frozen_rlt_encoder_zero_max_tokens_override_disables_truncation(tmp_path) -> None:
+    encoder = RLTokenEncoder(
+        input_dim=4,
+        rl_token_dim=4,
+        num_layers=1,
+        num_heads=2,
+        ff_dim=8,
+    )
+    checkpoint_path = tmp_path / "rlt_encoder.pt"
+    torch.save(
+        {
+            "encoder_state_dict": encoder.state_dict(),
+            "config": {
+                "rlt": {
+                    "input_dim": 4,
+                    "rl_token_dim": 4,
+                    "num_encoder_layers": 1,
+                    "num_heads": 2,
+                    "ff_dim": 8,
+                    "max_tokens": 3,
+                }
+            },
+        },
+        checkpoint_path,
+    )
+
+    loaded = load_frozen_rlt_encoder(str(checkpoint_path), device="cpu", max_tokens=0)
+
+    assert loaded.max_tokens is None
+
+
+def test_load_frozen_rlt_encoder_legacy_checkpoint_accepts_max_tokens_override(tmp_path) -> None:
+    encoder = RLTokenEncoder(
+        input_dim=4,
+        rl_token_dim=4,
+        num_layers=1,
+        num_heads=2,
+        ff_dim=8,
+    )
+    checkpoint_path = tmp_path / "legacy_rlt_encoder.pt"
+    torch.save(encoder.state_dict(), checkpoint_path)
+
+    loaded = load_frozen_rlt_encoder(
+        str(checkpoint_path),
+        device="cpu",
+        num_heads=2,
+        ff_dim=8,
+        max_tokens=3,
+    )
+
+    assert loaded.max_tokens == 3
 
 
 def test_prune_async_eval_checkpoints_preserves_protected_pending(tmp_path) -> None:

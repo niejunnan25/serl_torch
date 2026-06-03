@@ -46,6 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--ff-dim", type=int, default=2048)
     parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--rlt-max-tokens",
+        type=int,
+        default=None,
+        help="Override the RLT encoder VLA token truncation length. Use this for legacy Stage 1 checkpoints.",
+    )
     args = parser.parse_args()
 
     args.effective_vla_config = args.vla_config or args.pi0_config
@@ -73,6 +79,7 @@ def main() -> None:
         num_heads=args.num_heads,
         ff_dim=args.ff_dim,
         dropout=args.dropout,
+        max_tokens=args.rlt_max_tokens,
     )
 
     def feature_fn(raw_obs):
@@ -98,6 +105,7 @@ def main() -> None:
             "action_dim": args.action_dim,
             "proprio_dim": args.proprio_dim,
             "z_rl_dim": args.z_rl_dim,
+            "rlt_max_tokens": getattr(rl_token_encoder, "max_tokens", None),
         },
         logger=logger,
     )

@@ -14,6 +14,7 @@ EVAL_VLA_PORT="8875"
 RUN_DIR=""
 PI0_PATH=""
 RLT_ENCODER_PATH=""
+RLT_MAX_TOKENS=""
 PI0_CONFIG="pi0_libero"
 CONDA_SH="/vla/miniconda3/etc/profile.d/conda.sh"
 CONDA_ENV="serl_torch"
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --run-dir) RUN_DIR="$2"; shift 2 ;;
     --pi0-path|--vla-checkpoint) PI0_PATH="$2"; shift 2 ;;
     --rlt-encoder-path) RLT_ENCODER_PATH="$2"; shift 2 ;;
+    --rlt-max-tokens) RLT_MAX_TOKENS="$2"; shift 2 ;;
     --pi0-config|--vla-config) PI0_CONFIG="$2"; shift 2 ;;
     --conda-env) CONDA_ENV="$2"; shift 2 ;;
     --openpi-root) OPENPI_ROOT="$2"; shift 2 ;;
@@ -84,6 +86,12 @@ tmux_start_window() {
   tmux new-window -t "$SESSION" -n "$name" "bash -lc $(quote_cmd "$command")"
 }
 
+VLA_EXTRA_ARGS=()
+if [[ -n "$RLT_MAX_TOKENS" ]]; then
+  VLA_EXTRA_ARGS+=(--rlt-max-tokens "$RLT_MAX_TOKENS")
+fi
+VLA_EXTRA_ARGS_QUOTED="$(quote_args "${VLA_EXTRA_ARGS[@]}")"
+
 LEARNER_ARGS="$(quote_args \
   "${HYDRA_OVERRIDES[@]}" \
   "hydra.run.dir=${RUN_DIR}" \
@@ -110,10 +118,10 @@ ACTOR_ARGS="$(quote_args \
 
 tmux has-session -t "$SESSION" 2>/dev/null && { echo "tmux session exists: $SESSION" >&2; exit 1; }
 tmux new-session -d -s "$SESSION" -n env "bash -lc $(quote_cmd "cd ${REPO_ROOT}; LIBERO_CONDA_PREFIX=/vla/users/niejunnan/envs/libero bash examples/libero/tools/serve_env.sh --port ${ENV_PORT} --gpu-id ${GPU}")"
-tmux_start_window vla "${VLA_PREFIX}; CUDA_VISIBLE_DEVICES=${GPU} ${VLA_PYTHON} examples/libero_rlt/scripts/serve_vla_features.py --openpi-root ${OPENPI_ROOT} --vla-config ${PI0_CONFIG} --vla-checkpoint ${PI0_PATH} --rlt-encoder-path ${RLT_ENCODER_PATH} --port ${VLA_PORT}"
+tmux_start_window vla "${VLA_PREFIX}; CUDA_VISIBLE_DEVICES=${GPU} ${VLA_PYTHON} examples/libero_rlt/scripts/serve_vla_features.py --openpi-root ${OPENPI_ROOT} --vla-config ${PI0_CONFIG} --vla-checkpoint ${PI0_PATH} --rlt-encoder-path ${RLT_ENCODER_PATH} --port ${VLA_PORT}${VLA_EXTRA_ARGS_QUOTED}"
 if [[ "$WITH_EVAL" == "1" ]]; then
   tmux_start_window eval-env "cd ${REPO_ROOT}; LIBERO_CONDA_PREFIX=/vla/users/niejunnan/envs/libero bash examples/libero/tools/serve_env.sh --port ${EVAL_ENV_PORT} --gpu-id ${EVAL_GPU}"
-  tmux_start_window eval-vla "${VLA_PREFIX}; CUDA_VISIBLE_DEVICES=${EVAL_GPU} ${VLA_PYTHON} examples/libero_rlt/scripts/serve_vla_features.py --openpi-root ${OPENPI_ROOT} --vla-config ${PI0_CONFIG} --vla-checkpoint ${PI0_PATH} --rlt-encoder-path ${RLT_ENCODER_PATH} --port ${EVAL_VLA_PORT}"
+  tmux_start_window eval-vla "${VLA_PREFIX}; CUDA_VISIBLE_DEVICES=${EVAL_GPU} ${VLA_PYTHON} examples/libero_rlt/scripts/serve_vla_features.py --openpi-root ${OPENPI_ROOT} --vla-config ${PI0_CONFIG} --vla-checkpoint ${PI0_PATH} --rlt-encoder-path ${RLT_ENCODER_PATH} --port ${EVAL_VLA_PORT}${VLA_EXTRA_ARGS_QUOTED}"
 fi
 tmux_start_window learner "${PY_PREFIX}; CUDA_VISIBLE_DEVICES=${LEARNER_GPU} python examples/libero_rlt/scripts/run_rlt_training.py --config-name ${CONFIG_NAME}${LEARNER_ARGS}"
 tmux_start_window actor "${PY_PREFIX}; CUDA_VISIBLE_DEVICES=${GPU} python examples/libero_rlt/scripts/run_rlt_training.py --config-name ${CONFIG_NAME}${ACTOR_ARGS}"

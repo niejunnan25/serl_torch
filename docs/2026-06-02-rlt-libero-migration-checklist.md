@@ -15,6 +15,10 @@ Target branch: `codex/integrate-rlt-token`
   path.
 - VLA feature service: Pi0/OpenPI and frozen RLT encoder live behind a feature
   server; actor, learner, and eval consume compact features through the client.
+- VLA token-length compatibility: new Stage 1 checkpoints carry
+  `config.rlt.max_tokens`, and Stage 2 applies the same truncation before the
+  frozen encoder. Legacy yixin checkpoints can be aligned with
+  `--rlt-max-tokens 512`.
 - LIBERO actor/learner recipe: remote env, replay, checkpoint codec, Hydra
   config parsing, actor-finished signaling, and async eval integration.
 - RLT Stage 2 loss shape: chunk-level critic target and actor objective

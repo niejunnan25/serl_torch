@@ -64,6 +64,25 @@ def _get_nested(mapping: dict[str, Any], *keys: str) -> Any:
     return current
 
 
+def _normalize_max_tokens(value: Any) -> int | None:
+    if value is None:
+        return None
+    max_tokens = int(value)
+    if max_tokens <= 0:
+        return None
+    return max_tokens
+
+
+def _truncate_vla_tokens_for_encoder(
+    z_vla: torch.Tensor,
+    rl_token_encoder: RLTokenEncoder,
+) -> torch.Tensor:
+    max_tokens = getattr(rl_token_encoder, "max_tokens", None)
+    if max_tokens is None:
+        return z_vla
+    return z_vla[:, :max_tokens, :]
+
+
 def load_frozen_rlt_encoder(
     rlt_encoder_path: str,
     device: str = "cuda",
@@ -74,6 +93,7 @@ def load_frozen_rlt_encoder(
     num_heads: int = 8,
     ff_dim: int = 2048,
     dropout: float = 0.0,
+    max_tokens: int | None = None,
 ) -> RLTokenEncoder:
     """Load the Stage 1 trained RLT encoder (frozen for Stage 2).
 
@@ -121,6 +141,10 @@ def load_frozen_rlt_encoder(
     num_heads = int(rlt_cfg.get("num_heads", num_heads))
     ff_dim = int(rlt_cfg.get("ff_dim", ff_dim))
     dropout = float(rlt_cfg.get("dropout", dropout))
+    if max_tokens is not None:
+        max_tokens = _normalize_max_tokens(max_tokens)
+    else:
+        max_tokens = _normalize_max_tokens(rlt_cfg.get("max_tokens", None))
 
     encoder = RLTokenEncoder(
         input_dim=input_dim,
@@ -133,10 +157,11 @@ def load_frozen_rlt_encoder(
     encoder.load_state_dict(state_dict)
     encoder.eval()
     encoder.requires_grad_(False)
+    encoder.max_tokens = max_tokens
     encoder.to(device)
     logger.info(
-        "Frozen RLT encoder loaded from %s (input_dim=%s rl_token_dim=%s layers=%s)",
-        rlt_encoder_path, input_dim, rl_token_dim, num_encoder_layers,
+        "Frozen RLT encoder loaded from %s (input_dim=%s rl_token_dim=%s layers=%s max_tokens=%s)",
+        rlt_encoder_path, input_dim, rl_token_dim, num_encoder_layers, max_tokens,
     )
     return encoder
 
@@ -160,7 +185,9 @@ def extract_rlt_features(
         proprio: (proprio_dim,) float32 array
     """
     feature_batch = base_policy.infer_features(raw_obs)
-    z_rl = rl_token_encoder(feature_batch.z_vla.to(torch.device(device)))
+    z_vla = feature_batch.z_vla.to(torch.device(device))
+    z_vla = _truncate_vla_tokens_for_encoder(z_vla, rl_token_encoder)
+    z_rl = rl_token_encoder(z_vla)
     rl_state = feature_batch.obs_torch["state"][:, :proprio_dim]
     ref_vla_unnorm = base_policy.unnormalize_actions(
         feature_batch.obs_torch,
