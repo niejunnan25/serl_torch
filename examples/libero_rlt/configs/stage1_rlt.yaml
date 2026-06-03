@@ -1,0 +1,35 @@
+global_seed: 42
+
+vla:
+  backend: openpi
+  openpi_root: /vla/users/niejunnan/codebase/openpi-rlt
+  config_name: pi0_libero
+  checkpoint_path: /vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch
+  assets_base_dir: /vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch
+  checkpoint_base_dir: ./checkpoints
+  exp_name: rlt_stage1
+  repo_id_override: null
+  lerobot_home: /vla/users/niejunnan/datasets
+  device: cuda
+
+rlt:
+  rl_token_dim: 2048
+  num_encoder_layers: 2
+  num_decoder_layers: 2
+  num_heads: 8
+  ff_dim: 2048
+  dropout: 0.0
+  reconstruction_source: auto
+  max_tokens: 512
+
+training:
+  output_dir: outputs/rlt_stage1/libero
+  steps: 20000
+  batch_size: 128
+  lr: 4.0e-4
+  weight_decay: 1.0e-5
+  warmup_steps: 200
+  save_every: 2000
+  log_every: 50
+  num_workers: 4
+  clip_grad_norm: 1.0

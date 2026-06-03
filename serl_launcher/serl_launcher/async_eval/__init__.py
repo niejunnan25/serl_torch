@@ -2,6 +2,7 @@ from serl_launcher.async_eval.artifacts import append_async_eval_checkpoint_inde
 from serl_launcher.async_eval.artifacts import ASYNC_EVAL_CHECKPOINT_INDEX_FILE
 from serl_launcher.async_eval.artifacts import format_async_eval_checkpoint_filename
 from serl_launcher.async_eval.artifacts import format_async_eval_run_dir_name
+from serl_launcher.async_eval.artifacts import prune_async_eval_checkpoints
 from serl_launcher.async_eval.artifacts import resolve_async_eval_checkpoint_from_index
 from serl_launcher.async_eval.artifacts import save_async_eval_checkpoint_payload
 from serl_launcher.async_eval.queue import append_async_eval_request
@@ -31,6 +32,7 @@ __all__ = [
     "load_async_eval_queue",
     "load_completed_async_eval_indices",
     "load_new_async_eval_results",
+    "prune_async_eval_checkpoints",
     "resolve_async_eval_checkpoint_from_index",
     "resolve_async_eval_path",
     "save_async_eval_checkpoint_payload",

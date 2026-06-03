@@ -1,0 +1,100 @@
+global_seed: 42
+
+task:
+  suite_name: libero_10
+  task_id: 6
+
+runtime:
+  role: actor
+  trainer_host: 127.0.0.1
+  trainer_port: 5688
+  broadcast_port: 5689
+  data_store_queue_size: 2000
+
+rlt:
+  pi0_config_name: pi0_libero
+  pi0_checkpoint_path: /vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch   # Required: path to Pi0 checkpoint
+  rlt_encoder_path: /vla/users/yixin/openpi/checkpoints/rlt_stage1_single_cos_l6/checkpoint_12000.pt      # Required: path to Stage 1 encoder checkpoint
+  vla_server_host: 127.0.0.1
+  vla_server_port: 8765
+  eval_vla_server_host: 127.0.0.1
+  eval_vla_server_port: 8865
+  action_dim: 7
+  proprio_dim: 8
+  chunk_size: 10
+  execute_horizon: 5
+  z_rl_dim: 2048
+  utd_ratio: 5
+  policy_update_freq: 2
+  discount: 0.99
+  tau: 0.005
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  bc_reg_coeff: 3.0
+  ref_dropout: 0.5
+  clip_grad_norm: 10.0
+  num_critics: 2
+  warmup_steps: 2500
+  batch_size: 128
+  actor_hidden_dims: [512, 512, 512]
+  critic_hidden_dims: [512, 512, 512]
+  actor_std: 0.01
+  device: cuda
+
+env:
+  action_dim: 7
+  backend: remote
+  resolution: 256
+  num_steps_wait: 10
+  max_episode_steps: null
+  seed: 0
+  remote:
+    host: 127.0.0.1
+    port: 20000
+    timeout_sec: 120.0
+
+replay:
+  capacity: 100000
+  batch_size: 128
+
+training:
+  training_starts: 128
+  steps_per_update: 1
+  max_env_steps: 100000
+  max_update_steps: 100000
+  log_period: 100
+  checkpoint:
+    every_steps: 2000
+    keep: 5
+    dir: checkpoints
+  async_eval:
+    enabled: true  #false #
+    every_episodes: 10
+    episodes: 50
+    start_episode_idx: 0
+    max_env_steps_per_episode: null
+    deterministic: true
+    poll_interval_sec: 5.0
+    queue_file: eval_queue.jsonl
+    summary_jsonl: eval_summary.jsonl
+    worker_log_file: eval_worker.log
+    checkpoint:
+      dir: eval_checkpoints
+      keep: 0
+    env:
+      backend: remote
+      remote:
+        host: 127.0.0.1
+        port: 20001
+        timeout_sec: 120.0
+
+wandb:
+  project: libero_rlt
+  exp_name: libero_into_serl
+  group: null
+  debug: false
+
+logging:
+  summary_file: summary.json
+  episode_log_file: episode_logs.jsonl
+  save_videos: false
