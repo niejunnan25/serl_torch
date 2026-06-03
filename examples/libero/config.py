@@ -165,6 +165,7 @@ class ReplayPreparedChunkConfig:
 class ReplayConfig:
     capacity: int
     batch_size: int
+    sample_stride: int
     prepared_chunk: ReplayPreparedChunkConfig
 
 
@@ -1107,6 +1108,10 @@ def _parse_replay_cfg(cfg: DictConfig) -> ReplayConfig:
         batch_size=_positive_int(
             replay_cfg.get("batch_size", 128),
             "replay.batch_size",
+        ),
+        sample_stride=_positive_int(
+            replay_cfg.get("sample_stride", 1),
+            "replay.sample_stride",
         ),
         prepared_chunk=ReplayPreparedChunkConfig(
             offline_enabled=bool(

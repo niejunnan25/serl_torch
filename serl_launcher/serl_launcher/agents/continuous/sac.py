@@ -807,8 +807,7 @@ class SACAgent:
         calql_alpha = float(calql_alpha)
         cql_penalty = torch.as_tensor(0.0, device=predicted_qs.device)
         if calql_alpha > 0.0:
-            # Cal-QL/CQL-style conservative regularization:
-            # 约束 Q(s, a_data) 不应明显低于采样动作集合上的 log-sum-exp 估计。
+            # Cal-QL/CQL-style conservative regularization.
             n_actions = (
                 int(calql_n_actions)
                 if calql_n_actions is not None
@@ -844,6 +843,32 @@ class SACAgent:
             q_pi = self.forward_critic(
                 batch["observations"], policy_actions, train=True
             )  # (Q,B,N)
+
+            calql_bound_applied = torch.as_tensor(0.0, device=predicted_qs.device)
+            mc_returns = (
+                batch.get("mc_returns", None) if isinstance(batch, dict) else None
+            )
+            mc_returns_valid = (
+                batch.get("mc_returns_valid", None) if isinstance(batch, dict) else None
+            )
+            if mc_returns is not None and mc_returns_valid is not None:
+                mc_returns = mc_returns.to(
+                    device=q_pi.device,
+                    dtype=q_pi.dtype,
+                ).reshape(batch_size)
+                valid = mc_returns_valid.to(device=q_pi.device).bool().reshape(
+                    batch_size
+                )
+                if torch.any(valid):
+                    lower_bound = mc_returns.view(1, batch_size, 1)
+                    valid_mask = valid.view(1, batch_size, 1)
+                    q_pi = torch.where(
+                        valid_mask,
+                        torch.maximum(q_pi, lower_bound),
+                        q_pi,
+                    )
+                    calql_bound_applied = valid.float().mean()
+
             q_cat = torch.cat([q_rand, q_pi], dim=-1)  # (Q,B,2N)
 
             lse_q = torch.logsumexp(q_cat / cql_temp, dim=-1) * cql_temp  # (Q,B)
@@ -863,6 +888,12 @@ class SACAgent:
             "batch_size": int(batch_size),
             "otf_num_samples": int(self.config.get("otf_num_samples", 1)),
             "calql_alpha": float(calql_alpha),
+            "calql_bound_applied": _detach_metric(
+                locals().get(
+                    "calql_bound_applied",
+                    torch.as_tensor(0.0, device=predicted_qs.device),
+                )
+            ),
         }
 
         return critic_loss, info

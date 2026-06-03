@@ -221,3 +221,8 @@ examples/agibot_real/hal.txt
 
 # macOS Finder metadata
 .DS_Store
+# Generated PLD example data and logs
+examples/libero_pld/data/**
+examples/libero_pld/outputs/**
+examples/libero_pld/training_logs/**
+examples/libero_pld/.local/**

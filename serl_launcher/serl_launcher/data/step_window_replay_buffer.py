@@ -3,7 +3,7 @@ from __future__ import annotations
 import collections
 import copy
 import time
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 try:
     import gym
@@ -12,6 +12,7 @@ except ModuleNotFoundError:
 import numpy as np
 
 from serl_launcher.data.dataset import Dataset, DatasetDict
+from serl_launcher.data.replay_buffer import _init_extra_field_dict
 from serl_launcher.data.replay_buffer import _init_replay_dict
 from serl_launcher.data.replay_buffer import _insert_recursively
 from serl_launcher.data.replay_buffer import _to_torch
@@ -48,6 +49,12 @@ def _take_at(dataset_dict, indices: np.ndarray):
     if isinstance(dataset_dict, dict):
         return {k: _take_at(v, indices) for k, v in dataset_dict.items()}
     raise TypeError("Unsupported dataset type")
+
+
+def _zero_for_space(space: gym.Space) -> np.ndarray:
+    if not isinstance(space, gym.spaces.Box):
+        raise TypeError(f"extra replay fields must use Box spaces, got {type(space)}")
+    return np.zeros(tuple(space.shape), dtype=space.dtype)
 
 
 def _pack_obs_and_next_pixels(
@@ -156,6 +163,7 @@ class StepWindowReplayBuffer(Dataset):
         sample_stride: int = 1,
         require_full_window: bool = False,
         next_observation_space: Optional[gym.Space] = None,
+        extra_fields: Optional[Mapping[str, gym.Space]] = None,
     ):
         if next_observation_space is None:
             next_observation_space = observation_space
@@ -183,7 +191,15 @@ class StepWindowReplayBuffer(Dataset):
             masks=np.empty((int(capacity),), dtype=np.float32),
             dones=np.empty((int(capacity),), dtype=bool),
         )
+        resolved_extra_fields = dict(extra_fields or {})
+        dataset_dict.update(_init_extra_field_dict(resolved_extra_fields, int(capacity)))
         super().__init__(dataset_dict)
+
+        self._extra_field_keys = tuple(str(key) for key in resolved_extra_fields)
+        self._extra_field_defaults = {
+            str(key): _zero_for_space(space)
+            for key, space in resolved_extra_fields.items()
+        }
 
         self._capacity = int(capacity)
         self.window_size = int(window_size)
@@ -293,13 +309,30 @@ class StepWindowReplayBuffer(Dataset):
                 self._candidate_start_step_ids.append(int(step_id))
                 self._candidate_start_step_set.add(int(step_id))
 
+    def _step_record_from_data(self, data_dict: DatasetDict) -> DatasetDict:
+        step_record = {}
+        for key in self.dataset_dict.keys():
+            if key in data_dict:
+                step_record[key] = data_dict[key]
+            elif key in self._extra_field_defaults:
+                step_record[key] = self._extra_field_defaults[key]
+            else:
+                raise KeyError(f"step window replay insert requires {key!r}")
+        return step_record
+
+    def _copy_extra_fields_batch(self, start_indices: np.ndarray) -> DatasetDict:
+        return {
+            key: _take_at(self.dataset_dict[key], start_indices)
+            for key in self._extra_field_keys
+        }
+
     def insert(self, data_dict: DatasetDict):
         if "episode_id" not in data_dict:
             raise KeyError("step window replay insert requires 'episode_id'")
         if "episode_step" not in data_dict:
             raise KeyError("step window replay insert requires 'episode_step'")
 
-        step_record = {key: data_dict[key] for key in self.dataset_dict.keys()}
+        step_record = self._step_record_from_data(data_dict)
         _insert_recursively(self.dataset_dict, step_record, self._insert_index)
 
         self._episode_ids[self._insert_index] = np.int64(data_dict["episode_id"])
@@ -340,7 +373,7 @@ class StepWindowReplayBuffer(Dataset):
         start_idx = self._buffer_index(start_step_id)
         last_idx = self._buffer_index(step_ids[-1])
         last_mask = float(self.dataset_dict["masks"][last_idx])
-        return {
+        transition = {
             "observations": _copy_at(self.dataset_dict["observations"], start_idx),
             "actions": action_window,
             "action_mask": action_mask,
@@ -354,6 +387,9 @@ class StepWindowReplayBuffer(Dataset):
             "dones": bool(boundary),
             "window_steps": np.int32(window_steps),
         }
+        for key in self._extra_field_keys:
+            transition[key] = _copy_at(self.dataset_dict[key], start_idx)
+        return transition
 
     def _batch_window_indices(
         self,
@@ -598,7 +634,7 @@ class StepWindowReplayBuffer(Dataset):
             time.perf_counter() - next_obs_take_start,
         )
 
-        return {
+        batch = {
             "observations": observations,
             "actions": action_window,
             "action_mask": action_mask,
@@ -608,6 +644,8 @@ class StepWindowReplayBuffer(Dataset):
             "dones": dones,
             "window_steps": window_steps,
         }
+        batch.update(self._copy_extra_fields_batch(start_indices))
+        return batch
 
     def _build_transition_batch(
         self,
@@ -694,6 +732,7 @@ class MemoryEfficientStepWindowReplayBuffer(StepWindowReplayBuffer):
         require_full_window: bool = False,
         next_observation_space: Optional[gym.Space] = None,
         pixel_keys: Iterable[str] = ("pixels",),
+        extra_fields: Optional[Mapping[str, gym.Space]] = None,
     ):
         if not isinstance(observation_space, gym.spaces.Dict):
             raise TypeError(
@@ -729,6 +768,7 @@ class MemoryEfficientStepWindowReplayBuffer(StepWindowReplayBuffer):
             sample_stride=sample_stride,
             require_full_window=require_full_window,
             next_observation_space=gym.spaces.Dict(next_observation_space_dict),
+            extra_fields=extra_fields,
         )
 
         self._explicit_next_pixels = {
