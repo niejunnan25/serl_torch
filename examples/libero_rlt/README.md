@@ -27,10 +27,21 @@ The feature server websocket output remains:
 
 ## Required Artifacts
 
-- External OpenPI RLT checkout with a compatible embedding extractor (`model.extract_embeddings`), for example `/vla/users/niejunnan/codebase/openpi-rlt`.
+- External OpenPI RLT checkout with a compatible embedding extractor (`model.extract_embeddings`), for example `/vla/users/niejunnan/codebase/openpi-rlt-github`.
 - OpenPI policy checkpoint compatible with the chosen `vla.config_name`, e.g. `pi0_libero`.
 - Stage 1 RLT encoder checkpoint for Stage 2. Existing checkpoints with `encoder_state_dict` remain supported.
 - LIBERO runtime environment.
+
+Recommended OpenPI fork:
+
+```bash
+git clone https://github.com/niejunnan25/openpi.git /vla/users/niejunnan/codebase/openpi-rlt-github
+cd /vla/users/niejunnan/codebase/openpi-rlt-github
+git checkout codex/rlt-extract-embeddings
+```
+
+This fork keeps OpenPI as the VLA provider and only adds the
+`PI0Pytorch.extract_embeddings()` hook required by RLT.
 
 ## Token Length Compatibility
 
@@ -58,7 +69,7 @@ cd /vla/users/niejunnan/codebase/serl_torch-rlt-stage1-adapter
 /vla/users/niejunnan/codebase/openpi-modified/.venv/bin/python3 \
   examples/libero_rlt/scripts/train_rlt_stage1.py \
   --config examples/libero_rlt/configs/stage1_rlt.yaml \
-  vla.openpi_root=/vla/users/niejunnan/codebase/openpi-rlt \
+  vla.openpi_root=/vla/users/niejunnan/codebase/openpi-rlt-github \
   vla.config_name=pi0_libero \
   vla.checkpoint_path=/vla/users/yixin/base_model/openpi-assets/checkpoints/pi0_libero_pytorch \
   vla.repo_id_override=fake \
@@ -77,7 +88,7 @@ Real-data Stage 1 smoke:
 /vla/users/niejunnan/codebase/openpi-modified/.venv/bin/python3 \
   examples/libero_rlt/scripts/train_rlt_stage1.py \
   --config examples/libero_rlt/configs/stage1_rlt.yaml \
-  vla.openpi_root=/vla/users/niejunnan/codebase/openpi-rlt \
+  vla.openpi_root=/vla/users/niejunnan/codebase/openpi-rlt-github \
   vla.lerobot_home=/vla/users/niejunnan/datasets \
   vla.repo_id_override=null \
   training.output_dir=/tmp/rlt_stage1_real_smoke \
@@ -108,7 +119,7 @@ bash examples/libero_rlt/tools/launch_rlt_training.sh \
   --config-name smoke_rlt \
   --gpu 0 \
   --learner-gpu 1 \
-  --openpi-root /vla/users/niejunnan/codebase/openpi-rlt \
+  --openpi-root /vla/users/niejunnan/codebase/openpi-rlt-github \
   --vla-config pi0_libero \
   --vla-checkpoint /path/to/pi0_libero_checkpoint \
   --rlt-encoder-path /path/to/rlt_stage1_checkpoint.pt \
@@ -143,7 +154,7 @@ bash examples/libero_rlt/tools/launch_rlt_training.sh \
   --vla-port 8777 \
   --eval-env-port 21001 \
   --eval-vla-port 8877 \
-  --openpi-root /vla/users/niejunnan/codebase/openpi-rlt \
+  --openpi-root /vla/users/niejunnan/codebase/openpi-rlt-github \
   --vla-config pi0_libero \
   --vla-checkpoint /path/to/pi0_libero_checkpoint \
   --rlt-encoder-path /path/to/rlt_stage1_checkpoint.pt \
